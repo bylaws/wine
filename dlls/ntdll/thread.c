@@ -715,3 +715,4 @@ void WINAPI DECLSPEC_HOTPATCH RtlProcessFlsData( void *teb_fls_data, ULONG flags
         RtlFreeHeap( GetProcessHeap(), 0, fls );
     }
 }
+
