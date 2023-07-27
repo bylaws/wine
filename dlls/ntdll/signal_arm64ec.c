@@ -1766,6 +1766,13 @@ BOOLEAN WINAPI RtlIsProcessorFeaturePresent( UINT feature )
     return emulated_processor_features[feature];
 }
 
+/***********************************************************************
+ *              RtlWow64SuspendThread (NTDLL.@)
+ */
+NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
+{
+    return NtSuspendThread( thread, count );
+}
 
 /*************************************************************************
  *		RtlWalkFrameChain (NTDLL.@)
