@@ -261,7 +261,11 @@ void init_memory(void)
 {
     page_mask = sysconf( _SC_PAGESIZE ) - 1;
     free_map_addr( 0x60000000, 0x1c000000 );
+#ifdef __aarch64__
+    free_map_addr( 0x4000000000, 0x1000000000 );
+#else
     free_map_addr( 0x600000000000, 0x100000000000 );
+#endif
     if (page_mask != 0xfff)
         fprintf( stderr, "wineserver: page size is %uk but Wine requires 4k pages, expect problems\n",
                  (int)(page_mask + 1) / 1024 );
