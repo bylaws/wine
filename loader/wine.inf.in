@@ -2953,3 +2953,16 @@ HKCU,Software\Wine\AppDefaults\RiftApart.exe\DllOverrides,"atiadlxx",,"builtin"
 HKCU,Software\Wine\AppDefaults\ffxvi.exe\DllOverrides,"atiadlxx",,"builtin"
 HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Height",0x10001,480
 HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Width",0x10001,640
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.8,"4.8",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.7.2,"4.7.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.6.2,"4.6.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.5.2,"4.5.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.0,"4.0",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.0 Client Profile,"4.0 Client Profile",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\3.5,"3.5",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\3.5 Client Profile,"3.5 Client Profile",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\3.0,"3.0",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\3.1,"3.1",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\4.0,"4.0",0x10001,1
+HKLM,Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4\Full,"Release",0x10001,528040
+HKLM,Software\Wow6432Node\Microsoft\XNA\Framework\v4.0,"Installed",0x10001,1
