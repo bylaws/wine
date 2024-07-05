@@ -1073,28 +1073,31 @@ void *steamclient_handle_fault( LPCVOID addr, DWORD err )
     return NULL;
 }
 
-static void steamclient_write_jump(void *src_addr, void *tgt_addr)
+static void steamclient_write_jump_x64(void *src_addr, ULONGLONG tgt_addr)
 {
-#ifdef _WIN64
     static const char mov[] = {0x48, 0xb8};
-#else
-    static const char mov[] = {0xb8};
-#endif
     static const char jmp[] = {0xff, 0xe0};
     memcpy(src_addr, mov, sizeof(mov));
     memcpy((char *)src_addr + sizeof(mov), &tgt_addr, sizeof(tgt_addr));
     memcpy((char *)src_addr + sizeof(mov) + sizeof(tgt_addr), jmp, sizeof(jmp));
 }
 
-static NTSTATUS steamclient_setup_trampolines( void *args )
+static void steamclient_write_jump_x86(void *src_addr, ULONG tgt_addr)
+{
+    static const char mov[] = {0xb8};
+    static const char jmp[] = {0xff, 0xe0};
+    memcpy(src_addr, mov, sizeof(mov));
+    memcpy((char *)src_addr + sizeof(mov), &tgt_addr, sizeof(tgt_addr));
+    memcpy((char *)src_addr + sizeof(mov) + sizeof(tgt_addr), jmp, sizeof(jmp));
+}
+
+static NTSTATUS steamclient_setup_trampolines_impl( HMODULE src_mod, HMODULE tgt_mod )
 {
     static int noexec_cached = -1;
-    struct steamclient_setup_trampolines_params *params = args;
-    HMODULE src_mod = params->src_mod, tgt_mod = params->tgt_mod;
     SYSTEM_BASIC_INFORMATION info;
-    IMAGE_NT_HEADERS *src_nt = (IMAGE_NT_HEADERS *)((UINT_PTR)src_mod + ((IMAGE_DOS_HEADER *)src_mod)->e_lfanew);
-    IMAGE_NT_HEADERS *tgt_nt = (IMAGE_NT_HEADERS *)((UINT_PTR)tgt_mod + ((IMAGE_DOS_HEADER *)tgt_mod)->e_lfanew);
-    IMAGE_SECTION_HEADER *src_sec = (IMAGE_SECTION_HEADER *)(src_nt + 1);
+    IMAGE_NT_HEADERS *src_nt = get_rva( src_mod, ((IMAGE_DOS_HEADER *)src_mod)->e_lfanew );
+    IMAGE_NT_HEADERS *tgt_nt = get_rva( tgt_mod, ((IMAGE_DOS_HEADER *)tgt_mod)->e_lfanew );
+    IMAGE_SECTION_HEADER *src_sec = IMAGE_FIRST_SECTION( src_nt );
     const IMAGE_EXPORT_DIRECTORY *src_exp, *tgt_exp;
     const DWORD *names;
     SIZE_T size;
@@ -1102,6 +1105,7 @@ static NTSTATUS steamclient_setup_trampolines( void *args )
     char *name, *wsne;
     UINT_PTR page_mask;
     int i;
+    BOOLEAN x64 = src_nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
 
     if (noexec_cached == -1)
         noexec_cached = (wsne = getenv("WINESTEAMNOEXEC")) && atoi(wsne);
@@ -1129,19 +1133,45 @@ static NTSTATUS steamclient_setup_trampolines( void *args )
         assert(steamclient_count < ARRAY_SIZE(steamclient_srcs));
         steamclient_srcs[steamclient_count] = src_addr;
         steamclient_tgts[steamclient_count] = tgt_addr;
-        if (!noexec_cached) steamclient_write_jump(src_addr, tgt_addr);
+        if (!noexec_cached)
+        {
+            if (x64) steamclient_write_jump_x64(src_addr, (ULONG_PTR)tgt_addr);
+            else steamclient_write_jump_x86(src_addr, PtrToUlong(tgt_addr));
+        }
         else steamclient_count++;
     }
 
-    src_addr = (void *)((UINT_PTR)src_mod + src_nt->OptionalHeader.AddressOfEntryPoint);
-    tgt_addr = (void *)((UINT_PTR)tgt_mod + tgt_nt->OptionalHeader.AddressOfEntryPoint);
+    if (x64)
+    {
+        src_addr = (void *)((UINT_PTR)src_mod +
+                   ((const IMAGE_NT_HEADERS64 *)src_nt)->OptionalHeader.AddressOfEntryPoint);
+        tgt_addr = (void *)((UINT_PTR)tgt_mod +
+                   ((const IMAGE_NT_HEADERS64 *)tgt_nt)->OptionalHeader.AddressOfEntryPoint);
+    }
+    else
+    {
+        src_addr = (void *)((UINT_PTR)src_mod +
+                   ((const IMAGE_NT_HEADERS32 *)src_nt)->OptionalHeader.AddressOfEntryPoint);
+        tgt_addr = (void *)((UINT_PTR)tgt_mod +
+                   ((const IMAGE_NT_HEADERS32 *)tgt_nt)->OptionalHeader.AddressOfEntryPoint);
+    }
+
     assert(steamclient_count < ARRAY_SIZE(steamclient_srcs));
     steamclient_srcs[steamclient_count] = src_addr;
     steamclient_tgts[steamclient_count] = tgt_addr;
-    if (!noexec_cached) steamclient_write_jump(src_addr, tgt_addr);
+    if (!noexec_cached)
+    {
+        if (x64) steamclient_write_jump_x64(src_addr, (ULONG_PTR)tgt_addr);
+        else steamclient_write_jump_x86(src_addr, PtrToUlong(tgt_addr));
+    }
     else steamclient_count++;
-
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS steamclient_setup_trampolines( void *args )
+{
+    struct steamclient_setup_trampolines_params *params = args;
+    return steamclient_setup_trampolines_impl( params->src_mod, params->tgt_mod );
 }
 
 static BOOL debugstr_pc_impl( void *pc, char *buffer, unsigned int size )
@@ -1215,6 +1245,28 @@ static const unixlib_entry_t unix_call_funcs[] =
 
 static NTSTATUS wow64_load_so_dll( void *args ) { return STATUS_INVALID_IMAGE_FORMAT; }
 static NTSTATUS wow64_unwind_builtin_dll( void *args ) { return STATUS_UNSUCCESSFUL; }
+NTSTATUS wow64_steamclient_setup_trampolines( void *args )
+{
+    struct
+    {
+        ULONG src_mod;
+        ULONG tgt_mod;
+    } const *params32 = args;
+    return steamclient_setup_trampolines_impl( ULongToHandle( params32->src_mod ),
+                                               ULongToHandle( params32->tgt_mod ) );
+}
+
+static NTSTATUS wow64_debugstr_pc( void *args )
+{
+    struct
+    {
+        ULONG        pc;
+        ULONG        buffer;
+        unsigned int size;
+    } const *params32 = args;
+    return debugstr_pc_impl( ULongToPtr( params32->pc ), ULongToPtr( params32->buffer ), params32->size )
+               ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
 
 const unixlib_entry_t unix_call_wow64_funcs[] =
 {
@@ -1226,6 +1278,9 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
     wow64_wine_server_handle_to_fd,
     wow64_wine_spawnvp,
     system_time_precise,
+    wow64_steamclient_setup_trampolines,
+    is_pc_in_native_so,
+    wow64_debugstr_pc,
 };
 
 #endif  /* _WIN64 */
