@@ -1514,6 +1514,7 @@ int WINAPI getpeername( SOCKET s, struct sockaddr *addr, int *len )
 {
     IO_STATUS_BLOCK io;
     NTSTATUS status;
+    int safe_len = 0;
 
     TRACE( "socket %#Ix, addr %p, len %d\n", s, addr, len ? *len : 0 );
 
@@ -1523,14 +1524,14 @@ int WINAPI getpeername( SOCKET s, struct sockaddr *addr, int *len )
         return -1;
     }
 
-    if (!len)
-    {
-        SetLastError( WSAEFAULT );
-        return -1;
-    }
+    /* Windows checks the validity of the socket before checking len, so
+     * let wineserver do the same. Since len being NULL and *len being 0
+     * yield the same error, we can substitute in 0 if len is NULL. */
+    if (len)
+        safe_len = *len;
 
     status = NtDeviceIoControlFile( (HANDLE)s, NULL, NULL, NULL, &io,
-                                    IOCTL_AFD_WINE_GETPEERNAME, NULL, 0, addr, *len );
+                                    IOCTL_AFD_WINE_GETPEERNAME, NULL, 0, addr, safe_len );
     if (!status)
         *len = io.Information;
     SetLastError( NtStatusToWSAError( status ) );
@@ -3628,7 +3629,10 @@ int WINAPI WSAEnumNetworkEvents( SOCKET s, WSAEVENT event, WSANETWORKEVENTS *ret
         if (ret_events->lNetworkEvents & FD_CLOSE)
         {
             if (!(ret_events->iErrorCode[FD_CLOSE_BIT] = NtStatusToWSAError( params.status[AFD_POLL_BIT_HUP] )))
-                ret_events->iErrorCode[FD_CLOSE_BIT] = NtStatusToWSAError( params.status[AFD_POLL_BIT_RESET] );
+            {
+                if (params.flags & AFD_POLL_RESET)
+                    ret_events->iErrorCode[FD_CLOSE_BIT] = WSAECONNABORTED;
+            }
         }
     }
     SetLastError( NtStatusToWSAError( status ) );

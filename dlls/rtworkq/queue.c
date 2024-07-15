@@ -19,8 +19,6 @@
 #include <assert.h>
 
 #define COBJMACROS
-#define NONAMELESSUNION
-
 #include "initguid.h"
 #include "rtworkq.h"
 #include "wine/debug.h"
@@ -120,6 +118,13 @@ enum system_queue_index
     SYS_QUEUE_COUNT,
 };
 
+enum work_item_type
+{
+    WORK_ITEM_WORK,
+    WORK_ITEM_TIMER,
+    WORK_ITEM_WAIT,
+};
+
 struct work_item
 {
     IUnknown IUnknown_iface;
@@ -131,10 +136,11 @@ struct work_item
     RTWQWORKITEM_KEY key;
     LONG priority;
     DWORD flags;
-    TP_WORK *work_object;
     PTP_SIMPLE_CALLBACK finalization_callback;
+    enum work_item_type type;
     union
     {
+        TP_WORK *work_object;
         TP_WAIT *wait_object;
         TP_TIMER *timer_object;
     } u;
@@ -389,8 +395,9 @@ static void pool_queue_submit(struct queue *queue, struct work_item *item)
        we need finalization callback. */
     if (item->finalization_callback)
         IUnknown_AddRef(&item->IUnknown_iface);
-    item->work_object = CreateThreadpoolWork(standard_queue_worker, item, (TP_CALLBACK_ENVIRON *)&env);
-    SubmitThreadpoolWork(item->work_object);
+    item->u.work_object = CreateThreadpoolWork(standard_queue_worker, item, (TP_CALLBACK_ENVIRON *)&env);
+    item->type = WORK_ITEM_WORK;
+    SubmitThreadpoolWork(item->u.work_object);
 
     TRACE("dispatched %p.\n", item->result);
 }
@@ -551,8 +558,18 @@ static ULONG WINAPI work_item_Release(IUnknown *iface)
 
     if (!refcount)
     {
-        if (item->work_object)
-            CloseThreadpoolWork(item->work_object);
+        switch (item->type)
+        {
+            case WORK_ITEM_WORK:
+                if (item->u.work_object) CloseThreadpoolWork(item->u.work_object);
+                break;
+            case WORK_ITEM_WAIT:
+                if (item->u.wait_object) CloseThreadpoolWait(item->u.wait_object);
+                break;
+            case WORK_ITEM_TIMER:
+                if (item->u.timer_object) CloseThreadpoolTimer(item->u.timer_object);
+                break;
+        }
         if (item->reply_result)
             IRtwqAsyncResult_Release(item->reply_result);
         IRtwqAsyncResult_Release(item->result);
@@ -715,14 +732,16 @@ static HRESULT invoke_async_callback(IRtwqAsyncResult *result)
 
 static void queue_release_pending_item(struct work_item *item)
 {
-    EnterCriticalSection(&item->queue->cs);
+    struct queue *queue = item->queue;
+    EnterCriticalSection(&queue->cs);
     if (item->key)
     {
         list_remove(&item->entry);
         item->key = 0;
         IUnknown_Release(&item->IUnknown_iface);
     }
-    LeaveCriticalSection(&item->queue->cs);
+    LeaveCriticalSection(&queue->cs);
+
 }
 
 static void CALLBACK waiting_item_callback(TP_CALLBACK_INSTANCE *instance, void *context, TP_WAIT *wait,
@@ -816,6 +835,7 @@ static HRESULT queue_submit_wait(struct queue *queue, HANDLE event, LONG priorit
 
     item->u.wait_object = CreateThreadpoolWait(callback, item,
             (TP_CALLBACK_ENVIRON *)&queue->envs[TP_CALLBACK_PRIORITY_NORMAL]);
+    item->type = WORK_ITEM_WAIT;
     SetThreadpoolWait(item->u.wait_object, event, NULL);
 
     TRACE("dispatched %p.\n", result);
@@ -850,6 +870,7 @@ static HRESULT queue_submit_timer(struct queue *queue, IRtwqAsyncResult *result,
 
     item->u.timer_object = CreateThreadpoolTimer(callback, item,
             (TP_CALLBACK_ENVIRON *)&queue->envs[TP_CALLBACK_PRIORITY_NORMAL]);
+    item->type = WORK_ITEM_TIMER;
     SetThreadpoolTimer(item->u.timer_object, &filetime, period, 0);
 
     TRACE("dispatched %p.\n", result);
@@ -857,32 +878,87 @@ static HRESULT queue_submit_timer(struct queue *queue, IRtwqAsyncResult *result,
     return S_OK;
 }
 
-static HRESULT queue_cancel_item(struct queue *queue, RTWQWORKITEM_KEY key)
+static HRESULT queue_cancel_item(struct queue *queue, const RTWQWORKITEM_KEY key)
 {
     HRESULT hr = RTWQ_E_NOT_FOUND;
+    union { TP_WAIT *wait_object; TP_TIMER *timer_object; } work_object;
+    enum work_item_type work_object_type;
     struct work_item *item;
+    const UINT64 mask = key >> 32;
 
     EnterCriticalSection(&queue->cs);
     LIST_FOR_EACH_ENTRY(item, &queue->pending_items, struct work_item, entry)
     {
         if (item->key == key)
         {
-            key >>= 32;
-            if ((key & WAIT_ITEM_KEY_MASK) == WAIT_ITEM_KEY_MASK)
-            {
-                IRtwqAsyncResult_SetStatus(item->result, RTWQ_E_OPERATION_CANCELLED);
-                invoke_async_callback(item->result);
-                CloseThreadpoolWait(item->u.wait_object);
-            }
-            else if ((key & SCHEDULED_ITEM_KEY_MASK) == SCHEDULED_ITEM_KEY_MASK)
-                CloseThreadpoolTimer(item->u.timer_object);
-            else
-                WARN("Unknown item key mask %#I64x.\n", key);
-            queue_release_pending_item(item);
             hr = S_OK;
+            if ((mask & WAIT_ITEM_KEY_MASK) == WAIT_ITEM_KEY_MASK)
+            {
+                if (item->type != WORK_ITEM_WAIT)
+                    WARN("Item %p is not a wait item, but its key has wait item mask.\n", item);
+
+                work_object_type = WORK_ITEM_WAIT;
+                work_object.wait_object = item->u.wait_object;
+                item->u.wait_object = NULL;
+            }
+            else if ((mask & SCHEDULED_ITEM_KEY_MASK) == SCHEDULED_ITEM_KEY_MASK)
+            {
+                if (item->type != WORK_ITEM_TIMER)
+                    WARN("Item %p is not a timer item, but its key has timer item mask.\n", item);
+
+                work_object_type = WORK_ITEM_TIMER;
+                work_object.timer_object = item->u.timer_object;
+                item->u.timer_object = NULL;
+            }
+            else
+            {
+                WARN("Unknown item key mask %#I64x.\n", mask);
+                queue_release_pending_item(item);
+                goto out;
+            }
             break;
         }
     }
+
+    if (FAILED(hr))
+        goto out;
+
+    LeaveCriticalSection(&queue->cs);
+
+    // Safely either stop the thread pool object, or if the callback is already running, wait for it to finish.
+    // This way, we can safely release the reference to the work item.
+    if (work_object_type == WORK_ITEM_WAIT)
+    {
+        SetThreadpoolWait(work_object.wait_object, NULL, NULL);
+        WaitForThreadpoolWaitCallbacks(work_object.wait_object, TRUE);
+        CloseThreadpoolWait(work_object.wait_object);
+    }
+    else if (work_object_type == WORK_ITEM_TIMER)
+    {
+        SetThreadpoolTimer(work_object.timer_object, NULL, 0, 0);
+        WaitForThreadpoolTimerCallbacks(work_object.timer_object, TRUE);
+        CloseThreadpoolTimer(work_object.timer_object);
+    }
+
+    // If the work item is still in pending items, its callback hasn't been invoked yet;
+    // we remove it. Otherwise its callback would have already released it.
+    EnterCriticalSection(&queue->cs);
+    LIST_FOR_EACH_ENTRY(item, &queue->pending_items, struct work_item, entry)
+    {
+        if (item->key == key)
+        {
+            if (work_object_type == WORK_ITEM_WAIT)
+            {
+                IRtwqAsyncResult_SetStatus(item->result, RTWQ_E_OPERATION_CANCELLED);
+                invoke_async_callback(item->result);
+            }
+            queue_release_pending_item(item);
+            IUnknown_Release(&item->IUnknown_iface);
+            break;
+        }
+    }
+
+out:
     LeaveCriticalSection(&queue->cs);
 
     return hr;

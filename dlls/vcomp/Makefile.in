@@ -1,4 +1,5 @@
 MODULE = vcomp.dll
 
-C_SRCS = \
+SOURCES = \
+	fork.c \
 	main.c

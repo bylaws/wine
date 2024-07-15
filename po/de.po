@@ -5,7 +5,7 @@ msgstr ""
 "Project-Id-Version: Wine\n"
 "Report-Msgid-Bugs-To: https://bugs.winehq.org\n"
 "POT-Creation-Date: N/A\n"
-"PO-Revision-Date: 2023-01-12 16:46+0100\n"
+"PO-Revision-Date: 2023-09-09 14:53+0200\n"
 "Last-Translator: Julian Rüger <jr98@gmx.net>\n"
 "Language-Team: German\n"
 "Language: de\n"
@@ -97,24 +97,24 @@ msgstr "Informationen"
 #: dlls/shell32/shell32.rc:274 dlls/shell32/shell32.rc:298
 #: dlls/shell32/shell32.rc:320 dlls/shell32/shell32.rc:339
 #: dlls/shlwapi/shlwapi.rc:44 dlls/twain_32/twain.rc:32
-#: dlls/user32/user32.rc:83 dlls/user32/user32.rc:98 dlls/wininet/wininet.rc:62
-#: dlls/wininet/wininet.rc:82 dlls/winspool.drv/winspool.rc:42
-#: programs/net/net.rc:47 programs/notepad/notepad.rc:124
-#: programs/oleview/oleview.rc:161 programs/oleview/oleview.rc:174
-#: programs/progman/progman.rc:106 programs/progman/progman.rc:124
-#: programs/progman/progman.rc:142 programs/progman/progman.rc:158
-#: programs/progman/progman.rc:180 programs/progman/progman.rc:199
-#: programs/progman/progman.rc:216 programs/regedit/regedit.rc:301
-#: programs/regedit/regedit.rc:312 programs/regedit/regedit.rc:325
-#: programs/regedit/regedit.rc:341 programs/regedit/regedit.rc:354
-#: programs/regedit/regedit.rc:367 programs/taskmgr/taskmgr.rc:442
-#: programs/taskmgr/taskmgr.rc:517 programs/winecfg/winecfg.rc:219
-#: programs/winecfg/winecfg.rc:229 programs/winefile/winefile.rc:127
-#: programs/winefile/winefile.rc:150 programs/winefile/winefile.rc:180
-#: programs/winemine/winemine.rc:73 programs/winemine/winemine.rc:84
-#: programs/winemine/winemine.rc:98 programs/wordpad/wordpad.rc:215
-#: programs/wordpad/wordpad.rc:226 programs/wordpad/wordpad.rc:244
-#: programs/wordpad/wordpad.rc:257
+#: dlls/user32/user32.rc:94 dlls/user32/user32.rc:109 dlls/user32/user32.rc:73
+#: dlls/wininet/wininet.rc:62 dlls/wininet/wininet.rc:82
+#: dlls/winspool.drv/winspool.rc:42 programs/net/net.rc:48
+#: programs/notepad/notepad.rc:124 programs/oleview/oleview.rc:161
+#: programs/oleview/oleview.rc:174 programs/progman/progman.rc:106
+#: programs/progman/progman.rc:124 programs/progman/progman.rc:142
+#: programs/progman/progman.rc:158 programs/progman/progman.rc:180
+#: programs/progman/progman.rc:199 programs/progman/progman.rc:216
+#: programs/regedit/regedit.rc:301 programs/regedit/regedit.rc:312
+#: programs/regedit/regedit.rc:325 programs/regedit/regedit.rc:341
+#: programs/regedit/regedit.rc:354 programs/regedit/regedit.rc:367
+#: programs/taskmgr/taskmgr.rc:442 programs/taskmgr/taskmgr.rc:517
+#: programs/winecfg/winecfg.rc:219 programs/winecfg/winecfg.rc:229
+#: programs/winefile/winefile.rc:127 programs/winefile/winefile.rc:150
+#: programs/winefile/winefile.rc:180 programs/winemine/winemine.rc:73
+#: programs/winemine/winemine.rc:84 programs/winemine/winemine.rc:98
+#: programs/wordpad/wordpad.rc:215 programs/wordpad/wordpad.rc:226
+#: programs/wordpad/wordpad.rc:244 programs/wordpad/wordpad.rc:257
 msgid "OK"
 msgstr "OK"
 
@@ -204,24 +204,24 @@ msgstr "&Installieren"
 #: dlls/setupapi/setupapi.rc:60 dlls/shell32/shell32.rc:275
 #: dlls/shell32/shell32.rc:299 dlls/shell32/shell32.rc:310
 #: dlls/shell32/shell32.rc:340 dlls/shlwapi/shlwapi.rc:45
-#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:84 dlls/user32/user32.rc:99
-#: dlls/wininet/wininet.rc:63 dlls/wininet/wininet.rc:83
-#: dlls/winspool.drv/winspool.rc:43 programs/notepad/notepad.rc:125
-#: programs/notepad/notepad.rc:138 programs/oleview/oleview.rc:162
-#: programs/oleview/oleview.rc:175 programs/progman/progman.rc:107
-#: programs/progman/progman.rc:125 programs/progman/progman.rc:143
-#: programs/progman/progman.rc:159 programs/progman/progman.rc:181
-#: programs/progman/progman.rc:200 programs/progman/progman.rc:217
-#: programs/regedit/regedit.rc:302 programs/regedit/regedit.rc:313
-#: programs/regedit/regedit.rc:326 programs/regedit/regedit.rc:342
-#: programs/regedit/regedit.rc:355 programs/regedit/regedit.rc:368
-#: programs/taskmgr/taskmgr.rc:443 programs/taskmgr/taskmgr.rc:518
-#: programs/wineboot/wineboot.rc:34 programs/winecfg/winecfg.rc:220
-#: programs/winecfg/winecfg.rc:230 programs/winefile/winefile.rc:128
-#: programs/winefile/winefile.rc:151 programs/winefile/winefile.rc:181
-#: programs/winemine/winemine.rc:99 programs/wordpad/wordpad.rc:216
-#: programs/wordpad/wordpad.rc:227 programs/wordpad/wordpad.rc:245
-#: programs/wordpad/wordpad.rc:258
+#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:95 dlls/user32/user32.rc:110
+#: dlls/user32/user32.rc:74 dlls/wininet/wininet.rc:63
+#: dlls/wininet/wininet.rc:83 dlls/winspool.drv/winspool.rc:43
+#: programs/notepad/notepad.rc:125 programs/notepad/notepad.rc:138
+#: programs/oleview/oleview.rc:162 programs/oleview/oleview.rc:175
+#: programs/progman/progman.rc:107 programs/progman/progman.rc:125
+#: programs/progman/progman.rc:143 programs/progman/progman.rc:159
+#: programs/progman/progman.rc:181 programs/progman/progman.rc:200
+#: programs/progman/progman.rc:217 programs/regedit/regedit.rc:302
+#: programs/regedit/regedit.rc:313 programs/regedit/regedit.rc:326
+#: programs/regedit/regedit.rc:342 programs/regedit/regedit.rc:355
+#: programs/regedit/regedit.rc:368 programs/taskmgr/taskmgr.rc:443
+#: programs/taskmgr/taskmgr.rc:518 programs/wineboot/wineboot.rc:34
+#: programs/winecfg/winecfg.rc:220 programs/winecfg/winecfg.rc:230
+#: programs/winefile/winefile.rc:128 programs/winefile/winefile.rc:151
+#: programs/winefile/winefile.rc:181 programs/winemine/winemine.rc:99
+#: programs/wordpad/wordpad.rc:216 programs/wordpad/wordpad.rc:227
+#: programs/wordpad/wordpad.rc:245 programs/wordpad/wordpad.rc:258
 msgid "Cancel"
 msgstr "Abbrechen"
 
@@ -327,6 +327,8 @@ msgstr ""
 #: dlls/appwiz.cpl/appwiz.rc:47
 msgid "Please wait until the current uninstall/modify process is complete."
 msgstr ""
+"Bitte warten Sie, bis der aktuelle Deinstallations-/Änderungsprozess "
+"abgeschlossen ist."
 
 #: dlls/avifil32/avifil32.rc:42
 msgid "Compress options"
@@ -413,7 +415,8 @@ msgid "&Apply"
 msgstr "&Anwenden"
 
 #: dlls/comctl32/comctl32.rc:74 dlls/comctl32/comctl32.rc:88
-#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:88
+#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:99
+#: dlls/user32/user32.rc:81
 msgid "Help"
 msgstr "&Hilfe"
 
@@ -439,9 +442,9 @@ msgstr "Symbolleiste einrichten"
 
 #: dlls/comctl32/comctl32.rc:100 dlls/comctl32/comctl32.rc:57
 #: dlls/cryptui/cryptui.rc:356 dlls/ieframe/ieframe.rc:43
-#: programs/oleview/oleview.rc:83 programs/oleview/oleview.rc:187
-#: programs/oleview/oleview.rc:200 programs/oleview/oleview.rc:212
-#: programs/taskmgr/taskmgr.rc:139
+#: dlls/user32/user32.rc:80 programs/oleview/oleview.rc:83
+#: programs/oleview/oleview.rc:187 programs/oleview/oleview.rc:200
+#: programs/oleview/oleview.rc:212 programs/taskmgr/taskmgr.rc:139
 msgid "&Close"
 msgstr "&Schließen"
 
@@ -503,16 +506,17 @@ msgid "None"
 msgstr "Kein"
 
 #: dlls/comctl32/comctl32.rc:52 dlls/shell32/shell32.rc:307
-#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:79
+#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:90 dlls/user32/user32.rc:78
 msgid "&Yes"
 msgstr "&Ja"
 
 #: dlls/comctl32/comctl32.rc:53 dlls/shell32/shell32.rc:309
-#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:80
+#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:91 dlls/user32/user32.rc:79
 msgid "&No"
 msgstr "&Nein"
 
-#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:82
+#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:93
+#: dlls/user32/user32.rc:76
 msgid "&Retry"
 msgstr "&Wiederholen"
 
@@ -3719,16 +3723,12 @@ msgid "High"
 msgstr "Hoch"
 
 #: dlls/ir50_32/ir50_32.rc:28
-#, fuzzy
-#| msgid "Index"
 msgid "Indeo5"
-msgstr "Index"
+msgstr "Indeo5"
 
 #: dlls/ir50_32/ir50_32.rc:29
-#, fuzzy
-#| msgid "Wine Video 1 video codec"
 msgid "Indeo Video Interactive version 5 video codec"
-msgstr "Wine-Video-1-Videocodec"
+msgstr "Indeo-Video-Interactive Version 5 Videocodec"
 
 #: dlls/joy.cpl/joy.rc:37
 msgid "Joysticks"
@@ -4029,10 +4029,8 @@ msgid "Syntax error in regular expression"
 msgstr "Syntaxfehler in regulärem Ausdruck"
 
 #: dlls/jscript/jscript.rc:66
-#, fuzzy
-#| msgid "Expected identifier"
 msgid "Unexpected quantifier"
-msgstr "Bezeichner erwartet"
+msgstr "Unerwarteter Quantifizierer"
 
 #: dlls/jscript/jscript.rc:67
 msgid "Exception thrown and not caught"
@@ -4096,10 +4094,8 @@ msgid "'this' is not a | object"
 msgstr "'this' ist kein |-Objekt"
 
 #: dlls/jscript/jscript.rc:81
-#, fuzzy
-#| msgid "'this' is not a | object"
 msgid "'key' is not an object"
-msgstr "'this' ist kein |-Objekt"
+msgstr "'key' ist kein Objekt"
 
 #: dlls/jscript/jscript.rc:82
 msgid "Property cannot have both accessors and a value"
@@ -9527,7 +9523,7 @@ msgctxt "unit: bits"
 msgid "b"
 msgstr "b"
 
-#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:49
+#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:52
 #: programs/winecfg/winecfg.rc:188
 msgctxt "unit: dots/inch"
 msgid "dpi"
@@ -12469,23 +12465,23 @@ msgstr "&Schließen\tStrg+F4"
 msgid "Nex&t\tCtrl+F6"
 msgstr "Nächs&ter\tStrg+F6"
 
-#: dlls/user32/user32.rc:81
+#: dlls/user32/user32.rc:92 dlls/user32/user32.rc:75
 msgid "&Abort"
 msgstr "Abbr&uch"
 
-#: dlls/user32/user32.rc:85
+#: dlls/user32/user32.rc:96 dlls/user32/user32.rc:77
 msgid "&Ignore"
 msgstr "&Ignorieren"
 
-#: dlls/user32/user32.rc:86
+#: dlls/user32/user32.rc:97 dlls/user32/user32.rc:82
 msgid "&Try Again"
 msgstr "&Erneut versuchen"
 
-#: dlls/user32/user32.rc:87
+#: dlls/user32/user32.rc:98 dlls/user32/user32.rc:83
 msgid "&Continue"
 msgstr "&Fortsetzen"
 
-#: dlls/user32/user32.rc:94
+#: dlls/user32/user32.rc:105
 msgid "Select Window"
 msgstr "Fenster auswählen"
 
@@ -12653,6 +12649,12 @@ msgstr "&Papiergröße:"
 #: dlls/wineps.drv/wineps.rc:39
 msgid "Duplex:"
 msgstr "Duplex:"
+
+#: dlls/wineps.drv/wineps.rc:45
+#, fuzzy
+#| msgid "&Tray:"
+msgid "Paper &Tray:"
+msgstr "&Zufuhr:"
 
 #: dlls/wininet/wininet.rc:53 dlls/wininet/wininet.rc:73
 msgid "Realm"
@@ -14801,25 +14803,34 @@ msgstr "Start"
 msgid "&Run..."
 msgstr "&Ausführen..."
 
-#: programs/findstr/findstr.rc:28
+#: programs/explorer/explorer.rc:36
 #, fuzzy
-#| msgid "Use c&onnection string"
+#| msgid "E&xit Windows"
+msgid "E&xit desktop"
+msgstr "&Programm-Manager beenden"
+
+#: programs/explorer/explorer.rc:37
+#, fuzzy
+#| msgid "Are you sure you want to delete these values?"
+msgid ""
+"Are you sure you want to close all programs and exit the virtual desktop?"
+msgstr "Möchten Sie diese Werte wirklich löschen?"
+
+#: programs/findstr/findstr.rc:28
 msgid "Usage: findstr /options string\n"
-msgstr "Verbindungs-Zeichenkette &verwenden"
+msgstr "Aufruf: findstr /Optionen String\n"
 
 #: programs/findstr/findstr.rc:29
-#, fuzzy
-#| msgid "Invalid command line.\n"
 msgid "FINDSTR: Bad command line\n"
-msgstr "Ungültige Kommandozeile.\n"
+msgstr "FINDSTR: Ungültige Kommandozeile\n"
 
 #: programs/findstr/findstr.rc:30
 msgid "FINDSTR: Cannot open %s\n"
-msgstr ""
+msgstr "FINDSTR: %s kann nicht geöffnet werden\n"
 
 #: programs/findstr/findstr.rc:31
 msgid "FINDSTR: /%c ignored\n"
-msgstr ""
+msgstr "FINDSTR: /%c ignoriert\n"
 
 #: programs/fsutil/fsutil.mc:28
 msgid ""
@@ -14939,52 +14950,39 @@ msgstr "Primäres DNS-Suffix"
 
 #: programs/klist/klist.rc:28
 msgid "Usage: klist <tickets | tgt | purge | get [service principal name]>\n"
-msgstr ""
+msgstr "Aufruf: klist <tickets | tgt | purge | get [Dienstprinzipalname]>\n"
 
 #: programs/klist/klist.rc:29
-#, fuzzy
-#| msgid "Unknown error"
 msgid "Unknown error\n"
-msgstr "Unbekannter Fehler"
+msgstr "Unbekannter Fehler\n"
 
 #: programs/klist/klist.rc:30
-#, fuzzy
-#| msgid "Start Menu"
 msgid "Start Time"
-msgstr "Startmenü"
+msgstr "Startzeit"
 
 #: programs/klist/klist.rc:31
-#, fuzzy
-#| msgctxt "maximum 31 characters"
-#| msgid "FLE Standard Time"
 msgid "End Time"
-msgstr "Osteuropäische Zeit"
+msgstr "Endzeit"
 
 #: programs/klist/klist.rc:32
-#, fuzzy
-#| msgid "Enter new time: "
 msgid "Renew Time"
-msgstr "Geben Sie die neue Zeit ein: "
+msgstr "Zeit erneuern"
 
 #: programs/klist/klist.rc:33
 msgid "Ticket Flags"
-msgstr ""
+msgstr "Ticket Flags"
 
 #: programs/klist/klist.rc:34
 msgid "Cached Tickets"
-msgstr ""
+msgstr "Zwischengespeicherte Tickets"
 
 #: programs/klist/klist.rc:36
-#, fuzzy
-#| msgid "Encryption Type"
 msgid "KerbTicket Encryption Type"
-msgstr "Art der Verschlüsselung"
+msgstr "KerbTicket Verschlüsselungszeit"
 
 #: programs/klist/klist.rc:37
-#, fuzzy
-#| msgid "Current Connections"
 msgid "Current LogonId is"
-msgstr "Aktuelle Verbindungen"
+msgstr "Aktuelle LogonId ist"
 
 #: programs/msinfo32/msinfo32.rc:28
 msgid "System Information"
@@ -15078,11 +15076,11 @@ msgstr "Der Dienst %1 wurde erfolgreich beendet.\n"
 msgid "The %1 service failed to stop.\n"
 msgstr "Der Dienst %1 konnte nicht beendet werden.\n"
 
-#: programs/net/net.rc:44
+#: programs/net/net.rc:45
 msgid "There are no entries in the list.\n"
 msgstr "Es sind keine Einträge in der Liste.\n"
 
-#: programs/net/net.rc:45
+#: programs/net/net.rc:46
 msgid ""
 "\n"
 "Status  Local   Remote\n"
@@ -15092,33 +15090,37 @@ msgstr ""
 "Status  Lokal   Entfernt\n"
 "---------------------------------------------------------------\n"
 
-#: programs/net/net.rc:46
+#: programs/net/net.rc:47
 msgid "%1      %2      %3      Open resources: %4!u!\n"
 msgstr "%1      %2      %3      Offene Ressourcen: %4!u!\n"
 
-#: programs/net/net.rc:48
+#: programs/net/net.rc:49
 msgid "Paused"
 msgstr "Angehalten"
 
-#: programs/net/net.rc:49
+#: programs/net/net.rc:50
 msgid "Disconnected"
 msgstr "Getrennt"
 
-#: programs/net/net.rc:50
+#: programs/net/net.rc:51
 msgid "A network error occurred"
 msgstr "Ein Netzwerkfehler ist aufgetreten"
 
-#: programs/net/net.rc:51
+#: programs/net/net.rc:52
 msgid "Connection is being made"
 msgstr "Verbindung wird hergestellt"
 
-#: programs/net/net.rc:52
+#: programs/net/net.rc:53
 msgid "Reconnecting"
 msgstr "Erneuter Verbindungsaufbau"
 
 #: programs/net/net.rc:43
 msgid "The following services are running:\n"
 msgstr "Die folgenden Dienste laufen:\n"
+
+#: programs/net/net.rc:44
+msgid "A command was used with conflicting switches.\n"
+msgstr ""
 
 #: programs/netstat/netstat.rc:30
 msgid "Active Connections"
@@ -15467,7 +15469,7 @@ msgstr ""
 
 #: programs/notepad/notepad.rc:88
 msgid "'%s' could not be found."
-msgstr "'%s' kann nicht gefunden werden."
+msgstr "'%s' konnte nicht gefunden werden."
 
 #: programs/notepad/notepad.rc:92
 msgid "Unicode (UTF-16)"
@@ -17302,38 +17304,6 @@ msgid "regsvr32: Successfully uninstalled DLL '%1'\n"
 msgstr "regsvr32: DLL '%1' erfolgreich deinstalliert\n"
 
 #: programs/start/start.rc:56
-#, fuzzy
-#| msgid ""
-#| "Start a program, or open a document in the program normally used for "
-#| "files\n"
-#| "with that suffix.\n"
-#| "Usage:\n"
-#| "start [options] program_filename [...]\n"
-#| "start [options] document_filename\n"
-#| "\n"
-#| "Options:\n"
-#| "\"title\"        Specifies the title of the child windows.\n"
-#| "/d directory   Start the program in the specified directory.\n"
-#| "/b             Don't create a new console for the program.\n"
-#| "/i             Start the program with fresh environment variables.\n"
-#| "/min           Start the program minimized.\n"
-#| "/max           Start the program maximized.\n"
-#| "/low           Start the program in the idle priority class.\n"
-#| "/normal        Start the program in the normal priority class.\n"
-#| "/high          Start the program in the high priority class.\n"
-#| "/realtime      Start the program in the realtime priority class.\n"
-#| "/abovenormal   Start the program in the abovenormal priority class.\n"
-#| "/belownormal   Start the program in the belownormal priority class.\n"
-#| "/node n        Start the program on the specified NUMA node.\n"
-#| "/affinity mask Start the program with the specified affinity mask.\n"
-#| "/wait          Wait for the started program to finish, then exit with "
-#| "its\n"
-#| "exit code.\n"
-#| "/unix          Use a Unix filename and start the file like Windows\n"
-#| "Explorer.\n"
-#| "/exec          Exec the specified file (for internal Wine usage).\n"
-#| "/ProgIDOpen    Open a document using the specified progID.\n"
-#| "/?             Display this help and exit.\n"
 msgid ""
 "Start a program, or open a document in the program normally used for files\n"
 "with that suffix.\n"
@@ -17385,8 +17355,9 @@ msgstr ""
 "/realtime       Startet das Programm in der Echtzeit-Prioritätsklasse.\n"
 "/abovenormal    Startet das Programm in der gehobenen Prioritätsklasse.\n"
 "/belownormal    Startet das Programm in der abgesenkten Prioritätsklasse.\n"
-"/node           Startet das Programm auf dem angegebenen NUMA-Knoten.\n"
+"/node n         Startet das Programm auf dem angegebenen NUMA-Knoten.\n"
 "/affinity Maske Startet das Programm mit der angegebenen Affinitätsmaske.\n"
+"/machine Arch   Erzwingt eine bestimmte Architektur (x86,arm,amd64,arm64).\n"
 "/wait           Wartet, bis das Programm endet und beendet sich selbst mit\n"
 "                dessen Exitcode.\n"
 "/unix           Öffnet einen Unix-Dateinamen wie mit dem Windows-Explorer.\n"
@@ -17472,27 +17443,25 @@ msgid "Error: Process self-termination is not permitted.\n"
 msgstr "Fehler: Selbstterminierung von Prozessen ist nicht gestattet.\n"
 
 #: programs/taskkill/taskkill.rc:44
-#, fuzzy
-#| msgid "Process with PID %1!u! was forcibly terminated.\n"
 msgid ""
 "The process with PID %1!u! (child process of PID %2!u!) has been "
 "terminated.\n"
-msgstr "Prozess mit der PID %1!u! wurde zum Beenden gezwungen.\n"
+msgstr ""
+"Prozess mit der PID %1!u! (Kindprozess von PID %2!u!) wurde zum Beenden "
+"gezwungen.\n"
 
 #: programs/taskkill/taskkill.rc:45
 msgid ""
 "Sent termination signal to process with PID %1!u!, child of PID %2!u!.\n"
-msgstr ""
+msgstr "Beendigungssignal wurde an PID %1!u! gesendet, Kind von PID %2!u!.\n"
 
 #: include/wine/wine_common_ver.rc:138
-#, fuzzy
-#| msgid "page tab list"
 msgid "Wine tasklist"
-msgstr "Register"
+msgstr "Wine-Taskliste"
 
 #: programs/tasklist/tasklist.rc:29
 msgid "Usage: tasklist [/?]\n"
-msgstr ""
+msgstr "Aufruf: tasklist [/?]\n"
 
 #: programs/tasklist/tasklist.rc:30 programs/taskmgr/taskmgr.rc:272
 msgid "Image Name"
@@ -17503,38 +17472,28 @@ msgid "PID"
 msgstr "PID (Prozess-ID)"
 
 #: programs/tasklist/tasklist.rc:32
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session Name"
-msgstr "Sitzungs-ID"
+msgstr "Sitzungsname"
 
 #: programs/tasklist/tasklist.rc:33
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session#"
-msgstr "Sitzungs-ID"
+msgstr "Sitzung#"
 
 #: programs/tasklist/tasklist.rc:34 programs/taskmgr/taskmgr.rc:276
 msgid "Mem Usage"
 msgstr "Speicherauslastung"
 
 #: programs/tasklist/tasklist.rc:35
-#, fuzzy
-#| msgid "OK"
 msgid "K"
-msgstr "OK"
+msgstr "K"
 
 #: programs/tasklist/tasklist.rc:36
-#, fuzzy
-#| msgid "reg: Invalid syntax. "
 msgid "ERROR: Invalid syntax\n"
-msgstr "reg: Ungültige Syntax. "
+msgstr "FEHLER: Ungültige Syntax\n"
 
 #: programs/tasklist/tasklist.rc:37
-#, fuzzy
-#| msgid "The filename cannot be resolved.\n"
 msgid "ERROR: The search filter cannot be recognized.\n"
-msgstr "Der Dateiname konnte nicht gefunden werden.\n"
+msgstr "FEHLER: Der Suchfilter wurde nicht erkannt.\n"
 
 #: programs/taskmgr/taskmgr.rc:37 programs/taskmgr/taskmgr.rc:108
 msgid "&New Task (Run...)"
@@ -17671,7 +17630,7 @@ msgstr "N&iedriger als Normal"
 
 #: programs/taskmgr/taskmgr.rc:169
 msgid "Set &Affinity..."
-msgstr "Setze Affinität..."
+msgstr "Setze &Affinität..."
 
 #: programs/taskmgr/taskmgr.rc:170
 msgid "Edit Debug &Channels..."
@@ -17729,7 +17688,7 @@ msgstr "Prozesse"
 #: programs/taskmgr/taskmgr.rc:387 programs/taskmgr/taskmgr.rc:396
 #: programs/taskmgr/taskmgr.rc:405
 msgid "Total"
-msgstr "Insgesamt"
+msgstr "Gesamt"
 
 #: programs/taskmgr/taskmgr.rc:388
 msgid "Limit"
@@ -18676,8 +18635,10 @@ msgid "&Theme:"
 msgstr "&Thema:"
 
 #: programs/winecfg/winecfg.rc:295
-msgid "&WinRT app theme:"
-msgstr ""
+#, fuzzy
+#| msgid "&WinRT app theme:"
+msgid "&WinRT theme:"
+msgstr "&WinRT App-Thema:"
 
 #: programs/winecfg/winecfg.rc:297
 msgid "&Install theme..."
@@ -18696,7 +18657,9 @@ msgid "MIME types"
 msgstr "MIME-Typen"
 
 #: programs/winecfg/winecfg.rc:311
-msgid "Manage file &associations"
+#, fuzzy
+#| msgid "Manage file &associations"
+msgid "Manage file and protocol &associations"
 msgstr "Datei&zuordnungen verwalten"
 
 #: programs/winecfg/winecfg.rc:314
@@ -18800,14 +18763,12 @@ msgid "Mono"
 msgstr "Mono"
 
 #: programs/winecfg/winecfg.rc:98
-#, fuzzy
-#| msgid "Right"
 msgid "Light"
-msgstr "Rechts"
+msgstr "Hell"
 
 #: programs/winecfg/winecfg.rc:99
 msgid "Dark"
-msgstr ""
+msgstr "Dunkel"
 
 #: programs/winecfg/winecfg.rc:53
 msgid ""
@@ -18851,7 +18812,7 @@ msgstr "Wine-Programme (*.exe; *.exe.so)"
 
 #: programs/winecfg/winecfg.rc:62
 msgid "Use global settings"
-msgstr "Globale Einstellung benutzen"
+msgstr "Globale Einstellung verwenden"
 
 #: programs/winecfg/winecfg.rc:63
 msgid "Select an executable file"

@@ -611,7 +611,8 @@ static BOOL fetch_next_frame(struct cpu_stack_walk *csw, union ctx *pcontext,
     DWORD64 cfa;
     RUNTIME_FUNCTION*       rtf;
     DWORD64                 base;
-    CONTEXT *context = &pcontext->ctx;
+    CONTEXT                *context = &pcontext->ctx;
+    DWORD64                 input_Rip = context->Rip;
 
     if (!curr_pc || !(base = sw_module_base(csw, curr_pc))) return FALSE;
     rtf = sw_table_access(csw, curr_pc);
@@ -620,7 +621,7 @@ static BOOL fetch_next_frame(struct cpu_stack_walk *csw, union ctx *pcontext,
     {
         return interpret_function_table_entry(csw, context, rtf, base);
     }
-    else if (dwarf2_virtual_unwind(csw, curr_pc, pcontext, &cfa))
+    else if (dwarf2_virtual_unwind(csw, curr_pc, pcontext, &cfa) && input_Rip != context->Rip)
     {
         context->Rsp = cfa;
         TRACE("next function rip=%016Ix\n", context->Rip);
@@ -950,47 +951,10 @@ static BOOL x86_64_fetch_minidump_thread(struct dump_context* dc, unsigned index
 
 static BOOL x86_64_fetch_minidump_module(struct dump_context* dc, unsigned index, unsigned flags)
 {
-    /* FIXME: not sure about the flags... */
-    if (1)
-    {
-        /* FIXME: crop values across module boundaries, */
-#ifdef __x86_64__
-        struct process*         pcs;
-        struct module*          module;
-        const RUNTIME_FUNCTION* rtf;
-        ULONG                   size;
-
-        if (!(pcs = process_find_by_handle(dc->process->handle)) ||
-            !(module = module_find_by_addr(pcs, dc->modules[index].base, DMT_UNKNOWN)))
-            return FALSE;
-        rtf = (const RUNTIME_FUNCTION*)pe_map_directory(module, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &size);
-        if (rtf)
-        {
-            const RUNTIME_FUNCTION* end = (const RUNTIME_FUNCTION*)((const char*)rtf + size);
-            UNWIND_INFO ui;
-
-            while (rtf + 1 < end)
-            {
-                while (rtf->UnwindData & 1)  /* follow chained entry */
-                {
-                    FIXME("RunTime_Function outside IMAGE_DIRECTORY_ENTRY_EXCEPTION unimplemented yet!\n");
-                    return FALSE;
-                    /* we need to read into the other process */
-                    /* rtf = (RUNTIME_FUNCTION*)(module->module.BaseOfImage + (rtf->UnwindData & ~1)); */
-                }
-                if (read_process_memory(dc->process, dc->modules[index].base + rtf->UnwindData, &ui, sizeof(ui)))
-                    minidump_add_memory_block(dc, dc->modules[index].base + rtf->UnwindData,
-                                              FIELD_OFFSET(UNWIND_INFO, UnwindCode) + ui.CountOfCodes * sizeof(UNWIND_CODE), 0);
-                rtf++;
-            }
-        }
-#endif
-    }
-
-    return TRUE;
+    return FALSE;
 }
 
-DECLSPEC_HIDDEN struct cpu cpu_x86_64 = {
+struct cpu cpu_x86_64 = {
     IMAGE_FILE_MACHINE_AMD64,
     8,
     CV_AMD64_RSP,

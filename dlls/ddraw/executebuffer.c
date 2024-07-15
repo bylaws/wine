@@ -209,9 +209,9 @@ HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *buffer, struct d3d
                     D3DMATRIXMULTIPLY *ci = (D3DMATRIXMULTIPLY *)instr;
                     struct wined3d_matrix *a, *b, *c;
 
-                    a = ddraw_get_object(&device->handle_table, ci->hDestMatrix - 1, DDRAW_HANDLE_MATRIX);
-                    b = ddraw_get_object(&device->handle_table, ci->hSrcMatrix1 - 1, DDRAW_HANDLE_MATRIX);
-                    c = ddraw_get_object(&device->handle_table, ci->hSrcMatrix2 - 1, DDRAW_HANDLE_MATRIX);
+                    a = ddraw_get_object(NULL, ci->hDestMatrix - 1, DDRAW_HANDLE_MATRIX);
+                    b = ddraw_get_object(NULL, ci->hSrcMatrix1 - 1, DDRAW_HANDLE_MATRIX);
+                    c = ddraw_get_object(NULL, ci->hSrcMatrix2 - 1, DDRAW_HANDLE_MATRIX);
 
                     if (!a || !b || !c)
                     {
@@ -235,7 +235,7 @@ HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *buffer, struct d3d
                     D3DSTATE *ci = (D3DSTATE *)instr;
                     D3DMATRIX *m;
 
-                    m = ddraw_get_object(&device->handle_table, ci->dwArg[0] - 1, DDRAW_HANDLE_MATRIX);
+                    m = ddraw_get_object(NULL, ci->dwArg[0] - 1, DDRAW_HANDLE_MATRIX);
                     if (!m)
                     {
                         ERR("Invalid matrix handle %#lx.\n", ci->dwArg[0]);
@@ -347,14 +347,12 @@ HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *buffer, struct d3d
 
                     instr += size;
 
-                    if (!(dst = ddraw_get_object(&device->handle_table,
-                            ci->hDestTexture - 1, DDRAW_HANDLE_SURFACE)))
+                    if (!(dst = ddraw_get_object(NULL, ci->hDestTexture - 1, DDRAW_HANDLE_SURFACE)))
                     {
                         WARN("Invalid destination texture handle %#lx.\n", ci->hDestTexture);
                         continue;
                     }
-                    if (!(src = ddraw_get_object(&device->handle_table,
-                            ci->hSrcTexture - 1, DDRAW_HANDLE_SURFACE)))
+                    if (!(src = ddraw_get_object(NULL, ci->hSrcTexture - 1, DDRAW_HANDLE_SURFACE)))
                     {
                         WARN("Invalid source texture handle %#lx.\n", ci->hSrcTexture);
                         continue;
@@ -488,7 +486,7 @@ static ULONG WINAPI d3d_execute_buffer_Release(IDirect3DExecuteBuffer *iface)
     if (!ref)
     {
         if (buffer->need_free)
-            heap_free(buffer->desc.lpData);
+            free(buffer->desc.lpData);
         if (buffer->index_buffer)
             wined3d_buffer_decref(buffer->index_buffer);
         if (buffer->dst_vertex_buffer)
@@ -496,7 +494,7 @@ static ULONG WINAPI d3d_execute_buffer_Release(IDirect3DExecuteBuffer *iface)
             wined3d_buffer_decref(buffer->src_vertex_buffer);
             wined3d_buffer_decref(buffer->dst_vertex_buffer);
         }
-        heap_free(buffer);
+        free(buffer);
     }
 
     return ref;
@@ -780,7 +778,7 @@ HRESULT d3d_execute_buffer_init(struct d3d_execute_buffer *execute_buffer,
     if (!execute_buffer->desc.lpData && execute_buffer->desc.dwBufferSize)
     {
         execute_buffer->need_free = TRUE;
-        if (!(execute_buffer->desc.lpData = heap_alloc_zero(execute_buffer->desc.dwBufferSize)))
+        if (!(execute_buffer->desc.lpData = calloc(1, execute_buffer->desc.dwBufferSize)))
         {
             ERR("Failed to allocate execute buffer data.\n");
             return DDERR_OUTOFMEMORY;

@@ -97,7 +97,8 @@ static struct counter *create_counter( void )
 
 static void destroy_counter( struct counter *counter )
 {
-    counter->magic = 0;
+    /* Ensure compiler doesn't optimize out the assignment with 0. */
+    SecureZeroMemory( &counter->magic, sizeof( counter->magic ) );
     free( counter->path );
     free( counter );
 }
@@ -130,7 +131,8 @@ static struct query *create_query( void )
 
 static void destroy_query( struct query *query )
 {
-    query->magic = 0;
+    /* Ensure compiler doesn't optimize out the assignment with 0. */
+    SecureZeroMemory( &query->magic, sizeof( query->magic ) );
     free( query );
 }
 
@@ -788,6 +790,26 @@ PDH_STATUS WINAPI PdhGetRawCounterValue( PDH_HCOUNTER handle, LPDWORD type,
     if (type) *type = counter->type;
 
     LeaveCriticalSection( &pdh_handle_cs );
+    return ERROR_SUCCESS;
+}
+
+PDH_STATUS WINAPI PdhGetFormattedCounterArrayW( PDH_HCOUNTER handle, DWORD format, DWORD *size, DWORD *count,
+                                                PDH_FMT_COUNTERVALUE_ITEM_W *buffer)
+{
+    FIXME( "%p %lu %p %p %p stub.\n", handle, format, size, count, buffer );
+
+    *size = 0;
+    *count = 0;
+    return ERROR_SUCCESS;
+}
+
+PDH_STATUS WINAPI PdhGetFormattedCounterArrayA( PDH_HCOUNTER handle, DWORD format, DWORD *size, DWORD *count,
+                                                PDH_FMT_COUNTERVALUE_ITEM_A *buffer)
+{
+    FIXME( "%p %lu %p %p %p stub.\n", handle, format, size, count, buffer );
+
+    *size = 0;
+    *count = 0;
     return ERROR_SUCCESS;
 }
 

@@ -27,7 +27,7 @@
 #include "wine/exception.h"
 #include "wine/list.h"
 #include "msvcrt.h"
-#include "cxx.h"
+#include "cppexcept.h"
 
 #if _MSVCR_VER >= 100
 
@@ -35,6 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
 typedef exception cexception;
 CREATE_EXCEPTION_OBJECT(cexception)
+DEFINE_CXX_TYPE_INFO(cexception)
 
 static LONG context_id = -1;
 static LONG scheduler_id = -1;
@@ -97,12 +98,21 @@ struct scheduler_list {
     struct scheduler_list *next;
 };
 
+struct beacon {
+    bool cancelling;
+    struct list entry;
+    struct _StructuredTaskCollection *task_collection;
+};
+
 typedef struct {
     Context context;
     struct scheduler_list scheduler;
     unsigned int id;
     union allocator_cache_entry *allocator_cache[8];
     LONG blocked;
+    struct _StructuredTaskCollection *task_collection;
+    CRITICAL_SECTION beacons_cs;
+    struct list beacons;
 } ExternalContextBase;
 extern const vtable_ptr ExternalContextBase_vtable;
 static void ExternalContextBase_ctor(ExternalContextBase*);
@@ -175,7 +185,7 @@ typedef struct
 } SpinWait;
 
 #define FINISHED_INITIAL 0x80000000
-typedef struct
+typedef struct _StructuredTaskCollection
 {
     void *unk1;
     unsigned int unk2;
@@ -184,8 +194,10 @@ typedef struct
     volatile LONG count;
     volatile LONG finished;
     void *exception;
-    void *event;
+    Context *event;
 } _StructuredTaskCollection;
+
+bool __thiscall _StructuredTaskCollection__IsCanceling(_StructuredTaskCollection*);
 
 typedef enum
 {
@@ -317,6 +329,10 @@ typedef struct cv_queue {
     struct cv_queue *next;
     LONG expired;
 } cv_queue;
+
+typedef struct {
+    struct beacon *beacon;
+} _Cancellation_beacon;
 
 typedef struct {
     /* cv_queue structure is not binary compatible */
@@ -851,7 +867,17 @@ void __cdecl Context__SpinYield(void)
 /* ?IsCurrentTaskCollectionCanceling@Context@Concurrency@@SA_NXZ */
 bool __cdecl Context_IsCurrentTaskCollectionCanceling(void)
 {
-    FIXME("()\n");
+    ExternalContextBase *ctx = (ExternalContextBase*)try_get_current_context();
+
+    TRACE("()\n");
+
+    if (ctx && ctx->context.vtable != &ExternalContextBase_vtable) {
+        ERR("unknown context set\n");
+        return FALSE;
+    }
+
+    if (ctx && ctx->task_collection)
+        return _StructuredTaskCollection__IsCanceling(ctx->task_collection);
     return FALSE;
 }
 
@@ -1065,6 +1091,10 @@ static void ExternalContextBase_dtor(ExternalContextBase *this)
             operator_delete(scheduler_cur);
         }
     }
+
+    DeleteCriticalSection(&this->beacons_cs);
+    if (!list_empty(&this->beacons))
+        ERR("beacons list is not empty - expect crash\n");
 }
 
 DEFINE_THISCALL_WRAPPER(ExternalContextBase_vector_dtor, 8)
@@ -1094,6 +1124,8 @@ static void ExternalContextBase_ctor(ExternalContextBase *this)
     memset(this, 0, sizeof(*this));
     this->context.vtable = &ExternalContextBase_vtable;
     this->id = InterlockedIncrement(&context_id);
+    InitializeCriticalSection(&this->beacons_cs);
+    list_init(&this->beacons);
 
     create_default_scheduler();
     this->scheduler.scheduler = &default_scheduler->scheduler;
@@ -2087,8 +2119,8 @@ void __thiscall _StructuredTaskCollection__Cancel(
     ThreadScheduler *scheduler;
     void *prev_exception, *new_exception;
     struct scheduled_chore *sc, *next;
-    LONG removed = 0;
-    LONG prev_finished, new_finished;
+    LONG removed = 0, finished = 1;
+    struct beacon *beacon;
 
     TRACE("(%p)\n", this);
 
@@ -2109,6 +2141,13 @@ void __thiscall _StructuredTaskCollection__Cancel(
                     &this->exception, new_exception, prev_exception))
              != prev_exception);
 
+    EnterCriticalSection(&((ExternalContextBase*)this->context)->beacons_cs);
+    LIST_FOR_EACH_ENTRY(beacon, &((ExternalContextBase*)this->context)->beacons, struct beacon, entry) {
+        if (beacon->task_collection == this)
+            beacon->cancelling = TRUE;
+    }
+    LeaveCriticalSection(&((ExternalContextBase*)this->context)->beacons_cs);
+
     EnterCriticalSection(&scheduler->cs);
     LIST_FOR_EACH_ENTRY_SAFE(sc, next, &scheduler->scheduled_chores,
                              struct scheduled_chore, entry) {
@@ -2123,16 +2162,10 @@ void __thiscall _StructuredTaskCollection__Cancel(
     if (!removed)
         return;
 
-    new_finished = this->finished;
-    do {
-        prev_finished = new_finished;
-        if (prev_finished == FINISHED_INITIAL)
-            new_finished = removed;
-        else
-            new_finished = prev_finished + removed;
-    } while ((new_finished = InterlockedCompareExchange(&this->finished,
-                    new_finished, prev_finished)) != prev_finished);
-    RtlWakeAddressAll((LONG*)&this->finished);
+    if (InterlockedCompareExchange(&this->finished, removed, FINISHED_INITIAL) != FINISHED_INITIAL)
+        finished = InterlockedAdd(&this->finished, removed);
+    if (!finished)
+        call_Context_Unblock(this->event);
 }
 
 static LONG CALLBACK execute_chore_except(EXCEPTION_POINTERS *pexc, void *_data)
@@ -2166,49 +2199,62 @@ static LONG CALLBACK execute_chore_except(EXCEPTION_POINTERS *pexc, void *_data)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+static void CALLBACK execute_chore_finally(BOOL normal, void *data)
+{
+    ExternalContextBase *ctx = (ExternalContextBase*)try_get_current_context();
+    _StructuredTaskCollection *old_collection = data;
+
+    if (ctx && ctx->context.vtable == &ExternalContextBase_vtable)
+        ctx->task_collection = old_collection;
+}
+
 static void execute_chore(_UnrealizedChore *chore,
         _StructuredTaskCollection *task_collection)
 {
+    ExternalContextBase *ctx = (ExternalContextBase*)try_get_current_context();
     struct execute_chore_data data = { chore, task_collection };
+    _StructuredTaskCollection *old_collection;
 
     TRACE("(%p %p)\n", chore, task_collection);
 
+    if (ctx && ctx->context.vtable == &ExternalContextBase_vtable)
+    {
+        old_collection = ctx->task_collection;
+        ctx->task_collection = task_collection;
+    }
+
     __TRY
     {
-        if (!((ULONG_PTR)task_collection->exception & ~STRUCTURED_TASK_COLLECTION_STATUS_MASK) &&
-                chore->chore_proc)
-            chore->chore_proc(chore);
+        __TRY
+        {
+            if (!((ULONG_PTR)task_collection->exception & ~STRUCTURED_TASK_COLLECTION_STATUS_MASK) &&
+                    chore->chore_proc)
+                chore->chore_proc(chore);
+        }
+        __EXCEPT_CTX(execute_chore_except, &data)
+        {
+        }
+        __ENDTRY
     }
-    __EXCEPT_CTX(execute_chore_except, &data)
-    {
-    }
-    __ENDTRY
+    __FINALLY_CTX(execute_chore_finally, old_collection)
 }
 
 static void CALLBACK chore_wrapper_finally(BOOL normal, void *data)
 {
     _UnrealizedChore *chore = data;
-    LONG count, prev_finished, new_finished;
-    volatile LONG *ptr;
+    struct _StructuredTaskCollection *task_collection = chore->task_collection;
+    LONG finished = 1;
 
     TRACE("(%u %p)\n", normal, data);
 
-    if (!chore->task_collection)
+    if (!task_collection)
         return;
-    ptr = &chore->task_collection->finished;
-    count = chore->task_collection->count;
     chore->task_collection = NULL;
 
-    do {
-        prev_finished = *ptr;
-        if (prev_finished == FINISHED_INITIAL)
-            new_finished = 1;
-        else
-            new_finished = prev_finished + 1;
-    } while (InterlockedCompareExchange(ptr, new_finished, prev_finished)
-             != prev_finished);
-    if (new_finished >= count)
-        RtlWakeAddressSingle((LONG*)ptr);
+    if (InterlockedCompareExchange(&task_collection->finished, 1, FINISHED_INITIAL) != FINISHED_INITIAL)
+        finished = InterlockedIncrement(&task_collection->finished);
+    if (!finished)
+        call_Context_Unblock(task_collection->event);
 }
 
 static void __cdecl chore_wrapper(_UnrealizedChore *chore)
@@ -2347,9 +2393,9 @@ static void CALLBACK exception_ptr_rethrow_finally(BOOL normal, void *data)
 _TaskCollectionStatus __stdcall _StructuredTaskCollection__RunAndWait(
         _StructuredTaskCollection *this, _UnrealizedChore *chore)
 {
-    LONG expected, val;
     ULONG_PTR exception;
     exception_ptr *ep;
+    LONG count;
 
     TRACE("(%p %p)\n", this, chore);
 
@@ -2369,12 +2415,17 @@ _TaskCollectionStatus __stdcall _StructuredTaskCollection__RunAndWait(
         }
     }
 
-    expected = this->count ? this->count : FINISHED_INITIAL;
-    while ((val = this->finished) != expected)
-        RtlWaitOnAddress((LONG*)&this->finished, &val, sizeof(val), NULL);
+    this->event = get_current_context();
+    InterlockedCompareExchange(&this->finished, 0, FINISHED_INITIAL);
 
-    this->finished = 0;
-    this->count = 0;
+    while (this->count != 0) {
+        count = this->count;
+        InterlockedAdd(&this->count, -count);
+        count = InterlockedAdd(&this->finished, -count);
+
+        if (count < 0)
+            call_Context_Block(this->event);
+    }
 
     exception = (ULONG_PTR)this->exception;
     ep = (exception_ptr*)(exception & ~STRUCTURED_TASK_COLLECTION_STATUS_MASK);
@@ -3001,6 +3052,60 @@ int __cdecl event_wait_for_multiple(event **events, size_t count, bool wait_all,
 }
 
 #if _MSVCR_VER >= 110
+
+/* ??0_Cancellation_beacon@details@Concurrency@@QAE@XZ */
+/* ??0_Cancellation_beacon@details@Concurrency@@QEAA@XZ */
+DEFINE_THISCALL_WRAPPER(_Cancellation_beacon_ctor, 4)
+_Cancellation_beacon* __thiscall _Cancellation_beacon_ctor(_Cancellation_beacon *this)
+{
+    ExternalContextBase *ctx = (ExternalContextBase*)get_current_context();
+    _StructuredTaskCollection *task_collection = NULL;
+    struct beacon *beacon;
+
+    TRACE("(%p)\n", this);
+
+    if (ctx->context.vtable == &ExternalContextBase_vtable) {
+        task_collection = ctx->task_collection;
+        if (task_collection)
+            ctx = (ExternalContextBase*)task_collection->context;
+    }
+
+    if (ctx->context.vtable != &ExternalContextBase_vtable) {
+        ERR("unknown context\n");
+        return NULL;
+    }
+
+    beacon = malloc(sizeof(*beacon));
+    beacon->cancelling = Context_IsCurrentTaskCollectionCanceling();
+    beacon->task_collection = task_collection;
+
+    if (task_collection) {
+        EnterCriticalSection(&ctx->beacons_cs);
+        list_add_head(&ctx->beacons, &beacon->entry);
+        LeaveCriticalSection(&ctx->beacons_cs);
+    }
+
+    this->beacon = beacon;
+    return this;
+}
+
+/* ??1_Cancellation_beacon@details@Concurrency@@QAE@XZ */
+/* ??1_Cancellation_beacon@details@Concurrency@@QEAA@XZ */
+DEFINE_THISCALL_WRAPPER(_Cancellation_beacon_dtor, 4)
+void __thiscall _Cancellation_beacon_dtor(_Cancellation_beacon *this)
+{
+    TRACE("(%p)\n", this);
+
+    if (this->beacon->task_collection) {
+        ExternalContextBase *ctx = (ExternalContextBase*)this->beacon->task_collection->context;
+
+        EnterCriticalSection(&ctx->beacons_cs);
+        list_remove(&this->beacon->entry);
+        LeaveCriticalSection(&ctx->beacons_cs);
+    }
+
+    free(this->beacon);
+}
 
 /* ??0_Condition_variable@details@Concurrency@@QAE@XZ */
 /* ??0_Condition_variable@details@Concurrency@@QEAA@XZ */
@@ -3635,7 +3740,7 @@ __ASM_BLOCK_END
 
 void msvcrt_init_concurrency(void *base)
 {
-#ifdef __x86_64__
+#ifdef RTTI_USE_RVA
     init_cexception_rtti(base);
     init_improper_lock_rtti(base);
     init_improper_scheduler_attach_rtti(base);

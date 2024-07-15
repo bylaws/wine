@@ -122,7 +122,9 @@ static const int addrinfo_flag_map[][2] =
 #ifdef AI_V4MAPPED
     MAP( AI_V4MAPPED ),
 #endif
+#ifdef AI_ALL
     MAP( AI_ALL ),
+#endif
     MAP( AI_ADDRCONFIG ),
 };
 
@@ -1071,6 +1073,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     unix_getnameinfo,
 };
 
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == ws_unix_funcs_count );
+
 #ifdef _WIN64
 
 typedef ULONG PTR32;
@@ -1348,5 +1352,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     wow64_unix_gethostname,
     wow64_unix_getnameinfo,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == ws_unix_funcs_count );
 
 #endif  /* _WIN64 */

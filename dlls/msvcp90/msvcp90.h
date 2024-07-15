@@ -236,6 +236,25 @@ typedef struct {
     codecvt_base base;
 } codecvt_char;
 
+#if _MSVCP_VER >= 140
+typedef enum convert_mode
+{
+    consume_header = 4,
+    generate_header = 2,
+    little_endian = 1
+} codecvt_convert_mode;
+
+/* class codecvt<char16> */
+typedef struct {
+    codecvt_base base;
+} codecvt_char16;
+
+/* class codecvt<char32> */
+typedef struct {
+    codecvt_base base;
+} codecvt_char32;
+#endif
+
 bool __thiscall codecvt_base_always_noconv(const codecvt_base*);
 int __thiscall codecvt_char_unshift(const codecvt_char*, _Mbstatet*, char*, char*, char**);
 int __thiscall codecvt_char_out(const codecvt_char*, _Mbstatet*, const char*,
@@ -667,6 +686,21 @@ typedef struct {
     double real;
     double imag;
 } complex_double;
+
+#if _MSVCP_VER >= 100
+typedef struct {
+    const vtable_ptr *vtable;
+} error_category;
+
+const error_category* __cdecl std_iostream_category(void);
+const error_category* __cdecl std_generic_category(void);
+
+typedef struct
+{
+    int code;
+    const error_category *category;
+} error_code;
+#endif
 
 #if _MSVCP_VER < 80
 static inline int memcpy_wrapper( void *dst, size_t size, const void *src, size_t count )

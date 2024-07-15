@@ -22,6 +22,7 @@
  */
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 #include "winternl.h"
 #include "wine/list.h"
 
@@ -477,6 +478,7 @@ static const struct wined3d_gpu_description gpu_description_table[] =
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX2070,    "NVIDIA GeForce RTX 2070",          DRIVER_NVIDIA_KEPLER,  8192},
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX2080,    "NVIDIA GeForce RTX 2080",          DRIVER_NVIDIA_KEPLER,  8192},
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX2080TI,  "NVIDIA GeForce RTX 2080 Ti",       DRIVER_NVIDIA_KEPLER,  11264},
+    {HW_VENDOR_NVIDIA,     CARD_NVIDIA_GEFORCE_RTX3070,    "NVIDIA GeForce RTX 3070",          DRIVER_NVIDIA_KEPLER,  8192},
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_TESLA_T4,           "NVIDIA Tesla T4",                  DRIVER_NVIDIA_KEPLER,  16384},
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_AMPERE_A10,         "NVIDIA Ampere A10",                DRIVER_NVIDIA_KEPLER,  24576},
 
@@ -542,7 +544,7 @@ static const struct wined3d_gpu_description gpu_description_table[] =
     {HW_VENDOR_AMD,        CARD_AMD_RADEON_RX_NAVI_21,     "Radeon RX 6800/6800 XT / 6900 XT", DRIVER_AMD_RX,          16384},
     {HW_VENDOR_AMD,        CARD_AMD_RADEON_PRO_V620,       "Radeon Pro V620",                  DRIVER_AMD_RX,          32768},
     {HW_VENDOR_AMD,        CARD_AMD_RADEON_PRO_V620_VF,    "Radeon Pro V620 VF",               DRIVER_AMD_RX,          32768},
-    {HW_VENDOR_AMD,        CARD_AMD_VANGOGH,               "AMD VANGOGH",                      DRIVER_AMD_RX,           4096},
+    {HW_VENDOR_AMD,        CARD_AMD_VANGOGH,               "AMD Radeon VANGOGH",               DRIVER_AMD_RX,           4096},
     {HW_VENDOR_AMD,        CARD_AMD_RAPHAEL,               "AMD Radeon(TM) Graphics",          DRIVER_AMD_RX,           4096},
 
     /* Red Hat */
@@ -2528,8 +2530,8 @@ HRESULT CDECL wined3d_get_device_caps(const struct wined3d_adapter *adapter,
     caps->PixelShader1xMaxValue = shader_caps.ps_1x_max_value;
 
     caps->TextureOpCaps                    = fragment_caps.TextureOpCaps;
-    caps->MaxTextureBlendStages            = fragment_caps.MaxTextureBlendStages;
-    caps->MaxSimultaneousTextures          = fragment_caps.MaxSimultaneousTextures;
+    caps->MaxTextureBlendStages            = fragment_caps.max_blend_stages;
+    caps->MaxSimultaneousTextures          = fragment_caps.max_textures;
 
     caps->MaxUserClipPlanes                = vertex_caps.max_user_clip_planes;
     caps->MaxActiveLights                  = vertex_caps.max_active_lights;
@@ -3019,7 +3021,7 @@ static void adapter_no3d_destroy_bo(struct wined3d_context *context, struct wine
 }
 
 static HRESULT adapter_no3d_create_swapchain(struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops, struct wined3d_swapchain **swapchain)
 {
     struct wined3d_swapchain *swapchain_no3d;

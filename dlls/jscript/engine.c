@@ -544,6 +544,27 @@ static HRESULT scope_gc_traverse(struct gc_ctx *gc_ctx, enum gc_traverse_op op, 
     return scope->obj && (jsobj = to_jsdisp(scope->obj)) ? gc_process_linked_obj(gc_ctx, op, dispex, jsobj, (void**)&scope->obj) : S_OK;
 }
 
+static void scope_cc_traverse(jsdisp_t *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    scope_chain_t *scope = scope_from_dispex(dispex);
+    note_edge_t note_edge = cc_api.note_edge;
+
+    if(scope->detached_vars) {
+        struct vars_buffer *vars = scope->detached_vars;
+        unsigned i, cnt = vars->argc;
+
+        for(i = 0; i < cnt; i++)
+            if(is_object_instance(vars->var[i]))
+                note_edge((nsISupports*)get_object(vars->var[i]), "var", cb);
+    }
+
+    if(scope->next)
+        note_edge((nsISupports*)&scope->next->dispex.IDispatchEx_iface, "next", cb);
+
+    if(scope->obj)
+        note_edge((nsISupports*)scope->obj, "obj", cb);
+}
+
 static const builtin_info_t scope_info = {
     JSCLASS_NONE,
     NULL,
@@ -554,7 +575,8 @@ static const builtin_info_t scope_info = {
     scope_idx_length,
     scope_idx_get,
     scope_idx_put,
-    scope_gc_traverse
+    scope_gc_traverse,
+    scope_cc_traverse
 };
 
 static HRESULT scope_push(script_ctx_t *ctx, scope_chain_t *scope, IDispatch *obj, scope_chain_t **ret)
@@ -630,15 +652,24 @@ static HRESULT disp_cmp(IDispatch *disp1, IDispatch *disp2, BOOL *ret)
 {
     IObjectIdentity *identity;
     IUnknown *unk1, *unk2;
+    jsdisp_t *jsdisp;
     HRESULT hres;
 
-    if(disp1 == disp2) {
-        *ret = TRUE;
+    if(!disp1 || !disp2) {
+        *ret = (disp1 == disp2);
         return S_OK;
     }
 
-    if(!disp1 || !disp2) {
-        *ret = FALSE;
+    jsdisp = to_jsdisp(disp1);
+    if(jsdisp && jsdisp->proxy)
+        disp1 = (IDispatch*)jsdisp->proxy;
+
+    jsdisp = to_jsdisp(disp2);
+    if(jsdisp && jsdisp->proxy)
+        disp2 = (IDispatch*)jsdisp->proxy;
+
+    if(disp1 == disp2) {
+        *ret = TRUE;
         return S_OK;
     }
 
@@ -758,7 +789,7 @@ static HRESULT detach_scope(script_ctx_t *ctx, call_frame_t *frame, scope_chain_
 
     if (scope == frame->base_scope && func->name && func->local_ref == INVALID_LOCAL_REF &&
         ctx->version >= SCRIPTLANGUAGEVERSION_ES5)
-        jsdisp_propput_name(jsobj, func->name, jsval_obj(jsdisp_addref(frame->function_instance)));
+        jsdisp_propput_name(jsobj, func->name, jsval_obj(frame->function_instance));
 
     index = scope->scope_index;
     for(i = 0; i < frame->function->local_scopes[index].locals_cnt; i++)
@@ -819,7 +850,7 @@ static BOOL lookup_global_members(script_ctx_t *ctx, BSTR identifier, exprval_t 
     HRESULT hres;
 
     LIST_FOR_EACH_ENTRY(item, &ctx->named_items, named_item_t, entry) {
-        if(item->flags & SCRIPTITEM_GLOBALMEMBERS) {
+        if((item->flags & SCRIPTITEM_GLOBALMEMBERS) && item->disp != (IDispatch*)&ctx->global->IDispatchEx_iface) {
             hres = disp_get_id(ctx, item->disp, identifier, identifier, 0, &id);
             if(SUCCEEDED(hres)) {
                 if(ret)
@@ -2026,7 +2057,7 @@ static HRESULT interp_instanceof(script_ctx_t *ctx)
         return E_FAIL;
     }
 
-    if(is_class(obj, JSCLASS_FUNCTION)) {
+    if(is_class(obj, JSCLASS_FUNCTION) || (obj->proxy && obj->proxy->lpVtbl->IsConstructor(obj->proxy))) {
         hres = jsdisp_propget_name(obj, L"prototype", &prot);
     }else {
         hres = JS_E_FUNCTION_EXPECTED;

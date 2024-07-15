@@ -4434,13 +4434,13 @@ static BOOL test_winmm_joystick(void)
                 REPORT_ID(1, 1),
 
                 USAGE(1, HID_USAGE_GENERIC_X),
-                USAGE(1, HID_USAGE_GENERIC_Y),
-                USAGE(1, HID_USAGE_GENERIC_Z),
                 USAGE(1, HID_USAGE_GENERIC_WHEEL),
-                USAGE(1, HID_USAGE_GENERIC_SLIDER),
                 USAGE(1, HID_USAGE_GENERIC_RX),
-                USAGE(1, HID_USAGE_GENERIC_RY),
+                USAGE(1, HID_USAGE_GENERIC_DIAL),
                 USAGE(1, HID_USAGE_GENERIC_RZ),
+                USAGE(1, HID_USAGE_GENERIC_SLIDER),
+                USAGE(1, HID_USAGE_GENERIC_Z),
+                USAGE(1, HID_USAGE_GENERIC_RY),
                 LOGICAL_MINIMUM(1, 1),
                 LOGICAL_MAXIMUM(4, 0xffff),
                 PHYSICAL_MINIMUM(1, 1),
@@ -4498,9 +4498,9 @@ static BOOL test_winmm_joystick(void)
         .wRmax = 0xffff,
         .wUmax = 0xffff,
         .wVmax = 0xffff,
-        .wCaps = JOYCAPS_HASZ | JOYCAPS_HASR | JOYCAPS_HASU | JOYCAPS_HASV | JOYCAPS_HASPOV | JOYCAPS_POV4DIR,
+        .wCaps = JOYCAPS_HASZ | JOYCAPS_HASR | JOYCAPS_HASU | JOYCAPS_HASPOV | JOYCAPS_POV4DIR,
         .wMaxAxes = 6,
-        .wNumAxes = 6,
+        .wNumAxes = 5,
         .wMaxButtons = 32,
         .szRegKey = L"DINPUT.DLL",
     };
@@ -4519,19 +4519,19 @@ static BOOL test_winmm_joystick(void)
     {
         {
             .dwSize = sizeof(JOYINFOEX), .dwFlags = 0xff,
-            .dwXpos = 0x7fff, .dwYpos = 0x7fff, .dwZpos = 0x7fff, .dwRpos = 0x7fff, .dwUpos = 0x7fff, .dwVpos = 0x7fff,
+            .dwXpos = 0x7fff, .dwYpos = 0x7fff, .dwZpos = 0x7fff, .dwRpos = 0x7fff, .dwUpos = 0x7fff, .dwVpos = 0,
             .dwButtons = 0, .dwButtonNumber = 0, .dwPOV = 0xffff,
             .dwReserved1 = 0xcdcdcdcd, .dwReserved2 = 0xcdcdcdcd,
         },
         {
             .dwSize = sizeof(JOYINFOEX), .dwFlags = 0xff,
-            .dwXpos = 0, .dwYpos = 0x07ff, .dwZpos = 0x17ff, .dwRpos = 0x37ff, .dwUpos = 0x1fff, .dwVpos = 0x27ff,
+            .dwXpos = 0, .dwYpos = 0x0fff, .dwZpos = 0x2fff, .dwRpos = 0x1fff, .dwUpos = 0x27ff, .dwVpos = 0,
             .dwButtons = 0xf, .dwButtonNumber = 0x4, .dwPOV = 0,
             .dwReserved1 = 0xcdcdcdcd, .dwReserved2 = 0xcdcdcdcd,
         },
         {
             .dwSize = sizeof(JOYINFOEX), .dwFlags = 0xff,
-            .dwXpos = 0x37ff, .dwYpos = 0x2fff, .dwZpos = 0x1fff, .dwRpos = 0, .dwUpos = 0x17ff, .dwVpos = 0x0fff,
+            .dwXpos = 0x37ff, .dwYpos = 0x27ff, .dwZpos = 0x07ff, .dwRpos = 0x17ff, .dwUpos = 0x0fff, .dwVpos = 0,
             .dwButtons = 0x6, .dwButtonNumber = 0x2, .dwPOV = 0x2328,
             .dwReserved1 = 0xcdcdcdcd, .dwReserved2 = 0xcdcdcdcd,
         },
@@ -4643,7 +4643,7 @@ static BOOL test_winmm_joystick(void)
     check_member( caps, expect_caps, "%#x", wVmax );
     check_member( caps, expect_caps, "%#x", wCaps );
     check_member( caps, expect_caps, "%#x", wMaxAxes );
-    check_member( caps, expect_caps, "%#x", wNumAxes );
+    todo_wine check_member( caps, expect_caps, "%#x", wNumAxes );
     check_member( caps, expect_caps, "%#x", wMaxButtons );
     check_member_wstr( caps, expect_caps, szRegKey );
     check_member_wstr( caps, expect_caps, szOEMVxD );
@@ -4974,6 +4974,7 @@ static void test_windows_gaming_input(void)
     static const WCHAR *racing_wheel_class_name = RuntimeClass_Windows_Gaming_Input_RacingWheel;
     static const WCHAR *gamepad_class_name = RuntimeClass_Windows_Gaming_Input_Gamepad;
 
+    IVectorView_SimpleHapticsController *haptics_controllers;
     IRawGameController *raw_controller, *tmp_raw_controller;
     IVectorView_RawGameController *controllers_view;
     IRawGameControllerStatics *controller_statics;
@@ -4981,11 +4982,13 @@ static void test_windows_gaming_input(void)
     IVectorView_RacingWheel *racing_wheels_view;
     IRacingWheelStatics2 *racing_wheel_statics2;
     IRacingWheelStatics *racing_wheel_statics;
+    IRawGameController2 *raw_controller2;
     IVectorView_Gamepad *gamepads_view;
     IGamepadStatics *gamepad_statics;
     IGameController *game_controller;
     IRacingWheel *racing_wheel;
-    UINT32 size;
+    UINT32 size, length;
+    const WCHAR *buffer;
     HSTRING str;
     HRESULT hr;
     DWORD res;
@@ -5067,7 +5070,6 @@ static void test_windows_gaming_input(void)
     check_interface( raw_controller, &IID_IInspectable, TRUE );
     check_interface( raw_controller, &IID_IAgileObject, TRUE );
     check_interface( raw_controller, &IID_IRawGameController, TRUE );
-    todo_wine
     check_interface( raw_controller, &IID_IRawGameController2, TRUE );
     check_interface( raw_controller, &IID_IGameController, TRUE );
     check_interface( raw_controller, &IID_IGamepad, FALSE );
@@ -5080,7 +5082,6 @@ static void test_windows_gaming_input(void)
     check_interface( game_controller, &IID_IInspectable, TRUE );
     check_interface( game_controller, &IID_IAgileObject, TRUE );
     check_interface( game_controller, &IID_IRawGameController, TRUE );
-    todo_wine
     check_interface( game_controller, &IID_IRawGameController2, TRUE );
     check_interface( game_controller, &IID_IGameController, TRUE );
     check_interface( game_controller, &IID_IGamepad, FALSE );
@@ -5096,6 +5097,43 @@ static void test_windows_gaming_input(void)
     IRawGameController_Release( tmp_raw_controller );
 
     IGameController_Release( game_controller );
+
+    hr = IRawGameController_QueryInterface( raw_controller, &IID_IRawGameController2, (void **)&raw_controller2 );
+    ok( hr == S_OK, "QueryInterface returned %#lx\n", hr );
+
+    hr = IRawGameController2_get_DisplayName( raw_controller2, &str );
+    todo_wine
+    ok( hr == S_OK, "get_DisplayName returned %#lx\n", hr );
+    if (hr == S_OK)
+    {
+        buffer = pWindowsGetStringRawBuffer( str, &length );
+        todo_wine
+        ok( !wcscmp( buffer, L"HID-compliant game controller" ),
+            "get_DisplayName returned %s\n", debugstr_wn( buffer, length ) );
+        pWindowsDeleteString( str );
+    }
+
+    hr = IRawGameController2_get_NonRoamableId( raw_controller2, &str );
+    todo_wine
+    ok( hr == S_OK, "get_NonRoamableId returned %#lx\n", hr );
+    if (hr == S_OK)
+    {
+        buffer = pWindowsGetStringRawBuffer( str, &length );
+        todo_wine
+        ok( !wcsncmp( buffer, L"{wgi/nrid/", 10 ),
+            "get_NonRoamableId returned %s\n", debugstr_wn( buffer, length ) );
+        pWindowsDeleteString( str );
+    }
+
+    /* FIXME: What kind of HID reports are needed to make this work? */
+    hr = IRawGameController2_get_SimpleHapticsControllers( raw_controller2, &haptics_controllers );
+    ok( hr == S_OK, "get_SimpleHapticsControllers returned %#lx\n", hr );
+    hr = IVectorView_SimpleHapticsController_get_Size( haptics_controllers, &length );
+    ok( hr == S_OK, "get_Size returned %#lx\n", hr );
+    ok( length == 0, "got length %u\n", length );
+    IVectorView_SimpleHapticsController_Release( haptics_controllers );
+
+    IRawGameController2_Release( raw_controller2 );
     IRawGameController_Release( raw_controller );
 
     hr = IRawGameControllerStatics_remove_RawGameControllerAdded( controller_statics, controller_added_token );

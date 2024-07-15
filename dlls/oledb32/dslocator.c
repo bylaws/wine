@@ -35,7 +35,6 @@
 #include "resource.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(oledb);
 
@@ -49,7 +48,7 @@ struct datasource
 
 static struct datasource *create_datasource(WCHAR *guid)
 {
-    struct datasource *data = heap_alloc_zero(sizeof(struct datasource));
+    struct datasource *data = calloc(1, sizeof(struct datasource));
     if (data)
     {
         CLSIDFromString(guid, &data->clsid);
@@ -75,7 +74,7 @@ static void destroy_datasource(struct datasource *data)
     if (data->provider)
         IDBProperties_Release(data->provider);
 
-    heap_free(data);
+    free(data);
 }
 
 static BOOL initialize_datasource(struct datasource *data)
@@ -191,7 +190,7 @@ static ULONG WINAPI dslocator_Release(IDataSourceLocator *iface)
 
     if (!ref)
     {
-        heap_free(This);
+        free(This);
     }
 
     return ref;
@@ -708,7 +707,7 @@ static ULONG WINAPI datainitialize_Release(IDataInitialize *iface)
 }
 
 static HRESULT WINAPI datainitialize_GetDataSource(IDataInitialize *iface,
-    IUnknown *outer, DWORD context, LPWSTR initstring, REFIID riid, IUnknown **datasource)
+    IUnknown *outer, DWORD context, LPCOLESTR initstring, REFIID riid, IUnknown **datasource)
 {
     TRACE("(%p)->(%p %#lx %s %s %p)\n", iface, outer, context, debugstr_w(initstring), debugstr_guid(riid),
         datasource);
@@ -739,13 +738,13 @@ static HRESULT WINAPI datainitialize_CreateDBInstanceEx(IDataInitialize *iface, 
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI datainitialize_LoadStringFromStorage(IDataInitialize *iface, LPWSTR filename, LPWSTR *initstring)
+static HRESULT WINAPI datainitialize_LoadStringFromStorage(IDataInitialize *iface, LPCOLESTR filename, LPWSTR *initstring)
 {
     FIXME("(%p)->(%s %p): stub\n", iface, debugstr_w(filename), initstring);
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI datainitialize_WriteStringToStorage(IDataInitialize *iface, LPWSTR filename, LPWSTR initstring,
+static HRESULT WINAPI datainitialize_WriteStringToStorage(IDataInitialize *iface, LPCOLESTR filename, LPCOLESTR initstring,
     DWORD disposition)
 {
     FIXME("(%p)->(%s %s %#lx): stub\n", iface, debugstr_w(filename), debugstr_w(initstring), disposition);
@@ -775,7 +774,7 @@ HRESULT create_dslocator(IUnknown *outer, void **obj)
 
     if(outer) return CLASS_E_NOAGGREGATION;
 
-    This = heap_alloc(sizeof(*This));
+    This = malloc(sizeof(*This));
     if(!This) return E_OUTOFMEMORY;
 
     This->IDataSourceLocator_iface.lpVtbl = &DSLocatorVtbl;

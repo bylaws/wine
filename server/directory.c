@@ -37,6 +37,7 @@
 #include "process.h"
 #include "file.h"
 #include "unicode.h"
+#include "user.h"
 
 #define HASH_SIZE 7  /* default hash size */
 
@@ -69,6 +70,8 @@ static const struct object_ops object_type_ops =
     no_add_queue,                 /* add_queue */
     NULL,                         /* remove_queue */
     NULL,                         /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     NULL,                         /* satisfied */
     no_signal,                    /* signal */
     no_get_fd,                    /* get_fd */
@@ -119,6 +122,8 @@ static const struct object_ops directory_ops =
     no_add_queue,                 /* add_queue */
     NULL,                         /* remove_queue */
     NULL,                         /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     NULL,                         /* satisfied */
     no_signal,                    /* signal */
     no_get_fd,                    /* get_fd */
@@ -275,6 +280,37 @@ struct object *get_root_directory(void)
 struct object *get_directory_obj( struct process *process, obj_handle_t handle )
 {
     return get_handle_obj( process, handle, 0, &directory_ops );
+}
+
+struct object *create_desktop_map_directory( struct winstation *winstation )
+{
+    static const WCHAR dir_desktop_mapsW[] = {'_','_','w','i','n','e','_','d','e','s','k','t','o','p','_','m','a','p','p','i','n','g','s'};
+    static const struct unicode_str dir_desktop_maps_str = {dir_desktop_mapsW, sizeof(dir_desktop_mapsW)};
+    struct object *root;
+    struct directory *mapping_root, *ret;
+    const struct unicode_str winsta_name = {winstation->obj.name->name, winstation->obj.name->len};
+
+    root = winstation->obj.name->parent;
+    mapping_root = create_directory( root, &dir_desktop_maps_str, OBJ_OPENIF, HASH_SIZE, NULL );
+    ret = create_directory( &mapping_root->obj, &winsta_name, OBJ_OPENIF, HASH_SIZE, NULL );
+    release_object( &mapping_root->obj );
+
+    return &ret->obj;
+}
+
+struct object *create_thread_map_directory( void )
+{
+    static const WCHAR dir_kernelW[] = {'K','e','r','n','e','l','O','b','j','e','c','t','s'};
+    static const WCHAR dir_thread_mapsW[] = {'_','_','w','i','n','e','_','t','h','r','e','a','d','_','m','a','p','p','i','n','g','s'};
+    static const struct unicode_str dir_kernel_str = {dir_kernelW, sizeof(dir_kernelW)};
+    static const struct unicode_str dir_thread_maps_str = {dir_thread_mapsW, sizeof(dir_thread_mapsW)};
+    struct directory *mapping_root, *ret;
+
+    mapping_root = create_directory( &root_directory->obj, &dir_kernel_str, OBJ_OPENIF, HASH_SIZE, NULL );
+    ret = create_directory( &mapping_root->obj, &dir_thread_maps_str, OBJ_OPENIF, HASH_SIZE, NULL );
+    release_object( &mapping_root->obj );
+
+    return &ret->obj;
 }
 
 /* Global initialization */

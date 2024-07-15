@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -44,6 +45,7 @@
 
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
+WINE_DECLARE_DEBUG_CHANNEL(microsecs);
 WINE_DEFAULT_DEBUG_CHANNEL(ntdll);
 
 struct debug_info
@@ -129,7 +131,7 @@ static void add_option( const char *name, unsigned char set, unsigned char clear
 }
 
 /* parse a set of debugging option specifications and add them to the option list */
-static void parse_options( const char *str )
+static void parse_options( const char *str, const char *app_name )
 {
     char *opt, *next, *options;
     unsigned int i;
@@ -137,10 +139,17 @@ static void parse_options( const char *str )
     if (!(options = strdup(str))) return;
     for (opt = options; opt; opt = next)
     {
-        const char *p;
+        char *p;
         unsigned char set = 0, clear = 0;
 
         if ((next = strchr( opt, ',' ))) *next++ = 0;
+
+        if ((p = strchr( opt, ':' )))
+        {
+            *p = 0;
+            if (strcasecmp( opt, app_name )) continue;
+            opt = p + 1;
+        }
 
         p = opt + strcspn( opt, "+-" );
         if (!p[0]) p = opt;  /* assume it's a debug channel name */
@@ -182,7 +191,7 @@ static void debug_usage(void)
 {
     static const char usage[] =
         "Syntax of the WINEDEBUG variable:\n"
-        "  WINEDEBUG=[class]+xxx,[class]-yyy,...\n\n"
+        "  WINEDEBUG=[[process:]class]+xxx,[[process:]class]-yyy,...\n\n"
         "Example: WINEDEBUG=+relay,warn-heap\n"
         "    turns on relay traces, disable heap warnings\n"
         "Available message classes: err, warn, fixme, trace\n";
@@ -194,6 +203,7 @@ static void debug_usage(void)
 static void init_options(void)
 {
     char *wine_debug = getenv("WINEDEBUG");
+    const char *app_name, *p;
     struct stat st1, st2;
 
     nb_debug_options = 0;
@@ -208,7 +218,11 @@ static void init_options(void)
     }
     if (!wine_debug) return;
     if (!strcmp( wine_debug, "help" )) debug_usage();
-    parse_options( wine_debug );
+
+    app_name = main_argv[1];
+    while ((p = strpbrk( app_name, "/\\" ))) app_name = p + 1;
+
+    parse_options( wine_debug, app_name );
 }
 
 /***********************************************************************
@@ -260,6 +274,54 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
     struct wine_dbg_write_params *params = args;
 
     return write( 2, params->str, params->len );
+}
+
+unsigned int WINAPI __wine_dbg_ftrace( char *str, unsigned int str_size, unsigned int ctx )
+{
+    static unsigned int curr_ctx;
+    static int ftrace_fd = -1;
+    unsigned int str_len;
+    char ctx_str[64];
+    int ctx_len;
+
+    if (ftrace_fd == -1)
+    {
+        int expected = -1;
+        const char *fn;
+        int fd;
+
+        if (!(fn = getenv( "WINE_FTRACE_FILE" ))) fn = "/sys/kernel/tracing/trace_marker";
+        if ((fd = open( fn, O_WRONLY )) == -1)
+        {
+            MESSAGE( "wine: error opening ftrace file: %s.\n", strerror(errno) );
+            ftrace_fd = -2;
+            return 0;
+        }
+        if (!__atomic_compare_exchange_n( &ftrace_fd, &expected, fd, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
+            close( fd );
+        else
+            MESSAGE( "wine: ftrace initialized.\n" );
+    }
+    if (ftrace_fd == -2) return ~0u;
+
+    if (ctx == ~0u) ctx_len = 0;
+    else if (ctx) ctx_len = sprintf( ctx_str, " (end_ctx=%u)", ctx );
+    else
+    {
+        ctx = __atomic_add_fetch( &curr_ctx, 1, __ATOMIC_SEQ_CST );
+        ctx_len = sprintf( ctx_str, " (begin_ctx=%u)", ctx );
+    }
+
+    str_len = strlen(str);
+    if (ctx_len > 0)
+    {
+        if (str_size < ctx_len) return ~0u;
+        if (str_len + ctx_len > str_size) str_len = str_size - ctx_len;
+        memcpy( &str[str_len], ctx_str, ctx_len );
+        str_len += ctx_len;
+    }
+    write( ftrace_fd, str, str_len );
+    return ctx;
 }
 
 #ifdef _WIN64
@@ -315,13 +377,20 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
 
     if (init_done)
     {
-        if (TRACE_ON(timestamp))
+        if (TRACE_ON(microsecs))
+        {
+            LARGE_INTEGER counter, frequency, microsecs;
+            NtQueryPerformanceCounter(&counter, &frequency);
+            microsecs.QuadPart = counter.QuadPart * 1000000 / frequency.QuadPart;
+            pos += sprintf( pos, "%3u.%06u:", (unsigned int)(microsecs.QuadPart / 1000000), (unsigned int)(microsecs.QuadPart % 1000000) );
+        }
+        else if (TRACE_ON(timestamp))
         {
             UINT ticks = NtGetTickCount();
-            pos += sprintf( pos, "%3u.%03u:", ticks / 1000, ticks % 1000 );
+            pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%3u.%03u:", ticks / 1000, ticks % 1000 );
         }
-        if (TRACE_ON(pid)) pos += sprintf( pos, "%04x:", (UINT)GetCurrentProcessId() );
-        pos += sprintf( pos, "%04x:", (UINT)GetCurrentThreadId() );
+        if (TRACE_ON(pid)) pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", (UINT)GetCurrentProcessId() );
+        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", (UINT)GetCurrentThreadId() );
     }
     if (function && cls < ARRAY_SIZE( classes ))
         pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",

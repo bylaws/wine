@@ -43,6 +43,7 @@ struct speech_voice
     LONG ref;
 
     ISpStreamFormat *output;
+    ISpObjectToken *engine_token;
     ISpTTSEngine *engine;
     LONG cur_stream_num;
     DWORD actions;
@@ -81,6 +82,15 @@ static inline struct tts_engine_site *impl_from_ISpTTSEngineSite(ISpTTSEngineSit
     return CONTAINING_RECORD(iface, struct tts_engine_site, ISpTTSEngineSite_iface);
 }
 
+static HRESULT create_token_category(const WCHAR *cat_id, ISpObjectTokenCategory **cat)
+{
+    HRESULT hr;
+    if (FAILED(hr = CoCreateInstance(&CLSID_SpObjectTokenCategory, NULL, CLSCTX_INPROC_SERVER,
+                                     &IID_ISpObjectTokenCategory, (void **)cat)))
+        return hr;
+    return ISpObjectTokenCategory_SetId(*cat, cat_id, FALSE);
+}
+
 static HRESULT create_default_token(const WCHAR *cat_id, ISpObjectToken **token)
 {
     ISpObjectTokenCategory *cat;
@@ -89,17 +99,13 @@ static HRESULT create_default_token(const WCHAR *cat_id, ISpObjectToken **token)
 
     TRACE("(%s, %p).\n", debugstr_w(cat_id), token);
 
-    if (FAILED(hr = CoCreateInstance(&CLSID_SpObjectTokenCategory, NULL, CLSCTX_INPROC_SERVER,
-                                     &IID_ISpObjectTokenCategory, (void **)&cat)))
+    if (FAILED(hr = create_token_category(cat_id, &cat)))
         return hr;
 
-    if (FAILED(hr = ISpObjectTokenCategory_SetId(cat, cat_id, FALSE)) ||
-        FAILED(hr = ISpObjectTokenCategory_GetDefaultTokenId(cat, &default_token_id)))
-    {
-        ISpObjectTokenCategory_Release(cat);
-        return hr;
-    }
+    hr = ISpObjectTokenCategory_GetDefaultTokenId(cat, &default_token_id);
     ISpObjectTokenCategory_Release(cat);
+    if (FAILED(hr))
+        return hr;
 
     if (FAILED(hr = CoCreateInstance(&CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
                                      &IID_ISpObjectToken, (void **)token)))
@@ -163,46 +169,61 @@ static ULONG WINAPI speech_voice_Release(ISpeechVoice *iface)
     {
         async_cancel_queue(&This->queue);
         if (This->output) ISpStreamFormat_Release(This->output);
+        if (This->engine_token) ISpObjectToken_Release(This->engine_token);
         if (This->engine) ISpTTSEngine_Release(This->engine);
         DeleteCriticalSection(&This->cs);
 
-        heap_free(This);
+        free(This);
     }
 
     return ref;
 }
 
-static HRESULT WINAPI speech_voice_GetTypeInfoCount(ISpeechVoice *iface, UINT *info)
+static HRESULT WINAPI speech_voice_GetTypeInfoCount(ISpeechVoice *iface, UINT *count)
 {
-    FIXME("(%p, %p): stub.\n", iface, info);
-
-    return E_NOTIMPL;
+    TRACE("(%p, %p).\n", iface, count);
+    *count = 1;
+    return S_OK;
 }
 
-static HRESULT WINAPI speech_voice_GetTypeInfo(ISpeechVoice *iface, UINT info, LCID lcid,
+static HRESULT WINAPI speech_voice_GetTypeInfo(ISpeechVoice *iface, UINT index, LCID lcid,
                                                ITypeInfo **type_info)
 {
-    FIXME("(%p, %u, %lu, %p): stub.\n", iface, info, lcid, type_info);
-
-    return E_NOTIMPL;
+    TRACE("(%p, %u, %#lx, %p).\n", iface, index, lcid, type_info);
+    if (index != 0) return DISP_E_BADINDEX;
+    return get_typeinfo(ISpeechVoice_tid, type_info);
 }
 
 static HRESULT WINAPI speech_voice_GetIDsOfNames(ISpeechVoice *iface, REFIID riid, LPOLESTR *names,
-                                                 UINT count, LCID lcid, DISPID *dispid)
+                                                 UINT count, LCID lcid, DISPID *dispids)
 {
-    FIXME("(%p, %s, %p, %u, %lu, %p): stub.\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    ITypeInfo *typeinfo;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %s, %p, %u, %#lx, %p).\n", iface, debugstr_guid(riid), names, count, lcid, dispids);
+
+    if (FAILED(hr = get_typeinfo(ISpeechVoice_tid, &typeinfo)))
+        return hr;
+    hr = ITypeInfo_GetIDsOfNames(typeinfo, names, count, dispids);
+    ITypeInfo_Release(typeinfo);
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_Invoke(ISpeechVoice *iface, DISPID dispid, REFIID riid, LCID lcid,
                                           WORD flags, DISPPARAMS *params, VARIANT *result,
                                           EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("(%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p): stub.\n", iface, dispid, debugstr_guid(riid),
+    ITypeInfo *typeinfo;
+    HRESULT hr;
+
+    TRACE("(%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p).\n", iface, dispid, debugstr_guid(riid),
           lcid, flags, params, result, excepinfo, argerr);
 
-    return E_NOTIMPL;
+    if (FAILED(hr = get_typeinfo(ISpeechVoice_tid, &typeinfo)))
+        return hr;
+    hr = ITypeInfo_Invoke(typeinfo, iface, dispid, flags, params, result, excepinfo, argerr);
+    ITypeInfo_Release(typeinfo);
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_get_Status(ISpeechVoice *iface, ISpeechVoiceStatus **status)
@@ -214,16 +235,34 @@ static HRESULT WINAPI speech_voice_get_Status(ISpeechVoice *iface, ISpeechVoiceS
 
 static HRESULT WINAPI speech_voice_get_Voice(ISpeechVoice *iface, ISpeechObjectToken **voice)
 {
-    FIXME("(%p, %p): stub.\n", iface, voice);
+    struct speech_voice *This = impl_from_ISpeechVoice(iface);
+    ISpObjectToken *token;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %p).\n", iface, voice);
+
+    if (!voice) return E_POINTER;
+    if (FAILED(hr = ISpVoice_GetVoice(&This->ISpVoice_iface, &token)))
+        return hr;
+    hr = ISpObjectToken_QueryInterface(token, &IID_ISpeechObjectToken, (void **)voice);
+    ISpObjectToken_Release(token);
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_putref_Voice(ISpeechVoice *iface, ISpeechObjectToken *voice)
 {
-    FIXME("(%p, %p): stub.\n", iface, voice);
+    struct speech_voice *This = impl_from_ISpeechVoice(iface);
+    ISpObjectToken *token;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %p).\n", iface, voice);
+
+    if (!voice) return E_INVALIDARG;
+    if (FAILED(hr = ISpeechObjectToken_QueryInterface(voice, &IID_ISpObjectToken, (void **)&token)))
+        return hr;
+    hr = ISpVoice_SetVoice(&This->ISpVoice_iface, token);
+    ISpObjectToken_Release(token);
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_get_AudioOutput(ISpeechVoice *iface, ISpeechObjectToken **output)
@@ -270,16 +309,25 @@ static HRESULT WINAPI speech_voice_put_Rate(ISpeechVoice *iface, LONG rate)
 
 static HRESULT WINAPI speech_voice_get_Volume(ISpeechVoice *iface, LONG *volume)
 {
-    FIXME("(%p, %p): stub.\n", iface, volume);
+    struct speech_voice *This = impl_from_ISpeechVoice(iface);
+    USHORT res = 0;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %p).\n", iface, volume);
+
+    if (!volume) return E_POINTER;
+    hr = ISpVoice_GetVolume(&This->ISpVoice_iface, &res);
+    *volume = res;
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_put_Volume(ISpeechVoice *iface, LONG volume)
 {
-    FIXME("(%p, %ld): stub.\n", iface, volume);
+    struct speech_voice *This = impl_from_ISpeechVoice(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p, %ld).\n", iface, volume);
+
+    return ISpVoice_SetVolume(&This->ISpVoice_iface, (USHORT)volume);
 }
 
 static HRESULT WINAPI speech_voice_put_AllowAudioOutputFormatChangesOnNextSet(ISpeechVoice *iface,
@@ -355,9 +403,11 @@ static HRESULT WINAPI speech_voice_get_SynchronousSpeakTimeout(ISpeechVoice *ifa
 
 static HRESULT WINAPI speech_voice_Speak(ISpeechVoice *iface, BSTR text, SpeechVoiceSpeakFlags flags, LONG *number)
 {
-    FIXME("(%p, %s, %#x, %p): stub.\n", iface, debugstr_w(text), flags, number);
+    struct speech_voice *This = impl_from_ISpeechVoice(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p, %s, %#x, %p).\n", iface, debugstr_w(text), flags, number);
+
+    return ISpVoice_Speak(&This->ISpVoice_iface, text, flags, (ULONG *)number);
 }
 
 static HRESULT WINAPI speech_voice_SpeakStream(ISpeechVoice *iface, ISpeechBaseStream *stream,
@@ -392,9 +442,26 @@ static HRESULT WINAPI speech_voice_Skip(ISpeechVoice *iface, const BSTR type, LO
 static HRESULT WINAPI speech_voice_GetVoices(ISpeechVoice *iface, BSTR required, BSTR optional,
                                              ISpeechObjectTokens **tokens)
 {
-    FIXME("(%p, %s, %s, %p): stub.\n", iface, debugstr_w(required), debugstr_w(optional), tokens);
 
-    return E_NOTIMPL;
+    ISpObjectTokenCategory *cat;
+    IEnumSpObjectTokens *token_enum;
+    HRESULT hr;
+
+    TRACE("(%p, %s, %s, %p).\n", iface, debugstr_w(required), debugstr_w(optional), tokens);
+
+    if (!tokens) return E_POINTER;
+
+    if (FAILED(hr = create_token_category(SPCAT_VOICES, &cat)))
+        return hr;
+
+    if (SUCCEEDED(hr = ISpObjectTokenCategory_EnumTokens(cat, required, optional, &token_enum)))
+    {
+        hr = IEnumSpObjectTokens_QueryInterface(token_enum, &IID_ISpeechObjectTokens, (void **)tokens);
+        IEnumSpObjectTokens_Release(token_enum);
+    }
+
+    ISpObjectTokenCategory_Release(cat);
+    return hr;
 }
 
 static HRESULT WINAPI speech_voice_GetAudioOutputs(ISpeechVoice *iface, BSTR required, BSTR optional,
@@ -591,6 +658,9 @@ static HRESULT WINAPI spvoice_SetOutput(ISpVoice *iface, IUnknown *unk, BOOL all
     if (!allow_format_changes)
         FIXME("ignoring allow_format_changes = FALSE.\n");
 
+    if (FAILED(hr = async_start_queue(&This->queue)))
+        return hr;
+
     if (!unk)
     {
         /* TODO: Create the default SpAudioOut token here once SpMMAudioEnum is implemented. */
@@ -657,7 +727,7 @@ static HRESULT WINAPI spvoice_Resume(ISpVoice *iface)
 static HRESULT WINAPI spvoice_SetVoice(ISpVoice *iface, ISpObjectToken *token)
 {
     struct speech_voice *This = impl_from_ISpVoice(iface);
-    ISpTTSEngine *engine;
+    WCHAR *id = NULL, *old_id = NULL;
     HRESULT hr;
 
     TRACE("(%p, %p).\n", iface, token);
@@ -670,27 +740,37 @@ static HRESULT WINAPI spvoice_SetVoice(ISpVoice *iface, ISpObjectToken *token)
     else
         ISpObjectToken_AddRef(token);
 
-    hr = ISpObjectToken_CreateInstance(token, NULL, CLSCTX_ALL, &IID_ISpTTSEngine, (void **)&engine);
-    ISpObjectToken_Release(token);
-    if (FAILED(hr))
-        return hr;
-
     EnterCriticalSection(&This->cs);
 
+    if (This->engine_token &&
+        SUCCEEDED(ISpObjectToken_GetId(token, &id)) &&
+        SUCCEEDED(ISpObjectToken_GetId(This->engine_token, &old_id)) &&
+        !wcscmp(id, old_id))
+    {
+        ISpObjectToken_Release(token);
+        goto done;
+    }
+
+    if (This->engine_token)
+        ISpObjectToken_Release(This->engine_token);
+    This->engine_token = token;
+
     if (This->engine)
+    {
         ISpTTSEngine_Release(This->engine);
-    This->engine = engine;
+        This->engine = NULL;
+    }
 
+done:
     LeaveCriticalSection(&This->cs);
-
+    CoTaskMemFree(id);
+    CoTaskMemFree(old_id);
     return S_OK;
 }
 
 static HRESULT WINAPI spvoice_GetVoice(ISpVoice *iface, ISpObjectToken **token)
 {
     struct speech_voice *This = impl_from_ISpVoice(iface);
-    ISpObjectWithToken *engine_token_iface;
-    HRESULT hr;
 
     TRACE("(%p, %p).\n", iface, token);
 
@@ -699,21 +779,18 @@ static HRESULT WINAPI spvoice_GetVoice(ISpVoice *iface, ISpObjectToken **token)
 
     EnterCriticalSection(&This->cs);
 
-    if (!This->engine)
+    if (!This->engine_token)
     {
         LeaveCriticalSection(&This->cs);
         return create_default_token(SPCAT_VOICES, token);
     }
 
-    if (SUCCEEDED(hr = ISpTTSEngine_QueryInterface(This->engine, &IID_ISpObjectWithToken, (void **)&engine_token_iface)))
-    {
-        hr = ISpObjectWithToken_GetObjectToken(engine_token_iface, token);
-        ISpObjectWithToken_Release(engine_token_iface);
-    }
+    ISpObjectToken_AddRef(This->engine_token);
+    *token = This->engine_token;
 
     LeaveCriticalSection(&This->cs);
 
-    return hr;
+    return S_OK;
 }
 
 struct async_result
@@ -728,6 +805,7 @@ struct speak_task
     struct async_result *result;
 
     struct speech_voice *voice;
+    ISpTTSEngine *engine;
     SPVTEXTFRAG *frag_list;
     ISpTTSEngineSite *site;
     DWORD flags;
@@ -770,7 +848,6 @@ static void speak_proc(struct async_task *task)
     struct speech_voice *This = speak_task->voice;
     GUID fmtid;
     WAVEFORMATEX *wfx = NULL;
-    ISpTTSEngine *engine = NULL;
     ISpAudio *audio = NULL;
     HRESULT hr;
 
@@ -791,8 +868,6 @@ static void speak_proc(struct async_task *task)
         ERR("failed setting output format: %#lx.\n", hr);
         goto done;
     }
-    engine = This->engine;
-    ISpTTSEngine_AddRef(engine);
 
     if (SUCCEEDED(ISpStreamFormat_QueryInterface(This->output, &IID_ISpAudio, (void **)&audio)))
         ISpAudio_SetState(audio, SPAS_RUN, 0);
@@ -801,7 +876,7 @@ static void speak_proc(struct async_task *task)
 
     LeaveCriticalSection(&This->cs);
 
-    hr = ISpTTSEngine_Speak(engine, speak_task->flags, &fmtid, wfx, speak_task->frag_list, speak_task->site);
+    hr = ISpTTSEngine_Speak(speak_task->engine, speak_task->flags, &fmtid, wfx, speak_task->frag_list, speak_task->site);
     if (SUCCEEDED(hr))
     {
         ISpStreamFormat_Commit(This->output, STGC_DEFAULT);
@@ -818,8 +893,8 @@ done:
         ISpAudio_Release(audio);
     }
     CoTaskMemFree(wfx);
-    if (engine) ISpTTSEngine_Release(engine);
-    heap_free(speak_task->frag_list);
+    ISpTTSEngine_Release(speak_task->engine);
+    free(speak_task->frag_list);
     ISpTTSEngineSite_Release(speak_task->site);
 
     if (speak_task->result)
@@ -835,6 +910,7 @@ static HRESULT WINAPI spvoice_Speak(ISpVoice *iface, const WCHAR *contents, DWOR
 {
     struct speech_voice *This = impl_from_ISpVoice(iface);
     ISpTTSEngineSite *site = NULL;
+    ISpTTSEngine *engine = NULL;
     SPVTEXTFRAG *frag;
     struct speak_task *speak_task = NULL;
     struct async_result *result = NULL;
@@ -888,14 +964,30 @@ static HRESULT WINAPI spvoice_Speak(ISpVoice *iface, const WCHAR *contents, DWOR
             return hr;
     }
 
-    if (!This->engine)
-    {
-        /* Create a new engine with the default voice. */
-        if (FAILED(hr = ISpVoice_SetVoice(iface, NULL)))
-            return hr;
-    }
+    EnterCriticalSection(&This->cs);
 
-    if (!(frag = heap_alloc(sizeof(*frag) + contents_size)))
+    if (!This->engine_token)
+    {
+        /* Set the engine token to default. */
+        if (FAILED(hr = ISpVoice_SetVoice(iface, NULL)))
+        {
+            LeaveCriticalSection(&This->cs);
+            return hr;
+        }
+    }
+    if (!This->engine &&
+        FAILED(hr = ISpObjectToken_CreateInstance(This->engine_token, NULL, CLSCTX_ALL, &IID_ISpTTSEngine, (void **)&This->engine)))
+    {
+        LeaveCriticalSection(&This->cs);
+        ERR("Failed to create engine: %#lx.\n", hr);
+        return hr;
+    }
+    engine = This->engine;
+    ISpTTSEngine_AddRef(engine);
+
+    LeaveCriticalSection(&This->cs);
+
+    if (!(frag = malloc(sizeof(*frag) + contents_size)))
         return E_OUTOFMEMORY;
     memset(frag, 0, sizeof(*frag));
     memcpy(frag + 1, contents, contents_size);
@@ -912,18 +1004,19 @@ static HRESULT WINAPI spvoice_Speak(ISpVoice *iface, const WCHAR *contents, DWOR
         goto fail;
     }
 
-    speak_task = heap_alloc(sizeof(*speak_task));
+    speak_task = malloc(sizeof(*speak_task));
 
     speak_task->task.proc = speak_proc;
     speak_task->result    = NULL;
     speak_task->voice     = This;
+    speak_task->engine    = engine;
     speak_task->frag_list = frag;
     speak_task->site      = site;
     speak_task->flags     = flags & SPF_NLP_SPEAK_PUNC;
 
     if (!(flags & SPF_ASYNC))
     {
-        if (!(result = heap_alloc(sizeof(*result))))
+        if (!(result = malloc(sizeof(*result))))
         {
             hr = E_OUTOFMEMORY;
             goto fail;
@@ -949,18 +1042,19 @@ static HRESULT WINAPI spvoice_Speak(ISpVoice *iface, const WCHAR *contents, DWOR
         WaitForSingleObject(result->done, INFINITE);
         hr = result->hr;
         CloseHandle(result->done);
-        heap_free(result);
+        free(result);
         return hr;
     }
 
 fail:
     if (site) ISpTTSEngineSite_Release(site);
-    heap_free(frag);
-    heap_free(speak_task);
+    if (engine) ISpTTSEngine_Release(engine);
+    free(frag);
+    free(speak_task);
     if (result)
     {
         CloseHandle(result->done);
-        heap_free(result);
+        free(result);
     }
     return hr;
 }
@@ -1207,7 +1301,7 @@ static ULONG WINAPI ttsenginesite_Release(ISpTTSEngineSite *iface)
     {
         if (This->voice)
             ISpeechVoice_Release(&This->voice->ISpeechVoice_iface);
-        heap_free(This);
+        free(This);
     }
 
     return ref;
@@ -1312,7 +1406,7 @@ const static ISpTTSEngineSiteVtbl ttsenginesite_vtbl =
 
 static HRESULT ttsenginesite_create(struct speech_voice *voice, ULONG stream_num, ISpTTSEngineSite **site)
 {
-    struct tts_engine_site *This = heap_alloc(sizeof(*This));
+    struct tts_engine_site *This = malloc(sizeof(*This));
 
     if (!This) return E_OUTOFMEMORY;
 
@@ -1384,7 +1478,7 @@ const static IConnectionPointContainerVtbl container_vtbl =
 
 HRESULT speech_voice_create(IUnknown *outer, REFIID iid, void **obj)
 {
-    struct speech_voice *This = heap_alloc(sizeof(*This));
+    struct speech_voice *This = malloc(sizeof(*This));
     HRESULT hr;
 
     if (!This) return E_OUTOFMEMORY;
@@ -1394,6 +1488,7 @@ HRESULT speech_voice_create(IUnknown *outer, REFIID iid, void **obj)
     This->ref = 1;
 
     This->output = NULL;
+    This->engine_token = NULL;
     This->engine = NULL;
     This->cur_stream_num = 0;
     This->actions = SPVES_CONTINUE;

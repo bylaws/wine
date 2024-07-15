@@ -5,7 +5,7 @@ msgstr ""
 "Project-Id-Version: Wine\n"
 "Report-Msgid-Bugs-To: https://bugs.winehq.org\n"
 "POT-Creation-Date: N/A\n"
-"PO-Revision-Date: 2023-01-16 12:26+0800\n"
+"PO-Revision-Date: 2023-12-15 07:05+0100\n"
 "Last-Translator: Jactry Zeng <jzeng@codeweavers.com>\n"
 "Language-Team: Chinese (PRC)\n"
 "Language: zh_CN\n"
@@ -94,24 +94,24 @@ msgstr "技术支持信息"
 #: dlls/shell32/shell32.rc:274 dlls/shell32/shell32.rc:298
 #: dlls/shell32/shell32.rc:320 dlls/shell32/shell32.rc:339
 #: dlls/shlwapi/shlwapi.rc:44 dlls/twain_32/twain.rc:32
-#: dlls/user32/user32.rc:83 dlls/user32/user32.rc:98 dlls/wininet/wininet.rc:62
-#: dlls/wininet/wininet.rc:82 dlls/winspool.drv/winspool.rc:42
-#: programs/net/net.rc:47 programs/notepad/notepad.rc:124
-#: programs/oleview/oleview.rc:161 programs/oleview/oleview.rc:174
-#: programs/progman/progman.rc:106 programs/progman/progman.rc:124
-#: programs/progman/progman.rc:142 programs/progman/progman.rc:158
-#: programs/progman/progman.rc:180 programs/progman/progman.rc:199
-#: programs/progman/progman.rc:216 programs/regedit/regedit.rc:301
-#: programs/regedit/regedit.rc:312 programs/regedit/regedit.rc:325
-#: programs/regedit/regedit.rc:341 programs/regedit/regedit.rc:354
-#: programs/regedit/regedit.rc:367 programs/taskmgr/taskmgr.rc:442
-#: programs/taskmgr/taskmgr.rc:517 programs/winecfg/winecfg.rc:219
-#: programs/winecfg/winecfg.rc:229 programs/winefile/winefile.rc:127
-#: programs/winefile/winefile.rc:150 programs/winefile/winefile.rc:180
-#: programs/winemine/winemine.rc:73 programs/winemine/winemine.rc:84
-#: programs/winemine/winemine.rc:98 programs/wordpad/wordpad.rc:215
-#: programs/wordpad/wordpad.rc:226 programs/wordpad/wordpad.rc:244
-#: programs/wordpad/wordpad.rc:257
+#: dlls/user32/user32.rc:94 dlls/user32/user32.rc:109 dlls/user32/user32.rc:73
+#: dlls/wininet/wininet.rc:62 dlls/wininet/wininet.rc:82
+#: dlls/winspool.drv/winspool.rc:42 programs/net/net.rc:48
+#: programs/notepad/notepad.rc:124 programs/oleview/oleview.rc:161
+#: programs/oleview/oleview.rc:174 programs/progman/progman.rc:106
+#: programs/progman/progman.rc:124 programs/progman/progman.rc:142
+#: programs/progman/progman.rc:158 programs/progman/progman.rc:180
+#: programs/progman/progman.rc:199 programs/progman/progman.rc:216
+#: programs/regedit/regedit.rc:301 programs/regedit/regedit.rc:312
+#: programs/regedit/regedit.rc:325 programs/regedit/regedit.rc:341
+#: programs/regedit/regedit.rc:354 programs/regedit/regedit.rc:367
+#: programs/taskmgr/taskmgr.rc:442 programs/taskmgr/taskmgr.rc:517
+#: programs/winecfg/winecfg.rc:219 programs/winecfg/winecfg.rc:229
+#: programs/winefile/winefile.rc:127 programs/winefile/winefile.rc:150
+#: programs/winefile/winefile.rc:180 programs/winemine/winemine.rc:73
+#: programs/winemine/winemine.rc:84 programs/winemine/winemine.rc:98
+#: programs/wordpad/wordpad.rc:215 programs/wordpad/wordpad.rc:226
+#: programs/wordpad/wordpad.rc:244 programs/wordpad/wordpad.rc:257
 msgid "OK"
 msgstr "确定"
 
@@ -197,24 +197,24 @@ msgstr "安装(&I)"
 #: dlls/setupapi/setupapi.rc:60 dlls/shell32/shell32.rc:275
 #: dlls/shell32/shell32.rc:299 dlls/shell32/shell32.rc:310
 #: dlls/shell32/shell32.rc:340 dlls/shlwapi/shlwapi.rc:45
-#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:84 dlls/user32/user32.rc:99
-#: dlls/wininet/wininet.rc:63 dlls/wininet/wininet.rc:83
-#: dlls/winspool.drv/winspool.rc:43 programs/notepad/notepad.rc:125
-#: programs/notepad/notepad.rc:138 programs/oleview/oleview.rc:162
-#: programs/oleview/oleview.rc:175 programs/progman/progman.rc:107
-#: programs/progman/progman.rc:125 programs/progman/progman.rc:143
-#: programs/progman/progman.rc:159 programs/progman/progman.rc:181
-#: programs/progman/progman.rc:200 programs/progman/progman.rc:217
-#: programs/regedit/regedit.rc:302 programs/regedit/regedit.rc:313
-#: programs/regedit/regedit.rc:326 programs/regedit/regedit.rc:342
-#: programs/regedit/regedit.rc:355 programs/regedit/regedit.rc:368
-#: programs/taskmgr/taskmgr.rc:443 programs/taskmgr/taskmgr.rc:518
-#: programs/wineboot/wineboot.rc:34 programs/winecfg/winecfg.rc:220
-#: programs/winecfg/winecfg.rc:230 programs/winefile/winefile.rc:128
-#: programs/winefile/winefile.rc:151 programs/winefile/winefile.rc:181
-#: programs/winemine/winemine.rc:99 programs/wordpad/wordpad.rc:216
-#: programs/wordpad/wordpad.rc:227 programs/wordpad/wordpad.rc:245
-#: programs/wordpad/wordpad.rc:258
+#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:95 dlls/user32/user32.rc:110
+#: dlls/user32/user32.rc:74 dlls/wininet/wininet.rc:63
+#: dlls/wininet/wininet.rc:83 dlls/winspool.drv/winspool.rc:43
+#: programs/notepad/notepad.rc:125 programs/notepad/notepad.rc:138
+#: programs/oleview/oleview.rc:162 programs/oleview/oleview.rc:175
+#: programs/progman/progman.rc:107 programs/progman/progman.rc:125
+#: programs/progman/progman.rc:143 programs/progman/progman.rc:159
+#: programs/progman/progman.rc:181 programs/progman/progman.rc:200
+#: programs/progman/progman.rc:217 programs/regedit/regedit.rc:302
+#: programs/regedit/regedit.rc:313 programs/regedit/regedit.rc:326
+#: programs/regedit/regedit.rc:342 programs/regedit/regedit.rc:355
+#: programs/regedit/regedit.rc:368 programs/taskmgr/taskmgr.rc:443
+#: programs/taskmgr/taskmgr.rc:518 programs/wineboot/wineboot.rc:34
+#: programs/winecfg/winecfg.rc:220 programs/winecfg/winecfg.rc:230
+#: programs/winefile/winefile.rc:128 programs/winefile/winefile.rc:151
+#: programs/winefile/winefile.rc:181 programs/winemine/winemine.rc:99
+#: programs/wordpad/wordpad.rc:216 programs/wordpad/wordpad.rc:227
+#: programs/wordpad/wordpad.rc:245 programs/wordpad/wordpad.rc:258
 msgid "Cancel"
 msgstr "取消"
 
@@ -313,7 +313,7 @@ msgstr "已下载的文件校验值错误。放弃安装已损坏的文件。"
 
 #: dlls/appwiz.cpl/appwiz.rc:47
 msgid "Please wait until the current uninstall/modify process is complete."
-msgstr ""
+msgstr "请等待当前的卸载/修改进程完成。"
 
 #: dlls/avifil32/avifil32.rc:42
 msgid "Compress options"
@@ -400,7 +400,8 @@ msgid "&Apply"
 msgstr "应用(&A)"
 
 #: dlls/comctl32/comctl32.rc:74 dlls/comctl32/comctl32.rc:88
-#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:88
+#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:99
+#: dlls/user32/user32.rc:81
 msgid "Help"
 msgstr "帮助"
 
@@ -426,9 +427,9 @@ msgstr "自定义工具栏"
 
 #: dlls/comctl32/comctl32.rc:100 dlls/comctl32/comctl32.rc:57
 #: dlls/cryptui/cryptui.rc:356 dlls/ieframe/ieframe.rc:43
-#: programs/oleview/oleview.rc:83 programs/oleview/oleview.rc:187
-#: programs/oleview/oleview.rc:200 programs/oleview/oleview.rc:212
-#: programs/taskmgr/taskmgr.rc:139
+#: dlls/user32/user32.rc:80 programs/oleview/oleview.rc:83
+#: programs/oleview/oleview.rc:187 programs/oleview/oleview.rc:200
+#: programs/oleview/oleview.rc:212 programs/taskmgr/taskmgr.rc:139
 msgid "&Close"
 msgstr "关闭(&C)"
 
@@ -490,16 +491,17 @@ msgid "None"
 msgstr "无"
 
 #: dlls/comctl32/comctl32.rc:52 dlls/shell32/shell32.rc:307
-#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:79
+#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:90 dlls/user32/user32.rc:78
 msgid "&Yes"
 msgstr "是(&Y)"
 
 #: dlls/comctl32/comctl32.rc:53 dlls/shell32/shell32.rc:309
-#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:80
+#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:91 dlls/user32/user32.rc:79
 msgid "&No"
 msgstr "否(&N)"
 
-#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:82
+#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:93
+#: dlls/user32/user32.rc:76
 msgid "&Retry"
 msgstr "重试(&R)"
 
@@ -3662,16 +3664,12 @@ msgid "High"
 msgstr "高"
 
 #: dlls/ir50_32/ir50_32.rc:28
-#, fuzzy
-#| msgid "Index"
 msgid "Indeo5"
-msgstr "索引"
+msgstr "Indeo5"
 
 #: dlls/ir50_32/ir50_32.rc:29
-#, fuzzy
-#| msgid "Wine Video 1 video codec"
 msgid "Indeo Video Interactive version 5 video codec"
-msgstr "Wine Video 1 视频编解码器"
+msgstr "Indeo Video Interactive 版本 5 视频编解码器"
 
 #: dlls/joy.cpl/joy.rc:37
 msgid "Joysticks"
@@ -3969,10 +3967,8 @@ msgid "Syntax error in regular expression"
 msgstr "正则表达式中出现语法错误"
 
 #: dlls/jscript/jscript.rc:66
-#, fuzzy
-#| msgid "Expected identifier"
 msgid "Unexpected quantifier"
-msgstr "期望标识符"
+msgstr "非期望量词"
 
 #: dlls/jscript/jscript.rc:67
 msgid "Exception thrown and not caught"
@@ -4033,10 +4029,8 @@ msgid "'this' is not a | object"
 msgstr "'this' 不是 | 对象"
 
 #: dlls/jscript/jscript.rc:81
-#, fuzzy
-#| msgid "'this' is not a | object"
 msgid "'key' is not an object"
-msgstr "'this' 不是 | 对象"
+msgstr "'key' 不是一个对象"
 
 #: dlls/jscript/jscript.rc:82
 msgid "Property cannot have both accessors and a value"
@@ -9441,7 +9435,7 @@ msgctxt "unit: bits"
 msgid "b"
 msgstr "b"
 
-#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:49
+#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:52
 #: programs/winecfg/winecfg.rc:188
 msgctxt "unit: dots/inch"
 msgid "dpi"
@@ -12365,23 +12359,23 @@ msgstr "关闭(&C)\tCtrl+F4"
 msgid "Nex&t\tCtrl+F6"
 msgstr "下一步(&T)\tCtrl+F6"
 
-#: dlls/user32/user32.rc:81
+#: dlls/user32/user32.rc:92 dlls/user32/user32.rc:75
 msgid "&Abort"
 msgstr "中止(&A)"
 
-#: dlls/user32/user32.rc:85
+#: dlls/user32/user32.rc:96 dlls/user32/user32.rc:77
 msgid "&Ignore"
 msgstr "忽略(&I)"
 
-#: dlls/user32/user32.rc:86
+#: dlls/user32/user32.rc:97 dlls/user32/user32.rc:82
 msgid "&Try Again"
 msgstr "再试(&T)"
 
-#: dlls/user32/user32.rc:87
+#: dlls/user32/user32.rc:98 dlls/user32/user32.rc:83
 msgid "&Continue"
 msgstr "继续(&C)"
 
-#: dlls/user32/user32.rc:94
+#: dlls/user32/user32.rc:105
 msgid "Select Window"
 msgstr "选择窗口"
 
@@ -12548,6 +12542,10 @@ msgstr "纸张大小(&Z):"
 #: dlls/wineps.drv/wineps.rc:39
 msgid "Duplex:"
 msgstr "双面:"
+
+#: dlls/wineps.drv/wineps.rc:45
+msgid "Paper &Tray:"
+msgstr "纸盒(&T):"
 
 #: dlls/wininet/wininet.rc:53 dlls/wininet/wininet.rc:73
 msgid "Realm"
@@ -14510,25 +14508,30 @@ msgstr "起点"
 msgid "&Run..."
 msgstr "运行(&R)..."
 
+#: programs/explorer/explorer.rc:36
+msgid "E&xit desktop"
+msgstr "退出桌面(&X)"
+
+#: programs/explorer/explorer.rc:37
+msgid ""
+"Are you sure you want to close all programs and exit the virtual desktop?"
+msgstr "您确认要关闭所有程序并退出虚拟桌面吗?"
+
 #: programs/findstr/findstr.rc:28
-#, fuzzy
-#| msgid "Use c&onnection string"
 msgid "Usage: findstr /options string\n"
-msgstr "使用连接字符串(&O)"
+msgstr "用法: findstr /选项 字符串\n"
 
 #: programs/findstr/findstr.rc:29
-#, fuzzy
-#| msgid "Invalid command line.\n"
 msgid "FINDSTR: Bad command line\n"
-msgstr "命令行无效。\n"
+msgstr "FINDSTR: 命令行无效\n"
 
 #: programs/findstr/findstr.rc:30
 msgid "FINDSTR: Cannot open %s\n"
-msgstr ""
+msgstr "FINDSTR: 无法打开 %s\n"
 
 #: programs/findstr/findstr.rc:31
 msgid "FINDSTR: /%c ignored\n"
-msgstr ""
+msgstr "FINDSTR: 已忽略 /%c\n"
 
 #: programs/fsutil/fsutil.mc:28
 msgid ""
@@ -14646,52 +14649,39 @@ msgstr "主 DNS 后缀"
 
 #: programs/klist/klist.rc:28
 msgid "Usage: klist <tickets | tgt | purge | get [service principal name]>\n"
-msgstr ""
+msgstr "用法: klist <tickets | tgt | purge | get [服务主体名称]>\n"
 
 #: programs/klist/klist.rc:29
-#, fuzzy
-#| msgid "Unknown error"
 msgid "Unknown error\n"
-msgstr "未知错误"
+msgstr "未知错误\n"
 
 #: programs/klist/klist.rc:30
-#, fuzzy
-#| msgid "Start Menu"
 msgid "Start Time"
-msgstr "开始菜单"
+msgstr "开始时间"
 
 #: programs/klist/klist.rc:31
-#, fuzzy
-#| msgctxt "maximum 31 characters"
-#| msgid "FLE Standard Time"
 msgid "End Time"
-msgstr "FLE 标准时间"
+msgstr "结束时间"
 
 #: programs/klist/klist.rc:32
-#, fuzzy
-#| msgid "Enter new time: "
 msgid "Renew Time"
-msgstr "输入新的时间: "
+msgstr "更新时间"
 
 #: programs/klist/klist.rc:33
 msgid "Ticket Flags"
-msgstr ""
+msgstr "票证标志"
 
 #: programs/klist/klist.rc:34
 msgid "Cached Tickets"
-msgstr ""
+msgstr "已缓存票证"
 
 #: programs/klist/klist.rc:36
-#, fuzzy
-#| msgid "Encryption Type"
 msgid "KerbTicket Encryption Type"
-msgstr "加密类型"
+msgstr "KerbTicket 加密类型"
 
 #: programs/klist/klist.rc:37
-#, fuzzy
-#| msgid "Current Connections"
 msgid "Current LogonId is"
-msgstr "当前连接数"
+msgstr "当前 LogonId 是"
 
 #: programs/msinfo32/msinfo32.rc:28
 msgid "System Information"
@@ -14785,11 +14775,11 @@ msgstr "服务 %1 停止成功。\n"
 msgid "The %1 service failed to stop.\n"
 msgstr "服务 %1 停止失败。\n"
 
-#: programs/net/net.rc:44
+#: programs/net/net.rc:45
 msgid "There are no entries in the list.\n"
 msgstr "列表中没有内容。\n"
 
-#: programs/net/net.rc:45
+#: programs/net/net.rc:46
 msgid ""
 "\n"
 "Status  Local   Remote\n"
@@ -14799,33 +14789,37 @@ msgstr ""
 "状态    本地    远程\n"
 "---------------------------------------------------------------\n"
 
-#: programs/net/net.rc:46
+#: programs/net/net.rc:47
 msgid "%1      %2      %3      Open resources: %4!u!\n"
 msgstr "%1      %2      %3      打开资源: %4!u!\n"
 
-#: programs/net/net.rc:48
+#: programs/net/net.rc:49
 msgid "Paused"
 msgstr "已暂停"
 
-#: programs/net/net.rc:49
+#: programs/net/net.rc:50
 msgid "Disconnected"
 msgstr "连接断开"
 
-#: programs/net/net.rc:50
+#: programs/net/net.rc:51
 msgid "A network error occurred"
 msgstr "网络错误"
 
-#: programs/net/net.rc:51
+#: programs/net/net.rc:52
 msgid "Connection is being made"
 msgstr "正在发起连接"
 
-#: programs/net/net.rc:52
+#: programs/net/net.rc:53
 msgid "Reconnecting"
 msgstr "正在重新连接"
 
 #: programs/net/net.rc:43
 msgid "The following services are running:\n"
 msgstr "下列服务正在运行:\n"
+
+#: programs/net/net.rc:44
+msgid "A command was used with conflicting switches.\n"
+msgstr "命令使用了有冲突的选项。\n"
 
 #: programs/netstat/netstat.rc:30
 msgid "Active Connections"
@@ -16965,38 +16959,6 @@ msgid "regsvr32: Successfully uninstalled DLL '%1'\n"
 msgstr "regsvr32: 成功卸载 DLL \"%1\"\n"
 
 #: programs/start/start.rc:56
-#, fuzzy
-#| msgid ""
-#| "Start a program, or open a document in the program normally used for "
-#| "files\n"
-#| "with that suffix.\n"
-#| "Usage:\n"
-#| "start [options] program_filename [...]\n"
-#| "start [options] document_filename\n"
-#| "\n"
-#| "Options:\n"
-#| "\"title\"        Specifies the title of the child windows.\n"
-#| "/d directory   Start the program in the specified directory.\n"
-#| "/b             Don't create a new console for the program.\n"
-#| "/i             Start the program with fresh environment variables.\n"
-#| "/min           Start the program minimized.\n"
-#| "/max           Start the program maximized.\n"
-#| "/low           Start the program in the idle priority class.\n"
-#| "/normal        Start the program in the normal priority class.\n"
-#| "/high          Start the program in the high priority class.\n"
-#| "/realtime      Start the program in the realtime priority class.\n"
-#| "/abovenormal   Start the program in the abovenormal priority class.\n"
-#| "/belownormal   Start the program in the belownormal priority class.\n"
-#| "/node n        Start the program on the specified NUMA node.\n"
-#| "/affinity mask Start the program with the specified affinity mask.\n"
-#| "/wait          Wait for the started program to finish, then exit with "
-#| "its\n"
-#| "exit code.\n"
-#| "/unix          Use a Unix filename and start the file like Windows\n"
-#| "Explorer.\n"
-#| "/exec          Exec the specified file (for internal Wine usage).\n"
-#| "/ProgIDOpen    Open a document using the specified progID.\n"
-#| "/?             Display this help and exit.\n"
 msgid ""
 "Start a program, or open a document in the program normally used for files\n"
 "with that suffix.\n"
@@ -17048,6 +17010,7 @@ msgstr ""
 "/belownormal   以 belownormal 优先级运行程序。\n"
 "/node n        在指定的 NUMA 节点中运行程序。\n"
 "/affinity 掩码  以指定的关联掩码运行程序。\n"
+"/machine  架构  强制使用一个特定的架构(x86、arm、amd64、arm64)。\n"
 "/wait          等待运行的程序结束，并以它的返回值退出。\n"
 "/unix          使用 Unix 文件名并像 Windows 文件管理器一样打开该文件。\n"
 "/exec          执行所指定的文件 (在 Wine 内部使用)。\n"
@@ -17125,27 +17088,23 @@ msgid "Error: Process self-termination is not permitted.\n"
 msgstr "错误: 不允许结束本进程。\n"
 
 #: programs/taskkill/taskkill.rc:44
-#, fuzzy
-#| msgid "Process with PID %1!u! was forcibly terminated.\n"
 msgid ""
 "The process with PID %1!u! (child process of PID %2!u!) has been "
 "terminated.\n"
-msgstr "已经强行结束 PID 为 %1!u! 的进程。\n"
+msgstr "已经强行结束 PID 为 %1!u!（PID %2!u! 的子进程）的进程。\n"
 
 #: programs/taskkill/taskkill.rc:45
 msgid ""
 "Sent termination signal to process with PID %1!u!, child of PID %2!u!.\n"
-msgstr ""
+msgstr "已向 PID %2!u! 的子进程、PID 为 %1!u! 的进程发送结束信号。\n"
 
 #: include/wine/wine_common_ver.rc:138
-#, fuzzy
-#| msgid "page tab list"
 msgid "Wine tasklist"
-msgstr "标签页列表"
+msgstr "Wine 任务列表"
 
 #: programs/tasklist/tasklist.rc:29
 msgid "Usage: tasklist [/?]\n"
-msgstr ""
+msgstr "用法: tasklist [/?]\n"
 
 #: programs/tasklist/tasklist.rc:30 programs/taskmgr/taskmgr.rc:272
 msgid "Image Name"
@@ -17156,38 +17115,28 @@ msgid "PID"
 msgstr "PID"
 
 #: programs/tasklist/tasklist.rc:32
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session Name"
-msgstr "会话 ID"
+msgstr "会话名称"
 
 #: programs/tasklist/tasklist.rc:33
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session#"
-msgstr "会话 ID"
+msgstr "会话#"
 
 #: programs/tasklist/tasklist.rc:34 programs/taskmgr/taskmgr.rc:276
 msgid "Mem Usage"
 msgstr "内存占用"
 
 #: programs/tasklist/tasklist.rc:35
-#, fuzzy
-#| msgid "OK"
 msgid "K"
-msgstr "确定"
+msgstr "K"
 
 #: programs/tasklist/tasklist.rc:36
-#, fuzzy
-#| msgid "reg: Invalid syntax. "
 msgid "ERROR: Invalid syntax\n"
-msgstr "reg: 语法无效。"
+msgstr "错误: 语法无效\n"
 
 #: programs/tasklist/tasklist.rc:37
-#, fuzzy
-#| msgid "The filename cannot be resolved.\n"
 msgid "ERROR: The search filter cannot be recognized.\n"
-msgstr "不能解析文件名。\n"
+msgstr "错误: 无法识别搜索筛选器。\n"
 
 #: programs/taskmgr/taskmgr.rc:37 programs/taskmgr/taskmgr.rc:108
 msgid "&New Task (Run...)"
@@ -18305,8 +18254,8 @@ msgid "&Theme:"
 msgstr "主题(&T):"
 
 #: programs/winecfg/winecfg.rc:295
-msgid "&WinRT app theme:"
-msgstr ""
+msgid "&WinRT theme:"
+msgstr "WinRT 主题(&W):"
 
 #: programs/winecfg/winecfg.rc:297
 msgid "&Install theme..."
@@ -18325,8 +18274,8 @@ msgid "MIME types"
 msgstr "MIME 类型"
 
 #: programs/winecfg/winecfg.rc:311
-msgid "Manage file &associations"
-msgstr "管理文件关联(&A)"
+msgid "Manage file and protocol &associations"
+msgstr "管理文件和协议关联(&A)"
 
 #: programs/winecfg/winecfg.rc:314
 msgid "Folders"
@@ -18429,14 +18378,12 @@ msgid "Mono"
 msgstr "单声道"
 
 #: programs/winecfg/winecfg.rc:98
-#, fuzzy
-#| msgid "Right"
 msgid "Light"
-msgstr "右"
+msgstr "浅色"
 
 #: programs/winecfg/winecfg.rc:99
 msgid "Dark"
-msgstr ""
+msgstr "深色"
 
 #: programs/winecfg/winecfg.rc:53
 msgid ""

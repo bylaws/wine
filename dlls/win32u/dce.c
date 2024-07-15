@@ -463,7 +463,6 @@ static void update_visible_region( struct dce *dce )
     HRGN vis_rgn = 0;
     HWND top_win = 0;
     DWORD flags = dce->flags;
-    DWORD paint_flags = 0;
     size_t size = 256;
     RECT win_rect, top_rect;
     WND *win;
@@ -500,7 +499,6 @@ static void update_visible_region( struct dce *dce )
                 top_rect.top    = reply->top_rect.top;
                 top_rect.right  = reply->top_rect.right;
                 top_rect.bottom = reply->top_rect.bottom;
-                paint_flags     = reply->paint_flags;
             }
             else size = reply->total_size;
         }
@@ -515,16 +513,12 @@ static void update_visible_region( struct dce *dce )
     if (dce->clip_rgn) NtGdiCombineRgn( vis_rgn, vis_rgn, dce->clip_rgn,
                                         (flags & DCX_INTERSECTRGN) ? RGN_AND : RGN_DIFF );
 
-    /* don't use a surface to paint the client area of OpenGL windows */
-    if (!(paint_flags & SET_WINPOS_PIXEL_FORMAT) || (flags & DCX_WINDOW))
+    win = get_win_ptr( top_win );
+    if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
     {
-        win = get_win_ptr( top_win );
-        if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
-        {
-            surface = win->surface;
-            if (surface) window_surface_add_ref( surface );
-            release_win_ptr( win );
-        }
+        surface = win->surface;
+        if (surface) window_surface_add_ref( surface );
+        release_win_ptr( win );
     }
 
     if (!surface) SetRectEmpty( &top_rect );
@@ -1026,6 +1020,9 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
  */
 INT WINAPI NtUserReleaseDC( HWND hwnd, HDC hdc )
 {
+    if (hwnd && !is_current_process_window( hwnd ))
+        user_driver->pProcessEvents( 0 );
+
     return release_dc( hwnd, hdc, FALSE );
 }
 
@@ -1214,7 +1211,7 @@ static HRGN send_ncpaint( HWND hwnd, HWND *child, UINT *flags )
                 if (style & WS_VSCROLL)
                     set_standard_scroll_painted( hwnd, SB_VERT, FALSE );
 
-                send_message( hwnd, WM_NCPAINT, (WPARAM)whole_rgn, 0 );
+                send_notify_message( hwnd, WM_NCPAINT, (WPARAM)whole_rgn, 0, FALSE );
             }
             if (whole_rgn > (HRGN)1) NtGdiDeleteObjectApp( whole_rgn );
         }
@@ -1251,7 +1248,10 @@ static BOOL send_erase( HWND hwnd, UINT flags, HRGN client_rgn,
             {
                 /* don't erase if the clip box is empty */
                 if (type != NULLREGION)
-                    need_erase = !send_message( hwnd, WM_ERASEBKGND, (WPARAM)hdc, 0 );
+                {
+                    need_erase = !send_message_timeout( hwnd, WM_ERASEBKGND, (WPARAM)hdc, 0, SMTO_ABORTIFHUNG, 1000, FALSE );
+                    if (need_erase && RtlGetLastWin32Error() == ERROR_TIMEOUT) ERR( "timeout.\n" );
+                }
             }
             if (!hdc_ret) release_dc( hwnd, hdc, TRUE );
         }

@@ -19,6 +19,7 @@
 
 #include "wined3d_private.h"
 #include "wined3d_shaders.h"
+#include "wined3d_gl.h"
 #include "wined3d_vk.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
@@ -372,10 +373,7 @@ ULONG CDECL wined3d_rendertarget_view_incref(struct wined3d_rendertarget_view *v
 
 void wined3d_rendertarget_view_cleanup(struct wined3d_rendertarget_view *view)
 {
-    /* Call wined3d_object_destroyed() before releasing the resource,
-     * since releasing the resource may end up destroying the parent. */
     view->parent_ops->wined3d_object_destroyed(view->parent);
-    wined3d_resource_decref(view->resource);
 }
 
 ULONG CDECL wined3d_rendertarget_view_decref(struct wined3d_rendertarget_view *view)
@@ -386,9 +384,14 @@ ULONG CDECL wined3d_rendertarget_view_decref(struct wined3d_rendertarget_view *v
 
     if (!refcount)
     {
+        struct wined3d_resource *resource = view->resource;
+
+        /* Release the resource after destroying the view.
+         * See wined3d_shader_resource_view_decref(). */
         wined3d_mutex_lock();
-        view->resource->device->adapter->adapter_ops->adapter_destroy_rendertarget_view(view);
+        resource->device->adapter->adapter_ops->adapter_destroy_rendertarget_view(view);
         wined3d_mutex_unlock();
+        wined3d_resource_decref(resource);
     }
 
     return refcount;
@@ -956,8 +959,12 @@ HRESULT CDECL wined3d_rendertarget_view_create_from_sub_resource(struct wined3d_
 
 ULONG CDECL wined3d_shader_resource_view_incref(struct wined3d_shader_resource_view *view)
 {
-    unsigned int refcount = InterlockedIncrement(&view->refcount);
+    unsigned int refcount;
 
+    if (view->desc.flags & WINED3D_VIEW_FORWARD_REFERENCE)
+        return wined3d_resource_incref(view->resource);
+
+    refcount = InterlockedIncrement(&view->refcount);
     TRACE("%p increasing refcount to %u.\n", view, refcount);
 
     return refcount;
@@ -965,23 +972,37 @@ ULONG CDECL wined3d_shader_resource_view_incref(struct wined3d_shader_resource_v
 
 void wined3d_shader_resource_view_cleanup(struct wined3d_shader_resource_view *view)
 {
-    /* Call wined3d_object_destroyed() before releasing the resource,
-     * since releasing the resource may end up destroying the parent. */
     view->parent_ops->wined3d_object_destroyed(view->parent);
-    wined3d_resource_decref(view->resource);
+}
+
+void wined3d_shader_resource_view_destroy(struct wined3d_shader_resource_view *view)
+{
+    wined3d_mutex_lock();
+    view->resource->device->adapter->adapter_ops->adapter_destroy_shader_resource_view(view);
+    wined3d_mutex_unlock();
 }
 
 ULONG CDECL wined3d_shader_resource_view_decref(struct wined3d_shader_resource_view *view)
 {
-    unsigned int refcount = InterlockedDecrement(&view->refcount);
+    unsigned int refcount;
 
+    if (view->desc.flags & WINED3D_VIEW_FORWARD_REFERENCE)
+        return wined3d_resource_decref(view->resource);
+
+    refcount = InterlockedDecrement(&view->refcount);
     TRACE("%p decreasing refcount to %u.\n", view, refcount);
 
     if (!refcount)
     {
-        wined3d_mutex_lock();
-        view->resource->device->adapter->adapter_ops->adapter_destroy_shader_resource_view(view);
-        wined3d_mutex_unlock();
+        struct wined3d_resource *resource = view->resource;
+
+        /* Release the resource after destroying the view:
+         * - adapter_destroy_shader_resource_view() needs a reference to the
+         *   device, which the resource implicitly provides.
+         * - We shouldn't free buffer resources until after we've removed the
+         *   view from its bo_user list. */
+        wined3d_shader_resource_view_destroy(view);
+        wined3d_resource_decref(resource);
     }
 
     return refcount;
@@ -1083,6 +1104,10 @@ static HRESULT wined3d_shader_resource_view_init(struct wined3d_shader_resource_
         return E_INVALIDARG;
     view->desc = *desc;
 
+    /* If WINED3D_VIEW_FORWARD_REFERENCE, the view shouldn't take a reference
+     * to the resource. However, the reference to the view returned by this
+     * function should translate to a resource reference, so we increment the
+     * resource's reference count anyway. */
     wined3d_resource_incref(view->resource = resource);
 
     return WINED3D_OK;
@@ -1263,8 +1288,12 @@ void wined3d_shader_resource_view_gl_bind(struct wined3d_shader_resource_view_gl
     }
 
     texture_gl = wined3d_texture_gl(wined3d_texture_from_resource(view_gl->v.resource));
-    wined3d_texture_gl_bind(texture_gl, context_gl, FALSE);
+    wined3d_texture_gl_bind(texture_gl, context_gl, sampler_gl->s.desc.srgb_decode);
     wined3d_sampler_gl_bind(sampler_gl, unit, texture_gl, context_gl);
+
+    /* Trigger shader constant reloading (for NP2 texcoord fixup) */
+    if (!(texture_gl->t.flags & WINED3D_TEXTURE_POW2_MAT_IDENT))
+        context_gl->c.constant_update_mask |= WINED3D_SHADER_CONST_PS_NP2_FIXUP;
 }
 
 /* Context activation is done by the caller. */
@@ -1349,7 +1378,7 @@ void wined3d_shader_resource_view_gl_generate_mipmap(struct wined3d_shader_resou
 
     if (!view_gl->gl_view.name)
     {
-        gl_tex->base_level = base_level;
+        gl_tex->sampler_desc.mip_base_level = base_level;
         gl_info->gl_ops.gl.p_glTexParameteri(texture_gl->target,
                 GL_TEXTURE_MAX_LEVEL, texture_gl->t.level_count - 1);
     }
@@ -1506,10 +1535,7 @@ ULONG CDECL wined3d_unordered_access_view_incref(struct wined3d_unordered_access
 
 void wined3d_unordered_access_view_cleanup(struct wined3d_unordered_access_view *view)
 {
-    /* Call wined3d_object_destroyed() before releasing the resource,
-     * since releasing the resource may end up destroying the parent. */
     view->parent_ops->wined3d_object_destroyed(view->parent);
-    wined3d_resource_decref(view->resource);
 }
 
 ULONG CDECL wined3d_unordered_access_view_decref(struct wined3d_unordered_access_view *view)
@@ -1520,9 +1546,14 @@ ULONG CDECL wined3d_unordered_access_view_decref(struct wined3d_unordered_access
 
     if (!refcount)
     {
+        struct wined3d_resource *resource = view->resource;
+
+        /* Release the resource after destroying the view.
+         * See wined3d_shader_resource_view_decref(). */
         wined3d_mutex_lock();
-        view->resource->device->adapter->adapter_ops->adapter_destroy_unordered_access_view(view);
+        resource->device->adapter->adapter_ops->adapter_destroy_unordered_access_view(view);
         wined3d_mutex_unlock();
+        wined3d_resource_decref(resource);
     }
 
     return refcount;

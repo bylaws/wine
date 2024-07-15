@@ -22,6 +22,7 @@
 #define __WINE_SERVER_FILE_H
 
 #include <sys/types.h>
+#include <sys/stat.h>
 
 #include "object.h"
 
@@ -85,6 +86,7 @@ extern struct fd *open_fd( struct fd *root, const char *name, struct unicode_str
                            unsigned int sharing, unsigned int options );
 extern struct fd *create_anonymous_fd( const struct fd_ops *fd_user_ops,
                                        int unix_fd, struct object *user, unsigned int options );
+extern void set_unix_name_of_fd( struct fd *fd, const struct stat *fd_st );
 extern struct fd *dup_fd_object( struct fd *orig, unsigned int access, unsigned int sharing,
                                  unsigned int options );
 extern struct fd *get_fd_object_for_mapping( struct fd *fd, unsigned int access, unsigned int sharing );
@@ -94,6 +96,8 @@ extern unsigned int get_fd_options( struct fd *fd );
 extern unsigned int get_fd_comp_flags( struct fd *fd );
 extern int is_fd_overlapped( struct fd *fd );
 extern int get_unix_fd( struct fd *fd );
+extern client_ptr_t get_fd_map_address( struct fd *fd );
+extern void set_fd_map_address( struct fd *fd, client_ptr_t addr, mem_size_t size );
 extern int is_same_file_fd( struct fd *fd1, struct fd *fd2 );
 extern int is_fd_removable( struct fd *fd );
 extern int check_fd_events( struct fd *fd, int events );
@@ -106,6 +110,8 @@ extern char *dup_fd_name( struct fd *root, const char *name ) __WINE_DEALLOC(fre
 extern void get_nt_name( struct fd *fd, struct unicode_str *name );
 
 extern int default_fd_signaled( struct object *obj, struct wait_queue_entry *entry );
+extern int default_fd_get_esync_fd( struct object *obj, enum esync_type *type );
+extern unsigned int default_fd_get_fsync_idx( struct object *obj, enum fsync_type *type );
 extern int default_fd_get_poll_events( struct fd *fd );
 extern void default_poll_event( struct fd *fd, int event );
 extern void fd_cancel_async( struct fd *fd, struct async *async );
@@ -156,6 +162,11 @@ extern struct timeout_user *add_timeout_user( timeout_t when, timeout_callback f
 extern void remove_timeout_user( struct timeout_user *user );
 extern const char *get_timeout_str( timeout_t timeout );
 
+/* directory functions */
+
+extern struct object *create_desktop_map_directory( struct winstation *winstation );
+extern struct object *create_thread_map_directory( void );
+
 /* file functions */
 
 extern struct file *get_file_obj( struct process *process, obj_handle_t handle,
@@ -167,12 +178,18 @@ extern void file_set_error(void);
 extern struct security_descriptor *mode_to_sd( mode_t mode, const struct sid *user, const struct sid *group );
 extern mode_t sd_to_mode( const struct security_descriptor *sd, const struct sid *owner );
 extern int is_file_executable( const char *name );
+extern int set_file_sd( struct object *obj, struct fd *fd, mode_t *mode, uid_t *uid,
+                        const struct security_descriptor *sd, unsigned int set_info );
+extern struct security_descriptor *get_file_sd( struct object *obj, struct fd *fd, mode_t *mode,
+                                                uid_t *uid );
 
 /* file mapping functions */
 
 struct memory_view;
 
+extern void init_memory(void);
 extern int grow_file( int unix_fd, file_pos_t new_size );
+extern void free_map_addr( client_ptr_t base, mem_size_t size );
 extern struct memory_view *find_mapped_view( struct process *process, client_ptr_t base );
 extern struct memory_view *get_exe_view( struct process *process );
 extern struct file *get_view_file( const struct memory_view *view, unsigned int access, unsigned int sharing );
@@ -182,6 +199,8 @@ extern void free_mapped_views( struct process *process );
 extern int get_page_size(void);
 extern struct mapping *create_fd_mapping( struct object *root, const struct unicode_str *name, struct fd *fd,
                                           unsigned int attr, const struct security_descriptor *sd );
+extern struct object *create_shared_mapping( struct object *root, const struct unicode_str *name, mem_size_t size,
+                                             unsigned int attr, const struct security_descriptor *sd, void **ptr );
 extern struct object *create_user_data_mapping( struct object *root, const struct unicode_str *name,
                                                 unsigned int attr, const struct security_descriptor *sd );
 
@@ -202,7 +221,8 @@ extern struct object *create_unix_device( struct object *root, const struct unic
 
 extern void do_change_notify( int unix_fd );
 extern void sigio_callback(void);
-extern struct object *create_dir_obj( struct fd *fd, unsigned int access, mode_t mode );
+extern struct object *create_dir_obj( struct fd *fd, unsigned int access, mode_t mode,
+                                      const struct security_descriptor *sd );
 extern struct dir *get_dir_obj( struct process *process, obj_handle_t handle, unsigned int access );
 
 /* completion */
@@ -233,6 +253,7 @@ extern void set_async_pending( struct async *async );
 extern void async_set_initial_status( struct async *async, unsigned int status );
 extern void async_wake_obj( struct async *async );
 extern int async_waiting( struct async_queue *queue );
+extern int async_queue_has_waiting_asyncs( struct async_queue *queue );
 extern void async_terminate( struct async *async, unsigned int status );
 extern void async_request_complete( struct async *async, unsigned int status, data_size_t result,
                                     data_size_t out_size, void *out_data );

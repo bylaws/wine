@@ -58,7 +58,6 @@ if(window.addEventListener) {
         pageshow_fired = true;
 
         var r = Object.prototype.toString.call(e);
-        todo_wine.
         ok(r === "[object PageTransitionEvent]", "pageshow toString = " + r);
         ok("persisted" in e, "'persisted' not in pageshow event");
         ok(document.readyState === "complete", "pageshow readyState = " + document.readyState);
@@ -70,7 +69,6 @@ if(window.addEventListener) {
         ok(document.documentMode >= 11, "pagehide fired");
 
         var r = Object.prototype.toString.call(e);
-        todo_wine.
         ok(r === "[object PageTransitionEvent]", "pagehide toString = " + r);
         ok("persisted" in e, "'persisted' not in pagehide event");
     }, true);
@@ -234,7 +232,7 @@ sync_test("builtin_toString", function() {
     ];
     var v = document.documentMode, e;
 
-    function test(msg, obj, name, tostr) {
+    function test(msg, obj, name, tostr, ctor_name) {
         var s;
         if(obj.toString) {
             s = obj.toString();
@@ -242,8 +240,34 @@ sync_test("builtin_toString", function() {
             ok(s === (tostr ? tostr : (v < 9 ? "[object]" : "[object " + name + "]")), msg + " toString returned " + s);
         }
         s = Object.prototype.toString.call(obj);
-        todo_wine_if(v >= 9 && name != "Object").
+        todo_wine_if(name !== "HTMLElement" && s === "[object HTMLElement]").
         ok(s === (v < 9 ? "[object Object]" : "[object " + name + "]"), msg + " Object.toString returned " + s);
+
+        if(v >= 9) {
+            eval("var c = window." + name + ";");
+            todo_wine_if(name !== "HTMLElement" && s === "[object HTMLElement]").
+            ok(c !== undefined, name + " is undefined");
+            if(!ctor_name) ctor_name = name;
+            if(c === undefined) return;  /* todo_wine */
+
+            s = Object.getPrototypeOf(obj);
+            if(name === "Object") {
+                ok(s === null, msg + "'s proto is not null: " + s);
+
+                s = Object.prototype.toString.call(c);
+                ok(s === "[object Function]", msg + " Object.toString on constructor returned " + s);
+            }else {
+                ok(s === c.prototype, msg + "'s proto is not its constructor's prototype");
+
+                s = Object.prototype.toString.call(c);
+                todo_wine_if(name !== "HTMLElement" && s === "[object HTMLElement]").
+                ok(s === "[object " + ctor_name + "]", msg + " Object.toString on constructor returned " + s);
+
+                s = Object.prototype.toString.call(c.prototype);
+                todo_wine_if(name !== "HTMLElement" && s === "[object HTMLElementPrototype]").
+                ok(s === "[object " + name + "Prototype]", msg + " Object.toString on constructor.prototype returned " + s);
+            }
+        }
     }
 
     for(var i = 0; i < tags.length; i++)
@@ -293,12 +317,12 @@ sync_test("builtin_toString", function() {
     if(!localStorage) win_skip("localStorage is buggy and not available, skipping");
 
     test("attribute", document.createAttribute("class"), "Attr");
-    if(false /* todo_wine */) test("attributes", e.attributes, "NamedNodeMap");
+    test("attributes", e.attributes, "NamedNodeMap");
     test("childNodes", document.body.childNodes, "NodeList");
     if(clientRects) test("clientRect", clientRects[0], "ClientRect");
     if(clientRects) test("clientRects", clientRects, "ClientRectList");
     if(currentStyle) test("currentStyle", currentStyle, "MSCurrentStyleCSSProperties");
-    if(v >= 11 /* todo_wine */) test("document", document, v < 11 ? "Document" : "HTMLDocument");
+    test("document", document, v < 11 ? "Document" : "HTMLDocument");
     test("elements", document.getElementsByTagName("body"), "HTMLCollection");
     test("history", window.history, "History");
     test("implementation", document.implementation, "DOMImplementation");
@@ -320,17 +344,24 @@ sync_test("builtin_toString", function() {
     test("textNode", document.createTextNode("testNode"), "Text", v < 9 ? "testNode" : null);
     test("textRange", txtRange, "TextRange");
     test("window", window, "Window", "[object Window]");
-    test("xmlHttpRequest", new XMLHttpRequest(), "XMLHttpRequest");
+    test("xmlHttpRequest", new XMLHttpRequest(), "XMLHttpRequest", null, "Function");
     if(v < 10) {
         test("namespaces", document.namespaces, "MSNamespaceInfoCollection");
     }
     if(v < 11) {
         test("eventObject", document.createEventObject(), "MSEventObj");
         test("selection", document.selection, "MSSelection");
+        test("XDomainRequest", new XDomainRequest(), "XDomainRequest", null, "Function");
     }
     if(v >= 9) {
+        var xml = new DOMParser().parseFromString("<tag>foobar</tag>", "text/xml");
         test("computedStyle", window.getComputedStyle(e), "CSSStyleDeclaration");
         test("doctype", document.doctype, "DocumentType");
+        test("domParser", new DOMParser(), "DOMParser", null, "Function");
+        test("svgDocument", new DOMParser().parseFromString("<tag>foobar</tag>", "image/svg+xml"), v < 11 ? "Document" : "XMLDocument");
+        test("xhtmlDocument", new DOMParser().parseFromString("<tag>foobar</tag>", "application/xhtml+xml"), v < 11 ? "Document" : "XMLDocument");
+        test("xmlDocument", xml, v < 11 ? "Document" : "XMLDocument");
+        test("xmlElement", xml.getElementsByTagName("tag")[0], "Element");
 
         test("Event", document.createEvent("Event"), "Event");
         test("CustomEvent", document.createEvent("CustomEvent"), "CustomEvent");
@@ -344,11 +375,1191 @@ sync_test("builtin_toString", function() {
         test("mediaQueryList", window.matchMedia("(hover:hover)"), "MediaQueryList");
     }
     if(v >= 11) {
-        test("MutationObserver", new window.MutationObserver(function() {}), "MutationObserver");
+        test("crypto", window.msCrypto, "Crypto");
+        test("crypto.subtle", window.msCrypto.subtle, "SubtleCrypto");
+        test("MutationObserver", new window.MutationObserver(function() {}), "MutationObserver", null, "Function");
     }
     if(v >= 9) {
         document.body.innerHTML = "<!--...-->";
         test("comment", document.body.firstChild, "Comment");
+    }
+});
+
+sync_test("builtin_obj", function() {
+    var v = document.documentMode;
+    var f = document.createElement;
+    var e;
+
+    if(v < 9) {
+        ok(!(window instanceof Object), "window instance of Object");
+        ok(!(document instanceof Object), "document instance of Object");
+        ok(!(f.apply instanceof Function), "f.apply instance of Function");
+        ok(!(f.call instanceof Function), "f.call instance of Function");
+        ok(!("arguments" in f), "arguments in f");
+        ok(!("length" in f), "length in f");
+        e = 0;
+        try {
+            f.toString();
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01b6 - 0x80000000, "[f.toString] e = " + e);
+        try {
+            window.toString.call(null);
+            ok(false, "expected exception calling window.toString with null context");
+        }catch(ex) {}
+    }else {
+        ok(window instanceof Object, "window not instance of Object");
+        ok(document instanceof Object, "document not instance of Object");
+        ok(Object.isExtensible(window), "window is not extensible");
+        ok(Object.isExtensible(document), "document is not extensible");
+
+        ok(f.toString() === "\nfunction createElement() {\n    [native code]\n}\n", "f.toString() = " + f.toString());
+        ok(Object.getPrototypeOf(f) === Function.prototype, "unexpected document.createElement prototype");
+        ok(Object.getPrototypeOf(f.apply) === Function.prototype, "unexpected f.apply prototype");
+        ok(Object.getPrototypeOf(f.call) === Function.prototype, "unexpected f.call prototype");
+
+        e = window.toString.call(null);
+        ok(e === "[object Window]", "window.toString with null context = " + e);
+        e = window.toString.call(external.nullDisp);
+        ok(e === "[object Window]", "window.toString with nullDisp context = " + e);
+    }
+
+    e = 0;
+    try {
+        f.call(Object, "div");
+    }catch(ex) {
+        e = ex.number;
+    }
+    ok(e === (v < 9 ? 0xa0005 : 0x0ffff) - 0x80000000, "[f.call(Object, 'div')] e = " + e);
+
+    e = 0;
+    try {
+        f.call(null, "div");
+    }catch(ex) {
+        e = ex.number;
+    }
+    ok(e === (v < 9 ? 0xa0005 : 0x0ffff) - 0x80000000, "[f.call(null, 'div')] e = " + e);
+
+    var elem = f.call(document, "div");
+    elem.setAttribute("class", "cls");
+    elem.setAttribute("className", "cls");
+    ok(elem.className === "cls", "elem.className = " + elem.className);
+
+    document.body.click.call(elem);
+
+    e = 0;
+    try {
+        new f();
+    }catch(ex) {
+        e = ex.number;
+    }
+    ok(e === (v < 9 ? 0xa01b6 : 0x0ffff) - 0x80000000, "[new f()] e = " + e);
+
+    if(v < 9) {
+        ok(!("call" in f.call), "call in f.call");
+        ok(!("apply" in f.call), "apply in f.call");
+        ok(!("call" in f.apply), "call in f.apply");
+        ok(!("apply" in f.apply), "apply in f.apply");
+        ok(f.call+"" === "\nfunction call() {\n    [native code]\n}\n", "f.call = " + f.call);
+        ok(f.apply+"" === "\nfunction apply() {\n    [native code]\n}\n", "f.apply = " + f.apply);
+        ok(external.getVT(f.call) === "VT_DISPATCH", "f.call not VT_DISPATCH");
+        ok(external.getVT(f.apply) === "VT_DISPATCH", "f.apply not VT_DISPATCH");
+
+        elem = f.apply(document, ["style"]);
+        document.body.appendChild(elem);
+
+        var enumerator = new Enumerator(document.getElementsByTagName("style"));
+        enumerator.moveNext();
+        var enum_elem = enumerator.item();
+        enumerator.moveNext();
+        ok(enum_elem === elem, "enum_elem = " + enum_elem);
+        ok(enumerator.atEnd(), "enumerator not at end");
+
+        e = 0;
+        try {
+            f.apply = 0;
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01b6 - 0x80000000, "[f.apply = 0] e = " + e);
+        e = 0;
+        try {
+            f.call = function() { };
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01b6 - 0x80000000, "[f.call = function() { }] e = " + e);
+
+        ok(f.apply !== f.apply, "f.apply == f.apply");
+        f = f.apply;
+        ok(!("arguments" in f), "arguments in f.apply");
+        ok(!("length" in f), "length in f.apply");
+        ok(!("call" in f), "call in f.apply");
+        ok(!("apply" in f), "apply in f.apply");
+        e = 0;
+        try {
+            f.toString();
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01b6 - 0x80000000, "[f.apply.toString] e = " + e);
+        e = 0;
+        try {
+            f(document, ["style"]);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01b6 - 0x80000000, "[f.apply() indirect] e = " + e);
+    }else {
+        elem = f.call.call(f, document, "div");
+        f = f.bind(document);
+        elem = f.apply(null, ["style"]);
+        document.body.appendChild(elem);
+
+        try {
+            var enumerator = new Enumerator(document.getElementsByTagName("style"));
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa01c3 - 0x80000000, "[style Enumerator] e = " + e);
+
+        f.apply = 0;
+        f.call = function() { };
+        ok(f.apply === 0, "changed f.apply = ", f.apply);
+        ok(f.call instanceof Function, "changed f.call not instance of Function");
+
+        e = Array.isArray(document.body.childNodes);
+        ok(e === false, "isArray(childNodes) returned " + e);
+        e = Array.prototype.toString.call(Number);
+        ok(e === "[object Function]", "Array.toString(Number) = " + e);
+    }
+
+    function test_toString(msg, constr, err) {
+        var e = 0;
+        if(typeof err == "string") {
+            e = constr.prototype.toString.call(document.body);
+            ok(e === err, msg + ".toString(body) = " + e);
+            return;
+        }
+        try {
+            constr.prototype.toString.call(document.body);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === err - 0x80000000, "[" + msg + ".toString(body)] e = " + e);
+    }
+
+    test_toString("Array", Array, v < 9 ? 0xa13a7 : "[object HTMLBodyElement]");
+    test_toString("Boolean", Boolean, 0xa1392);
+    test_toString("Date", Date, 0xa138e);
+    test_toString("RegExp", RegExp, 0xa1398);
+    test_toString("Number", Number, 0xa1389);
+    test_toString("String", String, 0xa138d);
+
+    if(v >= 9) {
+        var obj = { length: 2 };
+        obj[0] = "foo";
+        obj[1] = "bar";
+        e = Array.prototype.toString.call(obj);
+        ok(e === "[object Object]", "Array.toString(array-like object) = " + e);
+
+        obj = Object.create(null);
+        obj.length = 2;
+        obj[0] = "foo";
+        obj[1] = "bar";
+        e = Array.prototype.toString.call(obj);
+        ok(e === "[object Object]", "Array.toString(array-like object with no prototype) = " + e);
+
+        e = 0;
+        try {
+            Array.prototype.toString.call(null);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa138f - 0x80000000, "Array.toString(null) e = " + e);
+    }
+
+    (function(a, b, c) {
+        ok(a === document.body.childNodes[0], "a = " + a);
+        ok(b === document.body.childNodes[1], "b = " + b);
+        ok(c === document.body.childNodes[2], "c = " + c);
+    }).apply(null, document.body.childNodes);
+
+    elem[0] = "a";
+    elem[1] = "b";
+    if(v < 9) {
+        try {
+            (function(a, b) {}).apply(null, elem);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa13a4 - 0x80000000, "[function.apply with elem without length] e = " + e);
+    }else {
+        (function(a, b) {
+            ok(a === undefined, "a = " + a);
+            ok(b === undefined, "b = " + b);
+        }).apply(null, elem);
+    }
+
+    elem.length = 2;
+    (function(a, b) {
+        ok(a === "a", "a = " + a);
+        ok(b === "b", "b = " + b);
+    }).apply(null, elem);
+
+    elem = new Object;
+    elem[0] = "c";
+    elem[1] = "d";
+    if(v < 9) {
+        try {
+            (function(c, d) {}).apply(null, elem);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa13a4 - 0x80000000, "[function.apply with Object without length] e = " + e);
+    }else {
+        (function(c, d) {
+            ok(c === undefined, "c = " + c);
+            ok(d === undefined, "d = " + d);
+        }).apply(null, elem);
+    }
+
+    elem.length = 2;
+    if(v < 9) {
+        try {
+            (function(c, d) {}).apply(null, elem);
+        }catch(ex) {
+            e = ex.number;
+        }
+        ok(e === 0xa13a4 - 0x80000000, "[function.apply with Object with length] e = " + e);
+    }else {
+        (function(c, d) {
+            ok(c === "c", "c = " + c);
+            ok(d === "d", "d = " + d);
+        }).apply(null, elem);
+    }
+});
+
+sync_test("builtin_prototypes", function() {
+    var v = document.documentMode, r, obj, name, proto;
+
+    function set_obj(n, o) {
+        name = n;
+        proto = null;
+        if(o) {
+            proto = window[n]["prototype"];
+            if(typeof o !== "boolean") {
+                obj = o;
+                return;
+            }
+        }
+        try {
+            obj = new window[n]();
+            ok(o, "expected exception when creating " + name + ".");
+        }catch(ex) {
+            obj = null;
+            ok(!o, "did not expect exception when creating " + name + ".");
+            ok(ex.number == 0xa01bd - 0x80000000, "unexpected exception number when creating " + name + ": " + ex.number);
+        }
+    }
+    function test_prop(prop, own) {
+        if(own === undefined ? v < 9 : own)
+            ok(Object.prototype.hasOwnProperty.call(obj, prop), prop + " not a property of " + name + ".");
+        else
+            ok(!Object.prototype.hasOwnProperty.call(obj, prop), prop + " is a property of " + name + ".");
+        ok(Object.prototype.hasOwnProperty.call(proto, prop), prop + " not a property of " + name + ".prototype.");
+    }
+    function test_legacy_ctor(methods, props, non_props, set_prop, set_prop_val) {
+        if(v >= 9)
+            return;
+        ok(""+proto === "[Interface prototype object]", name + ".prototype = " + proto);
+        if(v < 8)
+            ok(proto.constructor === undefined, name + ".prototype.constructor = " + proto.constructor);
+        for(var i = 0; i < methods.length; i++) {
+            ok(methods[i] in proto, methods[i] + " not in " + name + ".prototype");
+            var r = 0;
+            try {
+                eval("proto." + methods[i] + "();");
+            }catch(ex) {
+                r = ex.number;
+            }
+            ok(r === 0xa01b6 - 0x80000000, name + ".prototype." + methods[i] + "() exception code = " + r);
+            eval("r = \"\"+proto." + methods[i] + ";");
+            ok(r === "\nfunction " + methods[i] + "() {\n    [native code]\n}\n", name + ".prototype." + methods[i] + " = " + r);
+            try {
+                eval("r = (delete proto." + methods[i] + ");");
+                ok(v >= 8, "expected exception deleting " + name + ".prototype." + methods[i]);
+                ok(r === true, "delete " + name + ".prototype." + methods[i] + " returned " + r);
+            }catch(ex) {
+                ok(v < 8, "did not expect exception deleting " + name + ".prototype." + methods[i]);
+            }
+            eval("r = \"\"+proto." + methods[i] + ";");
+            ok(r === "\nfunction " + methods[i] + "() {\n    [native code]\n}\n", name + ".prototype." + methods[i] + " after delete = " + r);
+            ok(methods[i] in proto, methods[i] + " not in " + name + ".prototype after delete");
+
+            var func = function() { return "foobar"; }
+            eval("proto." + methods[i] + " = func;");
+            eval("r = proto." + methods[i] + ";");
+            ok(r === func, name + ".prototype." + methods[i] + " after set = " + r);
+            try {
+                eval("r = (delete proto." + methods[i] + ");");
+                ok(v >= 8, "expected exception deleting " + name + ".prototype." + methods[i] + " after set");
+                ok(r === true, "delete " + name + ".prototype." + methods[i] + " after set returned " + r);
+                eval("r = \"\"+proto." + methods[i] + ";");
+                ok(r === "\nfunction " + methods[i] + "() {\n    [native code]\n}\n", name + ".prototype." + methods[i] + " after second delete = " + r);
+            }catch(ex) {
+                ok(v < 8, "did not expect exception deleting " + name + ".prototype." + methods[i] + " after set");
+                eval("r = proto." + methods[i] + ";");
+                ok(r === func, name + ".prototype." + methods[i] + " after second delete = " + r);
+            }
+            eval("proto." + methods[i] + " = func;");
+            eval("r = proto." + methods[i] + ";");
+            ok(r === func, name + ".prototype." + methods[i] + " after second set = " + r);
+        }
+        for(var i = 0; i < props.length; i++) {
+            ok(props[i] in proto, props[i] + " not in " + name + ".prototype");
+            eval("var r = proto." + props[i] + ";");
+            ok(r === undefined, name + ".prototype." + props[i] + " = " + r);
+            try {
+                eval("r = (delete proto." + props[i] + ");");
+                ok(v >= 8, "expected exception deleting " + name + ".prototype." + props[i]);
+                ok(r === true, "delete " + name + ".prototype." + props[i] + " returned " + r);
+            }catch(ex) {
+                ok(v < 8, "did not expect exception deleting " + name + ".prototype." + props[i]);
+            }
+            eval("r = proto." + props[i] + ";");
+            ok(r === undefined, name + ".prototype." + props[i] + " after delete = " + r);
+            ok(props[i] in proto, props[i] + " not in " + name + ".prototype after delete");
+        }
+        for(var i = 0; i < non_props.length; i++)
+            ok(!(non_props[i] in proto), non_props[i] + " in " + name + ".prototype");
+
+        eval("r = proto." + set_prop + ";");
+        ok(r === undefined, name + ".prototype." + set_prop + " = " + r);
+        eval("proto." + set_prop + " = set_prop_val; r = proto." + set_prop + ";");
+        ok(r === undefined, name + ".prototype." + set_prop + " after set = " + r);
+
+        r = proto.winetestprop;
+        ok(r === undefined, name + ".prototype.winetestprop = " + r);
+        proto.winetestprop = "test";
+        r = proto.winetestprop;
+        ok(r === "test", name + ".prototype.winetestprop after set = " + r);
+    }
+
+    set_obj("XMLHttpRequest", true);
+    test_prop("open");
+    test_prop("status");
+    test_prop("onreadystatechange");
+    test_legacy_ctor(["abort", "send"], ["readyState", "status"], ["selected", "src", "getAttribute"], "onreadystatechange", function(){});
+    if(v < 9) {
+        r = obj.abort();
+        ok(r === "foobar", "(new XMLHttpRequest).abort() returned " + r);
+        r = obj.winetestprop;
+        ok(r === "test", "(new XMLHttpRequest).winetestprop = " + r);
+        obj.winetestprop = "prop";
+        r = obj.winetestprop;
+        ok(r === "prop", "(new XMLHttpRequest).winetestprop after set = " + r);
+        r = XMLHttpRequest.prototype.winetestprop;
+        ok(r === "test", "XMLHttpRequest.prototype.winetestprop after obj = " + r);
+    }else
+        ok(proto.constructor === window.XMLHttpRequest, "XMLHttpRequest.prototype.constructor = " + proto.constructor);
+
+    if(v < 11) {
+        set_obj("XDomainRequest", true);
+        test_prop("open");
+        test_prop("send");
+        test_prop("timeout");
+        test_legacy_ctor(["abort"], ["contentType", "responseText"], ["status", "onreadystatechange"], "onerror", function(){});
+        if(v < 9) {
+            r = obj.abort();
+            ok(r === "foobar", "(new XDomainRequest).abort() returned " + r);
+            r = obj.winetestprop;
+            ok(r === "test", "(new XDomainRequest).winetestprop = " + r);
+            obj.winetestprop = "prop";
+            r = obj.winetestprop;
+            ok(r === "prop", "(new XDomainRequest).winetestprop after set = " + r);
+            r = XDomainRequest.prototype.winetestprop;
+            ok(r === "test", "XDomainRequest.prototype.winetestprop after obj = " + r);
+        }else
+            ok(proto.constructor === window.XDomainRequest, "XDomainRequest.prototype.constructor = " + proto.constructor);
+    }
+
+    set_obj("Image", true);
+    test_prop("src");
+    test_prop("border");
+    test_legacy_ctor(["getAttribute", "toString"], ["isMap", "alt"], ["selected", "send"], "src", "about:blank");
+    if(v < 9) {
+        r = obj.toString();
+        ok(r === "foobar", "(new Image).toString() returned " + r);
+        r = obj.winetestprop;
+        ok(r === "test", "(new Image).winetestprop = " + r);
+        obj.winetestprop = "prop";
+        r = obj.winetestprop;
+        ok(r === "prop", "(new Image).winetestprop after set = " + r);
+        r = window.Image.prototype.winetestprop;
+        ok(r === "test", "Image.prototype.winetestprop after obj = " + r);
+        try {
+            r = (delete obj.winetestprop);
+            ok(v >= 8, "expected exception deleting (new Image).winetestprop");
+            ok(r === true, "delete (new Image).winetestprop returned " + r);
+        }catch(ex) {
+            ok(v < 8, "did not expect exception deleting (new Image).winetestprop");
+        }
+        r = obj.winetestprop;
+        ok(r === (v < 8 ? "prop" : "test"), "(new Image).winetestprop after delete = " + r);
+        obj = new window.Image();
+        r = obj.winetestprop;
+        ok(r === "test", "(new Image).winetestprop second time = " + r);
+        window.Image.prototype.winetestprop = "string";
+        r = obj.winetestprop;
+        ok(r === "string", "(new Image).winetestprop after change in prototype = " + r);
+    }else
+        ok(proto.constructor === window.HTMLImageElement, "Image.prototype.constructor = " + proto.constructor);
+
+    set_obj("Option", true);
+    test_prop("text");
+    test_prop("selected");
+    test_legacy_ctor(["setAttribute", "contains"], ["index", "value"], ["src", "send"], "text", "foo");
+    if(v < 9) {
+        r = obj.setAttribute("a", "b");
+        ok(r === "foobar", "(new Option).setAttribute() returned " + r);
+        r = obj.winetestprop;
+        ok(r === "test", "(new Option).winetestprop = " + r);
+        obj.winetestprop = "prop";
+        r = obj.winetestprop;
+        ok(r === "prop", "(new Option).winetestprop after set = " + r);
+        r = window.Option.prototype.winetestprop;
+        ok(r === "test", "Option.prototype.winetestprop after obj = " + r);
+        try {
+            r = (delete obj.winetestprop);
+            ok(v >= 8, "expected exception deleting (new Option).winetestprop");
+            ok(r === true, "delete (new Option).winetestprop returned " + r);
+        }catch(ex) {
+            ok(v < 8, "did not expect exception deleting (new Option).winetestprop");
+        }
+        r = obj.winetestprop;
+        ok(r === (v < 8 ? "prop" : "test"), "(new Option).winetestprop after delete = " + r);
+        obj = new window.Option();
+        r = obj.winetestprop;
+        ok(r === "test", "(new Option).winetestprop second time = " + r);
+        window.Option.prototype.winetestprop = "string";
+        r = obj.winetestprop;
+        ok(r === "string", "(new Option).winetestprop after change in prototype = " + r);
+    }else
+        ok(proto.constructor === window.HTMLOptionElement, "Option.prototype.constructor = " + proto.constructor);
+
+    if(v >= 9) {
+        set_obj("DOMParser", true);
+        test_prop("parseFromString");
+        ok(proto.constructor === window.DOMParser, "DOMParser.prototype.constructor = " + proto.constructor);
+    }
+
+    // other constructors don't support construction
+    set_obj("ClientRect");
+    set_obj("ClientRectList");
+    set_obj("Console");
+    set_obj("CustomEvent");
+    set_obj("DOMTokenList");
+    set_obj("KeyboardEvent");
+    set_obj("MessageEvent");
+    set_obj("MouseEvent");
+    set_obj("MSCSSRuleList");
+    set_obj("MSCurrentStyleCSSProperties");
+    set_obj("MSEventObj");
+    set_obj("MSNamespaceInfoCollection");
+    set_obj("MSSelection");
+    set_obj("MSStyleCSSProperties");
+    set_obj("Performance");
+    set_obj("PerformanceNavigation");
+    set_obj("PerformanceTiming");
+    set_obj("UIEvent");
+    if(v >= 9) {
+        set_obj("Attr");
+        set_obj("CSSStyleDeclaration");
+        set_obj("CSSStyleRule");
+        set_obj("CSSStyleSheet");
+        set_obj("DOMImplementation");
+        set_obj("Event");
+        set_obj("History");
+        set_obj("HTMLCollection");
+        set_obj("NamedNodeMap");
+        set_obj("Navigator");
+        set_obj("NodeList");
+        set_obj("Screen");
+        set_obj("Storage");
+        set_obj("StyleSheetList");
+        set_obj("Text");
+        set_obj("TextRange");
+        set_obj("Window");
+    }
+    if(v >= 11) {
+        set_obj("Crypto");
+        set_obj("SubtleCrypto");
+    }
+
+    if(v >= 8 && v < 11) {
+        set_obj(v < 9 ? "Event" : "MSEventObj", document.createEventObject());
+        test_prop("x");
+        test_prop("y");
+        test_prop("srcElement");
+        test_prop("returnValue");
+
+        if(Object.create) {
+            obj = Object.create(proto);
+            test_prop("reason");
+            test_prop("srcFilter");
+            r = Object.prototype.toString.call(obj);
+            ok(r === "[object Object]", "Object.toString on obj created from MSEventObj.prototype returned " + r);
+        }
+
+        var ctor = function() {};
+        ctor.prototype = proto;
+        ctor.prototype.testWineProp = function() { return 42; };
+        obj = new ctor();
+        test_prop("shiftKey", false);
+        test_prop("testWineProp", false);
+        r = Object.prototype.toString.call(obj);
+        ok(r === "[object Object]", "Object.toString on custom obj returned " + r);
+
+        r = (delete proto.shiftKey);
+        ok(r === true, "delete shiftKey returned " + r);
+        if(v < 9)
+            ok(Object.prototype.hasOwnProperty.call(proto, "shiftKey"), "shiftKey not a property anymore of Event.prototype.");
+        else {
+            ok(!Object.prototype.hasOwnProperty.call(proto, "shiftKey"), "shiftKey still a property of MSEventObj.prototype.");
+            proto.shiftKey = ctor;
+            ok(proto.shiftKey === ctor, "shiftKey = " + proto.shiftKey);
+        }
+
+        r = (delete proto.testWineProp);
+        ok(r === true, "delete testWineProp returned " + r);
+        ok(!Object.prototype.hasOwnProperty.call(proto, "testWineProp"), "testWineProp still a property of " + name + ".prototype.");
+    }
+
+    if(v >= 9) {
+        set_obj("Event", document.createEvent("Event"));
+        test_prop("initEvent");
+        test_prop("currentTarget");
+
+        obj = Object.create(proto);
+        test_prop("eventPhase");
+        test_prop("preventDefault");
+        r = Object.prototype.toString.call(obj);
+        ok(r === "[object Object]", "Object.toString on obj created from Event.prototype returned " + r);
+
+        var ctor = function() {};
+        ctor.prototype = proto;
+        ctor.prototype.testWineProp = function() { return 42; };
+        obj = new ctor();
+        test_prop("timeStamp");
+        test_prop("testWineProp");
+        r = Object.prototype.toString.call(obj);
+        ok(r === "[object Object]", "Object.toString on custom obj returned " + r);
+
+        r = (delete proto.timeStamp);
+        ok(r === true, "delete timeStamp returned " + r);
+        ok(!Object.prototype.hasOwnProperty.call(proto, "timeStamp"), "timeStamp still a property of Event.prototype.");
+
+        r = (delete proto.testWineProp);
+        ok(r === true, "delete testWineProp returned " + r);
+        ok(!Object.prototype.hasOwnProperty.call(proto, "testWineProp"), "testWineProp still a property of Event.prototype.");
+
+        proto.timeStamp = ctor;
+        ok(proto.timeStamp === ctor, "timeStamp = " + proto.timeStamp);
+
+        set_obj("HTMLImageElement", document.createElement("img"));
+        document.body.setAttribute.call(obj, "width", "100");
+        obj = Object.create(proto);
+        r = 0;
+        try {
+            document.body.setAttribute.call(obj, "width", "100");
+        }catch(ex) {
+            r = ex.number;
+        }
+        ok(r === 0xffff - 0x80000000, "document.body.setAttribute.call(obj ...) exception code = " + r);
+    }
+
+    if(v >= 8) {
+        obj = window.HTMLMetaElement;
+        ok(!("charset" in obj), "charset in HTMLMetaElement constructor.");
+        ok(!("setAttribute" in obj), "setAttribute in HTMLMetaElement constructor.");
+        ok(!Object.prototype.hasOwnProperty.call(obj, "charset"), "charset is a property of HTMLMetaElement constructor.");
+        if(Object.getPrototypeOf)
+            ok(Object.getPrototypeOf(obj) === Object.prototype, "getPrototypeOf(HTMLMetaElement constructor) = " + Object.getPrototypeOf(obj));
+        r = 0;
+        try {
+            document.body.setAttribute.call(obj, "charset", "UTF-8");
+        }catch(ex) {
+            r = ex.number;
+        }
+        ok(r === (v < 9 ? 0xa0005 : 0xffff) - 0x80000000, "setAttribute on HTMLMetaElement constructor error code = " + r);
+
+        proto = window.HTMLMetaElement.prototype;
+        try {
+            window.HTMLMetaElement.prototype = Object.prototype;
+            ok(v >= 9, "expected exception setting HTMLMetaElement.prototype");
+        }catch(ex) {
+            ok(v < 9, "did not expect exception setting HTMLMetaElement.prototype");
+            ok(ex.number === 0xa01b6 - 0x80000000, "exception code setting HTMLMetaElement.prototype = " + ex.number);
+        }
+        ok(window.HTMLMetaElement.prototype === proto, "HTMLMetaElement.prototype = " + window.HTMLMetaElement.prototype);
+        ok(proto !== Object.prototype, "old prototype is Object.prototype");
+
+        obj = document.createElement("meta");
+        ok("tagName" in obj, "tagName not in HTMLMetaElement");
+        if(Object.getPrototypeOf)
+            ok(Object.getPrototypeOf(obj) === proto, "getPrototypeOf(meta element) = " + Object.getPrototypeOf(obj));
+
+        try {
+            r = (delete window.HTMLMetaElement.prototype);
+            ok(r === false, "delete HTMLMetaElement.prototype returned " + r);
+            ok(v >= 9, "expected exception deleting HTMLMetaElement.prototype");
+        }catch(ex) {
+            ok(v < 9, "did not expect exception deleting HTMLMetaElement.prototype");
+            ok(ex.number === 0xa01b6 - 0x80000000, "exception code deleting HTMLMetaElement.prototype = " + ex.number);
+        }
+        ok(Object.prototype.hasOwnProperty.call(window.HTMLMetaElement, "prototype"), "prototype not a property anymore of HTMLMetaElement.");
+
+        try {
+            r = (delete window.HTMLMetaElement);
+            ok(r === true, "delete HTMLMetaElement returned " + r);
+            ok(v >= 9, "expected exception deleting HTMLMetaElement");
+            ok(!Object.prototype.hasOwnProperty.call(window, "HTMLMetaElement"), "HTMLMetaElement still a property of window.");
+        }catch(ex) {
+            ok(v < 9, "did not expect exception deleting HTMLMetaElement");
+            ok(ex.number === 0xa01bd - 0x80000000, "exception code deleting HTMLMetaElement = " + ex.number);
+            ok(Object.prototype.hasOwnProperty.call(window, "HTMLMetaElement"), "HTMLMetaElement not a property anymore of window.");
+        }
+
+        obj = document.createElement("meta");
+        ok("tagName" in obj, "tagName not in HTMLMetaElement");
+        if(Object.getPrototypeOf) {
+            ok(Object.getPrototypeOf(obj) === proto, "getPrototypeOf(meta element) = " + Object.getPrototypeOf(obj));
+            ok(window.HTMLMetaElement === undefined, "HTMLMetaElement = " + window.HTMLMetaElement);
+        }
+
+        ok("setAttribute" in proto, "setAttribute not in proto.");
+        r = 0;
+        try {
+            obj.setAttribute.call(proto, "charset", "UTF-8");
+        }catch(ex) {
+            r = ex.number;
+        }
+        ok(r === (v < 9 ? 0xa01b6 : 0xffff) - 0x80000000, "setAttribute on proto error code = " + r);
+        r = 0;
+        try {
+            proto.setAttribute("charset", "UTF-8");
+        }catch(ex) {
+            r = ex.number;
+        }
+        ok(r === (v < 9 ? 0xa01b6 : 0xffff) - 0x80000000, "proto.setAttribute error code = " + r);
+
+        ok(Object.prototype.hasOwnProperty.call(proto, "charset"), "charset not a property of proto.");
+        if(v < 9) {
+            proto.charset = "UTF-8";
+            ok(proto.charset === undefined, "proto.charset = " + proto.charset);
+        }else {
+            r = Object.getOwnPropertyDescriptor(proto, "charset");
+            ok(r.get.toString() === "\nfunction charset() {\n    [native code]\n}\n", "charset.get = " + r.get.toString());
+            ok(r.set.toString() === "\nfunction charset() {\n    [native code]\n}\n", "charset.set = " + r.set.toString());
+            ok(Object.getPrototypeOf(r.get) === Function.prototype, "unexpected charset.get prototype");
+            ok(Object.getPrototypeOf(r.set) === Function.prototype, "unexpected charset.set prototype");
+
+            r = 0;
+            try {
+                proto.charset;
+            }catch(ex) {
+                r = ex.number;
+            }
+            ok(r === 0xffff - 0x80000000, "proto.charset error code = " + r);
+            r = 0;
+            try {
+                proto.charset = "UTF-8";
+            }catch(ex) {
+                r = ex.number;
+            }
+            ok(r === 0xffff - 0x80000000, "set proto.charset error code = " + r);
+        }
+    }
+
+    if(v >= 9) {
+        var protos = [
+            [ "Attr",                           "Node" ],
+            [ "CharacterData",                  "Node" ],
+            [ "ClientRect",                     "Object" ],
+            [ "ClientRectList",                 "Object" ],
+            [ "Comment",                        "CharacterData" ],
+            [ "Console",                        "Object" ],
+            [ "Crypto",                         "Object" ],
+            [ "CSSRule",                        "Object" ],
+            [ "CSSStyleDeclaration",            "Object" ],
+            [ "CSSStyleRule",                   "CSSRule" ],
+            [ "CSSStyleSheet",                  "StyleSheet" ],
+            [ "CustomEvent",                    "Event" ],
+            [ "Document",                       "Node" ],
+            [ "DocumentType",                   "Node" ],
+            [ "DOMImplementation",              "Object" ],
+            [ "DOMParser",                      "Object" ],
+            [ "DOMTokenList",                   "Object" ],
+            [ "Element",                        "Node" ],
+            [ "Event",                          "Object" ],
+            [ "History",                        "Object" ],
+            [ "HTMLAnchorElement",              "HTMLElement" ],
+            [ "HTMLAreaElement",                "HTMLElement" ],
+            [ "HTMLBodyElement",                "HTMLElement" ],
+            [ "HTMLButtonElement",              "HTMLElement" ],
+            [ "HTMLCollection",                 "Object" ],
+            [ "HTMLDocument",                   "Document" ],
+            [ "HTMLElement",                    "Element" ],
+            [ "HTMLEmbedElement",               "HTMLElement" ],
+            [ "HTMLFormElement",                "HTMLElement" ],
+            [ "HTMLFrameElement",               "HTMLElement" ],
+            [ "HTMLHeadElement",                "HTMLElement" ],
+            [ "HTMLHtmlElement",                "HTMLElement" ],
+            [ "HTMLIFrameElement",              "HTMLElement" ],
+            [ "HTMLImgElement",                 "HTMLElement" ],
+            [ "HTMLInputElement",               "HTMLElement" ],
+            [ "HTMLLabelElement",               "HTMLElement" ],
+            [ "HTMLLinkElement",                "HTMLElement" ],
+            [ "HTMLMetaElement",                "HTMLElement" ],
+            [ "HTMLObjectElement",              "HTMLElement" ],
+            [ "HTMLOptionElement",              "HTMLElement" ],
+            [ "HTMLScriptElement",              "HTMLElement" ],
+            [ "HTMLSelectElement",              "HTMLElement" ],
+            [ "HTMLStyleElement",               "HTMLElement" ],
+            [ "HTMLTableCellElement",           "HTMLElement" ],
+            [ "HTMLTableDataCellElement",       "HTMLTableCellElement" ],
+            [ "HTMLTableElement",               "HTMLElement" ],
+            [ "HTMLTableRowElement",            "HTMLElement" ],
+            [ "HTMLTextAreaElement",            "HTMLElement" ],
+            [ "HTMLTitleElement",               "HTMLElement" ],
+            [ "HTMLUnknownElement",             "HTMLElement" ],
+            [ "Image",                          "HTMLElement" ],
+            [ "KeyboardEvent",                  "UIEvent" ],
+            [ "MediaQueryList",                 "Object" ],
+            [ "MessageEvent",                   "Event" ],
+            [ "MimeTypeArray",                  "Object" ],
+            [ "MouseEvent",                     "UIEvent" ],
+            [ "MSCSSProperties",                "CSSStyleDeclaration" ],
+            [ "MSCSSRuleList",                  "Object" ],
+            [ "MSCurrentStyleCSSProperties",    "MSCSSProperties" ],
+            [ "MSEventObj",                     "Object" ],
+            [ "MSMimeTypesCollection",          "Object" ],
+            [ "MSNamespaceInfoCollection",      "Object" ],
+            [ "MSPluginsCollection",            "Object" ],
+            [ "MSSelection",                    "Object" ],
+            [ "MSStyleCSSProperties",           "MSCSSProperties" ],
+            [ "MutationObserver",               "Object" ],
+            [ "NamedNodeMap",                   "Object" ],
+            [ "Navigator",                      "Object" ],
+            [ "Node",                           "Object" ],
+            [ "NodeList",                       "Object" ],
+            [ "Option",                         "HTMLElement" ],
+            [ "PageTransitionEvent",            "Event" ],
+            [ "Performance",                    "Object" ],
+            [ "PerformanceNavigation",          "Object" ],
+            [ "PerformanceTiming",              "Object" ],
+            [ "PluginArray",                    "Object" ],
+            [ "ProgressEvent",                  "Event" ],
+            [ "Screen",                         "Object" ],
+            [ "Storage",                        "Object" ],
+            [ "StorageEvent",                   "Event" ],
+            [ "StyleSheet",                     "Object" ],
+            [ "StyleSheetList",                 "Object" ],
+            [ "SubtleCrypto",                   "Object" ],
+            [ "Text",                           "CharacterData" ],
+            [ "TextRange",                      "Object" ],
+            [ "UIEvent",                        "Event" ],
+            [ "Window",                         "Object" ],
+            [ "XDomainRequest",                 "Object" ],
+            [ "XMLDocument",                    "Document" ],
+            [ "XMLHttpRequest",                 "Object" ]
+        ];
+
+        for(var i = 0; i < protos.length; i++) {
+            if(!(protos[i][0] in window))
+                continue;
+            var a, b;
+            eval("a = Object.getPrototypeOf(" + protos[i][0] + ".prototype); b = " + protos[i][1] + ".prototype;");
+            ok(a === b, "getPrototypeOf(" + protos[i][0] + ".prototype) = " + a);
+        }
+
+        var CSS_props = [ "accelerator","backgroundPositionX","backgroundPositionY","getAttribute","imeMode","layoutFlow","layoutGrid","layoutGridChar",
+                          "layoutGridLine","layoutGridMode","layoutGridType","lineBreak","msBlockProgression","msInterpolationMode","removeAttribute",
+                          "scrollbar3dLightColor","scrollbarArrowColor","scrollbarBaseColor","scrollbarDarkShadowColor","scrollbarFaceColor",
+                          "scrollbarHighlightColor","scrollbarShadowColor","scrollbarTrackColor","setAttribute","styleFloat","textAutospace",
+                          "textJustifyTrim","textKashida","textKashidaSpace","writingMode","zoom" ];
+        var Elem_props = [ "clientHeight","clientLeft","clientTop","clientWidth","firstElementChild","getAttribute","getAttributeNode","getAttributeNodeNS",
+                           "getAttributeNS","getBoundingClientRect","getClientRects","getElementsByTagName","getElementsByTagNameNS","hasAttribute",
+                           "hasAttributeNS","lastElementChild","msMatchesSelector","nextElementSibling","previousElementSibling","querySelector",
+                           "removeAttribute","removeAttributeNode","removeAttributeNS","scrollHeight","scrollLeft","scrollTop","scrollWidth","setAttribute",
+                           "setAttributeNode","setAttributeNodeNS","setAttributeNS","tagName" ];
+        var Event_props = [ "bubbles","cancelable","cancelBubble","currentTarget","defaultPrevented","eventPhase","initEvent","isTrusted",
+                            "preventDefault","srcElement","stopImmediatePropagation","stopPropagation","target","timeStamp","type" ];
+        var HtmlElem_props = [ "accessKey","applyElement","blur","canHaveHTML","children","className","clearAttributes","click","componentFromPoint",
+                               "contains","contentEditable","createControlRange","currentStyle","dir","disabled","dragDrop","focus","getAdjacentText",
+                               "getElementsByClassName","hideFocus","id","innerHTML","innerText","insertAdjacentElement","insertAdjacentHTML",
+                               "insertAdjacentText","isContentEditable","isDisabled","isMultiLine","isTextEdit","lang","language","mergeAttributes",
+                               "offsetHeight","offsetLeft","offsetParent","offsetTop","offsetWidth","onabort","onactivate","onbeforeactivate","onbeforecopy",
+                               "onbeforecut","onbeforedeactivate","onbeforepaste","onblur","oncanplay","oncanplaythrough","onchange","onclick",
+                               "oncontextmenu","oncopy","oncut","ondblclick","ondeactivate","ondrag","ondragend","ondragenter","ondragleave","ondragover",
+                               "ondragstart","ondrop","ondurationchange","onemptied","onended","onerror","onfocus","onfocusin","onfocusout","onhelp",
+                               "oninput","onkeydown","onkeypress","onkeyup","onload","onloadeddata","onloadedmetadata","onloadstart","onmousedown",
+                               "onmouseleave","onmousemove","onmouseout","onmouseover","onmouseup","onmousewheel","onpaste","onpause","onplay","onplaying",
+                               "onprogress","onratechange","onreset","onscroll","onseeked","onseeking","onselect","onselectstart","onstalled","onsubmit",
+                               "onsuspend","ontimeupdate","onvolumechange","onwaiting","outerHTML","outerText","parentElement","parentTextEdit",
+                               "recordNumber","releaseCapture","replaceAdjacentText","runtimeStyle","scrollIntoView","setActive","setCapture","sourceIndex",
+                               "style","tabIndex","title","uniqueID","uniqueNumber" ];
+        var Node_props = [ "addEventListener","appendChild","attributes","childNodes","cloneNode","compareDocumentPosition","dispatchEvent","firstChild",
+                           "hasChildNodes","insertBefore","isDefaultNamespace","isEqualNode","isSameNode","isSupported","lastChild","localName",
+                           "lookupNamespaceURI","lookupPrefix","namespaceURI","nextSibling","nodeName","nodeType","nodeValue","ownerDocument",
+                           "parentNode","prefix","previousSibling","removeChild","removeEventListener","replaceChild","textContent" ];
+        var TableCell_props = [ "align","background","bgColor","borderColor","borderColorDark","borderColorLight","cellIndex","colSpan","height","noWrap",
+                                "rowSpan","vAlign","width" ];
+
+        protos = [
+            [ "Attr", ["expando","name","specified","value"], Node_props ],
+            [ "CharacterData", ["data","length","appendData"], Node_props ],
+            [ "Comment", ["text"], ["insertData","replaceData","substringData"] ],
+            [ "CSSStyleRule", ["readOnly","selectorText","style"], ["cssText","parentRule","parentStyleSheet","type" ] ],
+            [ "CSSStyleSheet", ["addRule","cssRules","ownerRule","rules"], ["disabled","media","ownerNode","parentStyleSheet","title","type"] ],
+            [ "CustomEvent", ["detail","initCustomEvent"], Event_props ],
+            [ "Document", ["body","doctype","documentMode","onactivate","parentWindow","styleSheets","title"], Node_props ],
+            [ "DocumentType", ["entities","internalSubset","name","notations","publicId","systemId"], Node_props ],
+            [ "Element", Elem_props, Node_props ],
+            [ "HTMLElement", HtmlElem_props, Elem_props ],
+            [ "HTMLTableCellElement", TableCell_props, HtmlElem_props ],
+            [ "HTMLTableDataCellElement", [], TableCell_props ],
+            [ "HTMLUnknownElement", ["recordset","namedRecordset"], HtmlElem_props ],
+            [ "KeyboardEvent", ["altKey","ctrlKey","getModifierState","initKeyboardEvent","key","metaKey"], ["detail","initUIEvent","view"] ],
+            [ "MessageEvent", ["data","initMessageEvent","origin","source"], Event_props ],
+            [ "MouseEvent", ["button","clientX","initMouseEvent","offsetY","pageX","shiftKey","x","y"], ["detail","initUIEvent","view"] ],
+            [ "MSCSSProperties", CSS_props, ["background","border","clip","fontWeight","listStyle","quotes","setProperty","zIndex"] ],
+            [ "MSCurrentStyleCSSProperties", ["blockDirection","clipBottom","clipLeft","clipRight","clipTop","hasLayout"], CSS_props ],
+            [ "MSStyleCSSProperties", ["pixelTop","pixelWidth","posHeight","posLeft","textDecorationBlink","textDecorationNone"], CSS_props ],
+            [ "ProgressEvent", ["initProgressEvent","lengthComputable","loaded","total"], Event_props ],
+            [ "StorageEvent", ["initStorageEvent","key","newValue","oldValue","storageArea"], Event_props ],
+            [ "Text", ["splitText"], ["data","length","appendData","deleteData","insertData","replaceData","substringData"] ],
+            [ "UIEvent", ["detail","initUIEvent","view"], Event_props ]
+        ];
+
+        for(var i = 0; i < protos.length; i++) {
+            if(!(protos[i][0] in window))
+                continue;
+            eval("r = " + protos[i][0] + ".prototype");
+            for(var j = 0; j < protos[i][1].length; j++)
+                ok(Object.prototype.hasOwnProperty.call(r, protos[i][1][j]), protos[i][1][j] + " not a property of " + protos[i][0] + ".prototype");
+            for(var j = 0; j < protos[i][2].length; j++) {
+                ok(!Object.prototype.hasOwnProperty.call(r, protos[i][2][j]), protos[i][2][j] + " is a property of " + protos[i][0] + ".prototype");
+                ok(protos[i][2][j] in r, protos[i][2][j] + " not in " + protos[i][0] + ".prototype");
+            }
+        }
+    }
+});
+
+sync_test("builtin_constructors", function() {
+    var v = document.documentMode;
+
+    var special_ctors = [
+        [ "DOMParser",          [ "prototype", "arguments" ], [ "create", "length" ], 9 ],
+        [ "Image",              [ "prototype", "arguments" ], [ "create", "length" ] ],
+        [ "MutationObserver",   [ "prototype", "arguments" ], [ "create", "length" ], 11 ],
+        [ "Option",             [ "prototype", "arguments" ], [ "create", "length" ] ],
+        [ "XDomainRequest",     [ "prototype", "arguments", "create" ], [ "length" ], 0, 10 ],
+        [ "XMLHttpRequest",     [ "prototype", "arguments", "create" ], [ "length" ] ]
+    ];
+    for(var i = 0; i < special_ctors.length; i++) {
+        if((special_ctors[i].length > 3 && v < special_ctors[i][3]) ||
+           (special_ctors[i].length > 4 && v > special_ctors[i][4]))
+            continue;
+        var name = special_ctors[i][0];
+        ok(Object.prototype.hasOwnProperty.call(window, name), name + " not a property of window.");
+        var obj = window[name];
+        if(v < 9) {
+            ok(!Object.prototype.hasOwnProperty.call(obj, "arguments"), "arguments is a property of " + name + " constructor.");
+            ok(Object.prototype.hasOwnProperty.call(obj, "create"), "create not a property of " + name + " constructor.");
+            ok(!Object.prototype.hasOwnProperty.call(obj, "length"), "length is a property of " + name + " constructor.");
+            ok(Object.prototype.hasOwnProperty.call(obj, "prototype"), "prototype not a property of " + name + " constructor.");
+            ok(!("length" in obj), "length in " + name + " constructor.");
+            if(window.Window)
+                ok(!Object.prototype.hasOwnProperty.call(window.Window.prototype, name), name + " is a property of window's prototype.");
+        }else {
+            for(var j = 0; j < special_ctors[i][1].length; j++)
+                ok(Object.prototype.hasOwnProperty.call(obj, special_ctors[i][1][j]), special_ctors[i][1][j] + " not a property of " + name + " constructor.");
+
+            for(var j = 0; j < special_ctors[i][2].length; j++)
+                ok(!Object.prototype.hasOwnProperty.call(obj, special_ctors[i][2][j]), special_ctors[i][2][j] + " is a property of " + name + " constructor.");
+
+            ok(Object.getPrototypeOf(obj) === Function.prototype, "getPrototypeOf(" + name + " constructor) = " + Object.getPrototypeOf(obj));
+            ok(!Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(window), name), name + " is a property of window's prototype.");
+
+            if(obj.create) {
+                var proto = obj.prototype, func = obj.create, s = Object.prototype.toString.call(func);
+                ok(s === "[object Function]", "obj.create toString = " + s);
+                ok(Object.getPrototypeOf(func) === Function.prototype, "getPrototypeOf(" + name + ".create) = " + Object.getPrototypeOf(func));
+                ok(Object.prototype.hasOwnProperty.call(func, "arguments"), "arguments not a property of " + name + ".create");
+                ok(!Object.prototype.hasOwnProperty.call(func, "length"), "length is a property of " + name + ".create");
+                ok(Object.prototype.hasOwnProperty.call(func, "prototype"), "prototype not a property of " + name + ".create");
+
+                obj = func();
+                ok(Object.getPrototypeOf(obj) === proto, "getPrototypeOf(obj.create()) = " + Object.getPrototypeOf(obj));
+                obj = func.call(Object);
+                ok(Object.getPrototypeOf(obj) === proto, "getPrototypeOf(obj.create() on Object) = " + Object.getPrototypeOf(obj));
+            }
+        }
+    }
+
+    if(v < 9) {
+        // IHTMLDOMConstructorCollection props
+        var ctors = [
+            [ "Attr" ],
+            [ "BehaviorUrnsCollection" ],
+            [ "BookmarkCollection" ],
+            [ "CSSCurrentStyleDeclaration" ],
+            [ "CSSRuleList" ],
+            [ "CSSRuleStyleDeclaration" ],
+            [ "CSSStyleDeclaration" ],
+            [ "CSSStyleRule" ],
+            [ "CSSStyleSheet" ],
+            [ "CompatibleInfo" ],
+            [ "CompatibleInfoCollection" ],
+            [ "ControlRangeCollection" ],
+            [ "DOMImplementation" ],
+            [ "DataTransfer" ],
+            [ "Element" ],
+            [ "Event" ],
+            [ "HTCElementBehaviorDefaults" ],
+            [ "HTMLAnchorElement" ],
+            [ "HTMLAreaElement" ],
+            [ "HTMLAreasCollection" ],
+            [ "HTMLBGSoundElement" ],
+            [ "HTMLBRElement" ],
+            [ "HTMLBaseElement" ],
+            [ "HTMLBaseFontElement" ],
+            [ "HTMLBlockElement" ],
+            [ "HTMLBodyElement" ],
+            [ "HTMLButtonElement" ],
+            [ "HTMLCollection" ],
+            [ "HTMLCommentElement" ],
+            [ "HTMLDDElement" ],
+            [ "HTMLDListElement" ],
+            [ "HTMLDTElement" ],
+            [ "HTMLDivElement" ],
+            [ "HTMLDocument" ],
+            [ "HTMLEmbedElement" ],
+            [ "HTMLFieldSetElement" ],
+            [ "HTMLFontElement" ],
+            [ "HTMLFormElement" ],
+            [ "HTMLFrameElement" ],
+            [ "HTMLFrameSetElement" ],
+            [ "HTMLGenericElement" ],
+            [ "HTMLHRElement" ],
+            [ "HTMLHeadElement" ],
+            [ "HTMLHeadingElement" ],
+            [ "HTMLHtmlElement" ],
+            [ "HTMLIFrameElement" ],
+            [ "HTMLImageElement" ],
+            [ "HTMLInputElement" ],
+            [ "HTMLIsIndexElement" ],
+            [ "HTMLLIElement" ],
+            [ "HTMLLabelElement" ],
+            [ "HTMLLegendElement" ],
+            [ "HTMLLinkElement" ],
+            [ "HTMLMapElement" ],
+            [ "HTMLMarqueeElement" ],
+            [ "HTMLMetaElement" ],
+            [ "HTMLModelessDialog" ],
+            [ "HTMLNamespaceInfo" ],
+            [ "HTMLNamespaceInfoCollection" ],
+            [ "HTMLNextIdElement" ],
+            [ "HTMLNoShowElement" ],
+            [ "HTMLOListElement" ],
+            [ "HTMLObjectElement" ],
+            [ "HTMLOptionElement" ],
+            [ "HTMLParagraphElement" ],
+            [ "HTMLParamElement" ],
+            [ "HTMLPhraseElement" ],
+            [ "HTMLPluginsCollection" ],
+            [ "HTMLPopup" ],
+            [ "HTMLScriptElement" ],
+            [ "HTMLSelectElement" ],
+            [ "HTMLSpanElement" ],
+            [ "HTMLStyleElement" ],
+            [ "HTMLTableCaptionElement" ],
+            [ "HTMLTableCellElement" ],
+            [ "HTMLTableColElement" ],
+            [ "HTMLTableElement" ],
+            [ "HTMLTableRowElement" ],
+            [ "HTMLTableSectionElement" ],
+            [ "HTMLTextAreaElement" ],
+            [ "HTMLTextElement" ],
+            [ "HTMLTitleElement" ],
+            [ "HTMLUListElement" ],
+            [ "HTMLUnknownElement" ],
+            [ "History" ],
+            [ "Image", 0, "HTMLImageElement" ],
+            [ "Location" ],
+            [ "NamedNodeMap" ],
+            [ "Navigator" ],
+            [ "NodeList" ],
+            [ "Option", 0, "HTMLOptionElement" ],
+            [ "Screen" ],
+            [ "Selection" ],
+            [ "StaticNodeList" ],
+            [ "Storage" ],
+            [ "StyleSheetList" ],
+            [ "StyleSheetPage" ],
+            [ "StyleSheetPageList" ],
+            [ "Text" ],
+            [ "TextRange" ],
+            [ "TextRangeCollection" ],
+            [ "TextRectangle" ],
+            [ "TextRectangleList" ],
+            [ "Window" ],
+            [ "XDomainRequest", 0 ],
+            [ "XMLHttpRequest", 0 ]
+        ];
+        for(var i = 0; i < ctors.length; i++) {
+            if(!(ctors[i][0] in window) && v >= 8) {
+                todo_wine.ok(false, ctors[i][0] + " not implemented");
+                continue;
+            }
+            var a, b, r = 0;
+            try {
+                eval("a = " + ctors[i][0] + "; b = window." + ctors[i][0] + ";");
+            }catch(ex) {
+                r = ex.number;
+            }
+            if(v < 8 && (ctors[i].length < 2 || v < ctors[i][1]))
+                ok(r === 0xa1391 - 0x80000000, ctors[i][0] + " not undefined: " + r);
+            else {
+                ok(r === 0, ctors[i][0] + " exception code: " + r);
+                ok(a === b, ctors[i][0] + ": " + a + " != " + b);
+                ok(ctors[i][0] in window, ctors[i][0] + " in window");
+                if(v >= 8)
+                    ok(!(ctors[i][0] in window.Window.prototype), ctors[i][0] + " in Window.prototype");
+                r = "" + a;
+                ok(r === "[object " + ctors[i][ctors[i].length < 3 ? 0 : 2] + "]", ctors[i][0] + " returned " + r);
+                r = "" + a.prototype;
+                ok(r === "[Interface prototype object]", ctors[i][0] + ".prototype returned " + r);
+
+                var props = [ "LookupGetter", "LookupSetter", "DefineGetter", "DefineSetter" ];
+                for(var j = 0; j < props.length; j++) {
+                    ok(!(props[j] in a.prototype), props[j] + " in " + ctors[i][0] + ".prototype");
+                    ok(!(props[j] in a), props[j] + " in " + ctors[i][0]);
+                }
+                ok(!("constructor" in a), "constructor in " + ctors[i][0]);
+
+                if(v < 8 || ctors[i][0] === "HTMLModelessDialog") {
+                    ok(!("constructor" in a.prototype), "constructor in " + ctors[i][0] + ".prototype");
+                }else {
+                    ok("constructor" in a.prototype, "constructor not in " + ctors[i][0] + ".prototype");
+                    b = a.prototype.constructor;
+                    r = ctors[i][(ctors[i].length > 2) ? 2 : 0];
+                    var ctor = (r.length > 7 && r.slice(-7) === "Element") ? window.Element : null;
+                    ok(b === ctor, ctors[i][0] + ".prototype.constructor = " + b);
+                    a.prototype.constructor = "foobar";
+                    b = a.prototype.constructor;
+                    ok(b === ctor, ctors[i][0] + ".prototype.constructor after set = " + b);
+                    r = (delete a.prototype.constructor);
+                    ok(r === true, "delete " + ctors[i][0] + ".prototype.constructor returned " + r);
+                    b = a.prototype.constructor;
+                    ok(b === ctor, ctors[i][0] + ".prototype.constructor after delete = " + b);
+                }
+            }
+        }
+    }else {
+        var ctors = [
+            [ "Attr" ],
+            [ "CharacterData" ],
+            [ "ClientRect" ],
+            [ "ClientRectList" ],
+            [ "Comment" ],
+            [ "Console", 10 ],
+            [ "Crypto", 11 ],
+            [ "CSSRule" ],
+            [ "CSSStyleDeclaration" ],
+            [ "CSSStyleRule" ],
+            [ "CSSStyleSheet" ],
+            [ "CustomEvent" ],
+            [ "Document" ],
+            [ "DocumentType" ],
+            [ "DOMImplementation" ],
+            [ "DOMTokenList", 10 ],
+            [ "Element" ],
+            [ "Event" ],
+            [ "History" ],
+            [ "HTMLAnchorElement" ],
+            [ "HTMLAreaElement" ],
+            [ "HTMLBodyElement" ],
+            [ "HTMLButtonElement" ],
+            [ "HTMLCollection" ],
+            [ "HTMLDocument", 11 ],
+            [ "HTMLElement" ],
+            [ "HTMLEmbedElement" ],
+            [ "HTMLFormElement" ],
+            [ "HTMLFrameElement" ],
+            [ "HTMLHeadElement" ],
+            [ "HTMLHtmlElement" ],
+            [ "HTMLIFrameElement" ],
+            [ "HTMLImageElement" ],
+            [ "HTMLInputElement" ],
+            [ "HTMLLabelElement" ],
+            [ "HTMLLinkElement" ],
+            [ "HTMLObjectElement" ],
+            [ "HTMLOptionElement" ],
+            [ "HTMLScriptElement" ],
+            [ "HTMLSelectElement" ],
+            [ "HTMLStyleElement" ],
+            [ "HTMLTableCellElement" ],
+            [ "HTMLTableDataCellElement" ],
+            [ "HTMLTableElement" ],
+            [ "HTMLTableRowElement" ],
+            [ "HTMLTextAreaElement" ],
+            [ "HTMLTitleElement" ],
+            [ "HTMLUnknownElement" ],
+            [ "KeyboardEvent" ],
+            [ "MediaQueryList", 10 ],
+            [ "MessageEvent" ],
+            [ "MimeTypeArray", 11 ],
+            [ "MouseEvent" ],
+            [ "MSCSSProperties" ],
+            [ "MSCSSRuleList" ],
+            [ "MSCurrentStyleCSSProperties" ],
+            [ "MSEventObj" ],
+            [ "MSNamespaceInfoCollection", 0, 9 ],
+            [ "MSSelection", 0, 10 ],
+            [ "MSStyleCSSProperties" ],
+            [ "MutationObserver", 11 ],
+            [ "NamedNodeMap" ],
+            [ "Navigator" ],
+            [ "Node" ],
+            [ "NodeList" ],
+            [ "PageTransitionEvent", 11 ],
+            [ "Performance" ],
+            [ "PerformanceNavigation" ],
+            [ "PerformanceTiming" ],
+            [ "PluginArray", 11 ],
+            [ "ProgressEvent", 10 ],
+            [ "Range" ],
+            [ "Screen" ],
+            [ "Storage" ],
+            [ "StorageEvent" ],
+            [ "StyleSheet" ],
+            [ "StyleSheetList" ],
+            [ "Text" ],
+            [ "TextRange" ],
+            [ "UIEvent" ],
+            [ "Window" ],
+            [ "XMLHttpRequest" ]
+        ];
+        for(var i = 0; i < ctors.length; i++) {
+            if((ctors[i].length > 1 && v < ctors[i][1]) || (ctors[i].length > 2 && v > ctors[i][2]))
+                ok(!(ctors[i][0] in window), ctors[i][0] + " in window.");
+            else
+                ok(Object.prototype.hasOwnProperty.call(window, ctors[i][0]), ctors[i][0] + " not a property of window.");
+        }
     }
 });
 
@@ -397,6 +1608,83 @@ sync_test("elem_props", function() {
 
     elem = document.createElement("img");
     test_exposed("fileSize", v < 11);
+});
+
+sync_test("attr_props", function() {
+    var elem = document.createElement("style"), attr;
+    var v = document.documentMode;
+    elem.setAttribute("id", "test");
+    elem.setAttribute("test", "wine");
+    elem.setAttribute("z-index", "foobar");
+    elem.setAttribute("removeAttribute", "funcattr");
+
+    function test_exposed(prop, expect) {
+        if(expect)
+            ok(prop in attr, prop + " not found in attribute.");
+        else
+            ok(!(prop in attr), prop + " found in attribute.");
+    }
+
+    function test_attr(expando, specified) {
+        var r = attr.expando;
+        ok(r === expando, attr.name + " attr.expando = " + r);
+        r = attr.specified;
+        ok(r === specified, attr.name + " attr.specified = " + r);
+    }
+
+    attr = elem.getAttributeNode("id");
+    test_exposed("appendChild", true);
+    test_exposed("attributes", true);
+    test_exposed("childNodes", true);
+    test_exposed("cloneNode", true);
+    test_exposed("compareDocumentPosition", v >= 9);
+    test_exposed("expando", true);
+    test_exposed("firstChild", true);
+    test_exposed("hasChildNodes", true);
+    test_exposed("insertBefore", true);
+    test_exposed("isDefaultNamespace", v >= 9);
+    test_exposed("isEqualNode", v >= 9);
+    test_exposed("isSameNode", v >= 9);
+    test_exposed("isSupported", v >= 9);
+    test_exposed("lastChild", true);
+    test_exposed("localName", v >= 9);
+    test_exposed("lookupNamespaceURI", v >= 9);
+    test_exposed("lookupPrefix", v >= 9);
+    test_exposed("name", true);
+    test_exposed("namespaceURI", v >= 9);
+    test_exposed("nextSibling", true);
+    test_exposed("nodeName", true);
+    test_exposed("nodeType", true);
+    test_exposed("nodeValue", true);
+    test_exposed("ownerDocument", true);
+    test_exposed("parentNode", true);
+    test_exposed("prefix", v >= 9);
+    test_exposed("previousSibling", true);
+    test_exposed("removeChild", true);
+    test_exposed("replaceChild", true);
+    test_exposed("specified", true);
+    test_exposed("textContent", v >= 9);
+    test_exposed("value", true);
+    test_attr(false, true);
+
+    attr = elem.getAttributeNode("test");
+    test_attr(true, true);
+
+    attr = elem.getAttributeNode("z-index");
+    test_attr(true, true);
+
+    attr = elem.getAttributeNode("removeAttribute");
+    test_attr(true, true);
+
+    attr = elem.getAttributeNode("tabIndex");
+    if(v < 8)
+        test_attr(false, false);
+    else
+        todo_wine_if(v === 8).
+        ok(attr === null, "tabIndex attr not null.");
+
+    attr = document.createAttribute("winetest");
+    test_attr(false, v >= 9);
 });
 
 sync_test("doc_props", function() {
@@ -477,8 +1765,11 @@ sync_test("window_props", function() {
     test_exposed("WeakSet", false);
     test_exposed("performance", true);
     test_exposed("console", v >= 10);
+    test_exposed("DOMParser", v >= 9);
     test_exposed("matchMedia", v >= 10);
+    test_exposed("msCrypto", v >= 11);
     test_exposed("MutationObserver", v >= 11);
+    test_exposed("XDomainRequest", v < 11);
 });
 
 sync_test("domimpl_props", function() {
@@ -496,6 +1787,56 @@ sync_test("domimpl_props", function() {
     test_exposed("createDocument", v >= 9);
     test_exposed("createDocumentType", v >= 9);
     test_exposed("createHTMLDocument", v >= 9);
+});
+
+sync_test("perf_props", function() {
+    var obj = window.performance, name = "Performance";
+    var v = document.documentMode;
+
+    function test_exposed(prop, expect) {
+        if(expect)
+            ok(prop in obj, prop + " not found in " + name + ".");
+        else
+            ok(!(prop in obj), prop + " found in " + name + ".");
+    }
+
+    test_exposed("navigation", true);
+    test_exposed("timing", true);
+    test_exposed("toJSON", v >= 9);
+    test_exposed("toString", true);
+
+    obj = window.performance.navigation, name = "PerformanceNavigation";
+
+    test_exposed("redirectCount", true);
+    test_exposed("type", true);
+    test_exposed("toJSON", v >= 9);
+    test_exposed("toString", true);
+
+    obj = window.performance.timing, name = "PerformanceTiming";
+
+    test_exposed("connectEnd", true);
+    test_exposed("connectStart", true);
+    test_exposed("domComplete", true);
+    test_exposed("domContentLoadedEventEnd", true);
+    test_exposed("domContentLoadedEventStart", true);
+    test_exposed("domInteractive", true);
+    test_exposed("domLoading", true);
+    test_exposed("domainLookupEnd", true);
+    test_exposed("domainLookupStart", true);
+    test_exposed("fetchStart", true);
+    test_exposed("loadEventEnd", true);
+    test_exposed("loadEventStart", true);
+    test_exposed("msFirstPaint", true);
+    test_exposed("navigationStart", true);
+    test_exposed("redirectEnd", true);
+    test_exposed("redirectStart", true);
+    test_exposed("requestStart", true);
+    test_exposed("responseEnd", true);
+    test_exposed("responseStart", true);
+    test_exposed("unloadEventEnd", true);
+    test_exposed("unloadEventStart", true);
+    test_exposed("toJSON", v >= 9);
+    test_exposed("toString", true);
 });
 
 sync_test("xhr_props", function() {
@@ -629,10 +1970,21 @@ sync_test("style_props", function() {
     test_exposed("float", true);
     test_exposed("css-float", false);
     test_exposed("style-float", false);
+    test_exposed("styleFloat", true);
     test_exposed("setProperty", v >= 9);
     test_exposed("removeProperty", v >= 9);
     test_exposed("background-clip", v >= 9);
     test_exposed("transform", v >= 10);
+    test_exposed("zoom", true);
+
+    try {
+        style.styleFloat = "left";
+        ok(false, "expected exception setting styleFloat");
+    }catch(ex) {}
+    try {
+        style.zoom = "1.0";
+        ok(false, "expected exception setting zoom");
+    }catch(ex) {}
 
     if(window.getComputedStyle) {
         style = window.getComputedStyle(document.body);
@@ -649,6 +2001,86 @@ sync_test("style_props", function() {
         test_exposed("background-clip", v >= 9);
         test_exposed("transform", v >= 10);
     }
+});
+
+sync_test("input_validation_props", function() {
+    var obj, v = document.documentMode;
+    if(v < 9) return;
+
+    function test_exposed(prop, expect) {
+        if(expect)
+            ok(Object.prototype.hasOwnProperty.call(obj, prop), prop + " not a property of " + obj);
+        else
+            ok(!Object.prototype.hasOwnProperty.call(obj, prop), prop + " is a property of " + obj);
+    }
+
+    obj = window.HTMLFormElement.prototype;
+    test_exposed("action", true);
+    test_exposed("autofocus", false);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("enctype", true);
+    test_exposed("formAction", false);
+    test_exposed("formEnctype", false);
+    test_exposed("formMethod", false);
+    test_exposed("formNoValidate", false);
+    test_exposed("formTarget", false);
+    test_exposed("method", true);
+    test_exposed("noValidate", v >= 10);
+    test_exposed("setCustomValidity", false);
+    test_exposed("target", true);
+    test_exposed("validationMessage", false);
+    test_exposed("validity", false);
+    test_exposed("willValidate", false);
+
+    obj = window.HTMLInputElement.prototype;
+    test_exposed("autofocus", v >= 10);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("formAction", v >= 10);
+    test_exposed("formEnctype", v >= 10);
+    test_exposed("formMethod", v >= 10);
+    test_exposed("formNoValidate", v >= 10);
+    test_exposed("formTarget", v >= 10);
+    test_exposed("setCustomValidity", v >= 10);
+    test_exposed("validationMessage", v >= 10);
+    test_exposed("validity", v >= 10);
+    test_exposed("willValidate", v >= 10);
+
+    obj = window.HTMLButtonElement.prototype;
+    test_exposed("autofocus", v >= 10);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("formAction", v >= 10);
+    test_exposed("formEnctype", v >= 10);
+    test_exposed("formMethod", v >= 10);
+    test_exposed("formNoValidate", v >= 10);
+    test_exposed("formTarget", v >= 10);
+    test_exposed("setCustomValidity", v >= 10);
+    test_exposed("validationMessage", v >= 10);
+    test_exposed("validity", v >= 10);
+    test_exposed("willValidate", v >= 10);
+
+    obj = window.HTMLObjectElement.prototype;
+    test_exposed("autofocus", false);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("setCustomValidity", v >= 10);
+    test_exposed("validationMessage", v >= 10);
+    test_exposed("validity", v >= 10);
+    test_exposed("willValidate", v >= 10);
+
+    obj = window.HTMLSelectElement.prototype;
+    test_exposed("autofocus", v >= 10);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("setCustomValidity", v >= 10);
+    test_exposed("validationMessage", v >= 10);
+    test_exposed("validity", v >= 10);
+    test_exposed("willValidate", v >= 10);
+
+    obj = window.HTMLTextAreaElement.prototype;
+    test_exposed("autofocus", v >= 10);
+    test_exposed("checkValidity", v >= 10);
+    test_exposed("setCustomValidity", v >= 10);
+    test_exposed("validationMessage", v >= 10);
+    test_exposed("validity", v >= 10);
+    test_exposed("willValidate", v >= 10);
 });
 
 sync_test("createElement_inline_attr", function() {
@@ -921,7 +2353,6 @@ sync_test("elem_by_id", function() {
         name_elem = document.testname;
         ok(name_elem === "foo", "document.testname after set = " + name_elem);
     }catch(e) {
-        todo_wine_if(v >= 9).
         ok(v < 9 && e.number === 0xa01b6 - 0x80000000, "Setting document.testname threw = " + e.number);
     }
 
@@ -946,7 +2377,6 @@ sync_test("elem_by_id", function() {
         delete document.testid;
         delete document.testname;
     }catch(e) {
-        todo_wine_if(v >= 9).
         ok(v < 9 && e.number === 0xa01b6 - 0x80000000, "Setting document.testid threw = " + e.number);
     }
 
@@ -1127,7 +2557,7 @@ sync_test("navigator", function() {
 
 sync_test("delete_prop", function() {
     var v = document.documentMode;
-    var obj = document.createElement("div"), r, obj2;
+    var obj = document.createElement("div"), r, obj2, func, prop;
 
     obj.prop1 = true;
     r = false;
@@ -1142,6 +2572,40 @@ sync_test("delete_prop", function() {
     }
     ok(!r, "got an unexpected exception");
     ok(!("prop1" in obj), "prop1 is still in obj");
+
+    /* builtin properties don't throw any exception, but are not really deleted */
+    r = (delete obj.tagName);
+    ok(r, "delete returned " + r);
+    ok("tagName" in obj, "tagName deleted from obj");
+    ok(obj.tagName === "DIV", "tagName = " + obj.tagName);
+
+    prop = obj.id;
+    r = (delete obj.id);
+    ok(r, "delete returned " + r);
+    ok("id" in obj, "id deleted from obj");
+    ok(obj.id === prop, "id = " + obj.id);
+
+    obj.id = "1234";
+    ok(obj.id === "1234", "id after set to 1234 = " + obj.id);
+    r = (delete obj.id);
+    ok(r, "delete returned " + r);
+    ok("id" in obj, "id deleted from obj");
+    ok(obj.id === "1234", "id = " + obj.id);
+
+    /* builtin functions get reset to their original values */
+    func = function() { }
+    prop = obj.setAttribute;
+    r = (delete obj.setAttribute);
+    ok(r, "delete returned " + r);
+    ok("setAttribute" in obj, "setAttribute deleted from obj");
+    ok(obj.setAttribute === prop, "setAttribute = " + obj.setAttribute);
+
+    obj.setAttribute = func;
+    ok(obj.setAttribute === func, "setAttribute after set to func = " + obj.setAttribute);
+    r = (delete obj.setAttribute);
+    ok(r, "delete returned " + r);
+    ok("setAttribute" in obj, "setAttribute deleted from obj");
+    ok(obj.setAttribute === prop, "setAttribute = " + obj.setAttribute);
 
     /* again, this time prop1 does not exist */
     r = false;
@@ -1162,12 +2626,6 @@ sync_test("delete_prop", function() {
     ok(r, "delete returned " + r);
     ok("className" in obj, "className deleted from obj");
     ok(obj.className === "", "className = " + obj.className);
-
-    /* builtin propertiles don't throw any exception, but are not really deleted */
-    r = (delete obj.tagName);
-    ok(r, "delete returned " + r);
-    ok("tagName" in obj, "tagName deleted from obj");
-    ok(obj.tagName === "DIV", "tagName = " + obj.tagName);
 
     obj = document.querySelectorAll("*");
     ok("0" in obj, "0 is not in obj");
@@ -1206,7 +2664,6 @@ sync_test("delete_prop", function() {
         ok(r, "did not get an expected globalprop2 exception");
     }else {
         ok(!r, "got an unexpected exception");
-        todo_wine.
         ok(!("globalprop2" in obj), "globalprop2 is still in obj");
     }
 
@@ -1230,7 +2687,6 @@ sync_test("delete_prop", function() {
     ok(obj.globalprop4, "globalprop4 = " + globalprop4);
     r = (delete globalprop4);
     ok(r, "delete returned " + r);
-    todo_wine.
     ok(!("globalprop4" in obj), "globalprop4 is still in obj");
 });
 
@@ -1868,7 +3324,6 @@ async_test("storage events", function() {
             return;
         }
         var s = Object.prototype.toString.call(e);
-        todo_wine.
         ok(s === "[object StorageEvent]", "Object.toString = " + s);
         ok(e.key === key, "key = " + e.key + ", expected " + key);
         ok(e.oldValue === oldValue, "oldValue = " + e.oldValue + ", expected " + oldValue);
@@ -2032,11 +3487,10 @@ sync_test("elem_attr", function() {
     var func = elem.setAttribute;
     try {
         func("testattr", arr);
-        todo_wine_if(v >= 9).
         ok(v < 9, "expected exception setting testattr via func");
     }catch(ex) {
         ok(v >= 9, "did not expect exception setting testattr via func");
-        elem.setAttribute("testattr", arr);
+        func.call(elem, "testattr", arr);
     }
     r = elem.getAttribute("testattr");
     ok(r === (v < 8 ? arr : (v < 10 ? "arrval" : "42")), "testattr after setAttribute (as func) = " + r);
@@ -2672,6 +4126,13 @@ sync_test("__proto__", function() {
         ok(e.number === 0xa13b6 - 0x80000000 && e.name === "TypeError",
             "changing __proto__ on non-extensible object threw exception " + e.number + " (" + e.name + ")");
     }
+
+    obj = document.createElement("img");
+    obj.__proto__ = ctor.prototype;
+    document.body.setAttribute.call(obj, "height", "101");
+    r = document.body.getAttribute.call(obj, "height");
+    ok(r === "101", "getAttribute(height) = " + r);
+    ok(!("getAttribute" in obj), "getAttribute exposed in obj");
 });
 
 sync_test("__defineGetter__", function() {
@@ -2857,6 +4318,96 @@ sync_test("__defineSetter__", function() {
     ok(x.setterVal === 9, "x.setterVal after setting bar = " + x.setterVal);
 });
 
+sync_test("Crypto", function() {
+    var crypto = window.msCrypto, arr, r;
+    if(!crypto) return;
+
+    ok(Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(window), "msCrypto"), "msCrypto not a property of window's prototype.");
+    r = Object.getPrototypeOf(crypto);
+    ok(r === window.Crypto.prototype, "getPrototypeOf(crypto) = " + r);
+
+    ok("subtle" in crypto, "subtle not in crypto");
+    ok("getRandomValues" in crypto, "getRandomValues not in crypto");
+    ok(!("randomUUID" in crypto), "randomUUID is in crypto");
+
+    var list = [ "decrypt", "deriveKey", "digest", "encrypt", "exportKey", "generateKey", "importKey", "sign", "unwrapKey", "verify", "wrapKey" ];
+    for(var i = 0; i < list.length; i++)
+        ok(list[i] in crypto.subtle, list[i] + " not in crypto.subtle");
+    ok(!("deriveBits" in crypto.subtle), "deriveBits is in crypto.subtle");
+
+    list = [
+        [ "Int8Array",    65536 ],
+        [ "Uint8Array",   65536 ],
+        [ "Int16Array",   32768 ],
+        [ "Uint16Array",  32768 ],
+        [ "Int32Array",   16384 ],
+        [ "Uint32Array",  16384 ]
+    ];
+    for(var i = 0; i < list.length; i++) {
+        var arrType = list[i][0];
+        arr = eval(arrType + "(" + list[i][1] + ")");
+
+        ok(arr[0] === 0, arrType + "[0] = " + arr[0]);
+        ok(arr[1] === 0, arrType + "[1] = " + arr[1]);
+        r = crypto.getRandomValues(arr);
+        ok(r === arr, "getRandomValues returned " + r);
+
+        arr = eval(arrType + "(" + (list[i][1]+1) + ")");
+        try {
+            crypto.getRandomValues(arr);
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            todo_wine.
+            ok(ex.name === "QuotaExceededError", "getRandomValues(oversized " + arrType + ") threw " + ex.name);
+            todo_wine.
+            ok(n === 0, "getRandomValues(oversized " + arrType + ") threw code " + n);
+            todo_wine.
+            ok(ex.message === "QuotaExceededError", "getRandomValues(oversized " + arrType + ") threw message " + ex.message);
+        }
+    }
+
+    try {
+        crypto.getRandomValues(null);
+        ok(false, "getRandomValues(null) did not throw exception");
+    }catch(e) {
+        ok(e.number === 0x70057 - 0x80000000, "getRandomValues(null) threw " + e.number);
+    }
+    try {
+        crypto.getRandomValues(external.nullDisp);
+        ok(false, "getRandomValues(nullDisp) did not throw exception");
+    }catch(e) {
+        ok(e.number === 0x70057 - 0x80000000, "getRandomValues(nullDisp) threw " + e.number);
+    }
+    try {
+        crypto.getRandomValues([1,2,3]);
+        ok(false, "getRandomValues([1,2,3]) did not throw exception");
+    }catch(e) {
+        ok(e.number === 0x70057 - 0x80000000, "getRandomValues([1,2,3]) threw " + e.number);
+    }
+    arr = Float32Array(2);
+    try {
+        crypto.getRandomValues(arr);
+        ok(false, "getRandomValues(Float32Array) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        todo_wine.
+        ok(ex.name === "TypeMismatchError", "getRandomValues(Float32Array) threw " + ex.name);
+        todo_wine.
+        ok(n === 0, "getRandomValues(Float32Array) threw code " + n);
+    }
+    arr = Float64Array(2);
+    try {
+        crypto.getRandomValues(arr);
+        ok(false, "getRandomValues(Float64Array) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        todo_wine.
+        ok(ex.name === "TypeMismatchError", "getRandomValues(Float64Array) threw " + ex.name);
+        todo_wine.
+        ok(n === 0, "getRandomValues(Float64Array) threw code " + n);
+    }
+});
+
 sync_test("MutationObserver", function() {
     if (!window.MutationObserver) {
         return;
@@ -2919,6 +4470,32 @@ sync_test("MutationObserver", function() {
     test_exposed("takeRecords");
 });
 
+sync_test("initMessageEvent", function() {
+    var e, v = document.documentMode;
+    if(!document.createEvent)
+        return;
+    e = document.createEvent("MessageEvent");
+    ok(e.data === (v < 10 ? "" : undefined), "e.data = " + e.data);
+    ok(e.bubbles === false, "bubbles = " + e.bubbles);
+    ok(e.cancelable === false, "cancelable = " + e.cancelable);
+    ok(e.source === null, "e.source = " + e.source);
+    ok(e.origin === "", "e.origin = " + e.origin);
+
+    e.initMessageEvent("blah", true, true, 137, "wine", 1234, window);
+    ok(e.data === "137", "e.data = " + e.data);
+    ok(e.bubbles === true, "bubbles = " + e.bubbles);
+    ok(e.cancelable === true, "cancelable = " + e.cancelable);
+    ok(e.source === window, "e.source = " + e.source);
+    ok(e.origin === "wine", "e.origin = " + e.origin);
+
+    e.initMessageEvent("abcd", false, false, "testdata", "origin", 42, null);
+    ok(e.data === "testdata", "e.data = " + e.data);
+    ok(e.bubbles === false, "bubbles = " + e.bubbles);
+    ok(e.cancelable === false, "cancelable = " + e.cancelable);
+    ok(e.source === null, "e.source = " + e.source);
+    ok(e.origin === "origin", "e.origin = " + e.origin);
+});
+
 async_test("postMessage", function() {
     var v = document.documentMode;
     var onmessage_called = false;
@@ -2928,6 +4505,11 @@ async_test("postMessage", function() {
             ok(e === undefined, "e = " + e);
         else {
             ok(e.data === (v < 10 ? "10" : 10), "e.data = " + e.data);
+            ok(e.source === window, "e.source = " + e.source);
+            ok(e.origin === "http://winetest.example.org", "e.origin = " + e.origin);
+
+            e = document.createEvent("MessageEvent");
+            ok(e.data === (v < 10 ? "" : undefined), "created e.data = " + e.data);
             next_test();
         }
     }

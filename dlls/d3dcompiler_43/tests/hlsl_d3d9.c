@@ -18,7 +18,6 @@
  */
 #define COBJMACROS
 #include "wine/test.h"
-#include "wine/heap.h"
 #include "d3dx9.h"
 #include "d3dcompiler.h"
 
@@ -135,7 +134,11 @@ static IDirect3DDevice9 *create_device(HWND window)
     HRESULT hr;
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
-    ok(!!d3d, "Failed to create a D3D object.\n");
+    if (!d3d)
+    {
+        skip("Failed to create a D3D object.\n");
+        return NULL;
+    }
 
     hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
             D3DCREATE_HARDWARE_VERTEXPROCESSING, &present_parameters, &device);
@@ -558,26 +561,30 @@ static void test_conditionals(void)
         return;
     device = test_context.device;
 
+    todo_wine
     ps_code = compile_shader(ps_if_source, "ps_2_0", 0);
-    draw_quad(device, ps_code);
-    init_readback(device, &rb);
-
-    for (i = 0; i < 200; i += 40)
+    if (ps_code)
     {
-        v = get_readback_vec4(&rb, i, 0);
-        todo_wine ok(compare_vec4(v, 0.9f, 0.8f, 0.7f, 0.6f, 0),
-                "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
-    }
+        draw_quad(device, ps_code);
+        init_readback(device, &rb);
 
-    for (i = 240; i < 640; i += 40)
-    {
-        v = get_readback_vec4(&rb, i, 0);
-        todo_wine ok(compare_vec4(v, 0.1f, 0.2f, 0.3f, 0.4f, 0),
-                "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
-    }
+        for (i = 0; i < 200; i += 40)
+        {
+            v = get_readback_vec4(&rb, i, 0);
+            todo_wine ok(compare_vec4(v, 0.9f, 0.8f, 0.7f, 0.6f, 0),
+                         "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
+        }
 
-    release_readback(&rb);
-    ID3D10Blob_Release(ps_code);
+        for (i = 240; i < 640; i += 40)
+        {
+            v = get_readback_vec4(&rb, i, 0);
+            todo_wine ok(compare_vec4(v, 0.1f, 0.2f, 0.3f, 0.4f, 0),
+                         "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
+        }
+
+        release_readback(&rb);
+        ID3D10Blob_Release(ps_code);
+    }
 
     todo_wine ps_code = compile_shader(ps_ternary_source, "ps_2_0", 0);
     if (ps_code)
@@ -588,6 +595,7 @@ static void test_conditionals(void)
         for (i = 0; i < 320; i += 40)
         {
             v = get_readback_vec4(&rb, i, 0);
+            todo_wine
             ok(compare_vec4(v, 0.5f, 0.25f, 0.5f, 0.75f, 0),
                     "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
         }
@@ -595,6 +603,7 @@ static void test_conditionals(void)
         for (i = 360; i < 640; i += 40)
         {
             v = get_readback_vec4(&rb, i, 0);
+            todo_wine
             ok(compare_vec4(v, 0.6f, 0.8f, 0.1f, 0.2f, 0),
                     "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v->x, v->y, v->z, v->w);
         }
@@ -653,6 +662,7 @@ static void test_float_vectors(void)
         ID3D10Blob_Release(ps_code);
     }
 
+    todo_wine
     ps_code = compile_shader(ps_uniform_indexing_source, "ps_2_0", 0);
     if (ps_code)
     {
@@ -696,6 +706,7 @@ static void test_trig(void)
         return;
     device = test_context.device;
 
+    todo_wine
     ps_code = compile_shader(ps_source, "ps_2_0", 0);
     if (ps_code)
     {
@@ -960,7 +971,6 @@ static void test_majority(void)
             draw_quad(test_context.device, ps_code);
 
             v = get_color_vec4(test_context.device, 0, 0);
-            todo_wine_if(i == 4 || i == 6)
             ok(compare_vec4(&v, c->x, c->y, c->z, c->w, 1),
                 "Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", v.x, v.y, v.z, v.w);
 
@@ -1115,33 +1125,33 @@ static void test_samplers(void)
         "sampler s;\n"
         "float4 main() : COLOR\n"
         "{\n"
-        "    return tex2D(s, float2(0.5, 0.5));\n"
+        "    return tex2D(s, float2(0.75, 0.25));\n"
         "}",
 
         "SamplerState s;\n"
         "float4 main() : COLOR\n"
         "{\n"
-        "    return tex2D(s, float2(0.5, 0.5));\n"
+        "    return tex2D(s, float2(0.75, 0.25));\n"
         "}",
 
         "sampler2D s;\n"
         "float4 main() : COLOR\n"
         "{\n"
-        "    return tex2D(s, float2(0.5, 0.5));\n"
+        "    return tex2D(s, float2(0.75, 0.25));\n"
         "}",
 
         "sampler s;\n"
         "Texture2D t;\n"
         "float4 main() : COLOR\n"
         "{\n"
-        "    return t.Sample(s, float2(0.5, 0.5));\n"
+        "    return t.Sample(s, float2(0.75, 0.25));\n"
         "}",
 
         "SamplerState s;\n"
         "Texture2D t;\n"
         "float4 main() : COLOR\n"
         "{\n"
-        "    return t.Sample(s, float2(0.5, 0.5));\n"
+        "    return t.Sample(s, float2(0.75, 0.25));\n"
         "}",
     };
 
@@ -1161,20 +1171,21 @@ static void test_samplers(void)
 
     hr = IDirect3DDevice9_SetTexture(test_context.device, 0, (IDirect3DBaseTexture9 *)texture);
     ok(hr == D3D_OK, "Got unexpected hr %#lx.\n", hr);
-    hr = IDirect3DDevice9_SetSamplerState(test_context.device, 0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    hr = IDirect3DDevice9_SetSamplerState(test_context.device, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
     ok(hr == D3D_OK, "Got unexpected hr %#lx.\n", hr);
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
         hr = IDirect3DDevice9_Clear(test_context.device, 0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(255, 0, 0), 1.0f, 0);
         ok(hr == D3D_OK, "Test %u: Got unexpected hr %#lx.\n", i, hr);
+        todo_wine_if (i > 2)
         ps_code = compile_shader(tests[i], "ps_2_0", 0);
         if (ps_code)
         {
             draw_quad(test_context.device, ps_code);
 
             v = get_color_vec4(test_context.device, 0, 0);
-            todo_wine ok(compare_vec4(&v, 0.25f, 0.0f, 0.25f, 0.0f, 128),
+            ok(compare_vec4(&v, 1.0f, 0.0f, 1.0f, 0.0f, 0),
                     "Test %u: Got unexpected value {%.8e, %.8e, %.8e, %.8e}.\n", i, v.x, v.y, v.z, v.w);
 
             ID3D10Blob_Release(ps_code);
@@ -1507,26 +1518,26 @@ static HRESULT WINAPI test_d3dinclude_open(ID3DInclude *iface, D3D_INCLUDE_TYPE 
 
     if (!strcmp(filename, "include1.h"))
     {
-        buffer = heap_alloc(strlen(include1));
-        CopyMemory(buffer, include1, strlen(include1));
+        buffer = strdup(include1);
         *bytes = strlen(include1);
+        buffer[*bytes] = '$'; /* everything should still work without a null terminator */
         ok(include_type == D3D_INCLUDE_LOCAL, "Unexpected include type %d.\n", include_type);
         ok(!strncmp(include2, parent_data, strlen(include2)) || !strncmp(include3, parent_data, strlen(include3)),
                 "Unexpected parent_data value.\n");
     }
     else if (!strcmp(filename, "include\\include2.h"))
     {
-        buffer = heap_alloc(strlen(include2));
-        CopyMemory(buffer, include2, strlen(include2));
+        buffer = strdup(include2);
         *bytes = strlen(include2);
+        buffer[*bytes] = '$'; /* everything should still work without a null terminator */
         ok(!parent_data, "Unexpected parent_data value.\n");
         ok(include_type == D3D_INCLUDE_LOCAL, "Unexpected include type %d.\n", include_type);
     }
     else if (!strcmp(filename, "include\\include3.h"))
     {
-        buffer = heap_alloc(strlen(include3));
-        CopyMemory(buffer, include3, strlen(include3));
+        buffer = strdup(include3);
         *bytes = strlen(include3);
+        buffer[*bytes] = '$'; /* everything should still work without a null terminator */
         ok(!parent_data, "Unexpected parent_data value.\n");
         ok(include_type == D3D_INCLUDE_LOCAL, "Unexpected include type %d.\n", include_type);
     }
@@ -1542,7 +1553,7 @@ static HRESULT WINAPI test_d3dinclude_open(ID3DInclude *iface, D3D_INCLUDE_TYPE 
 
 static HRESULT WINAPI test_d3dinclude_close(ID3DInclude *iface, const void *data)
 {
-    heap_free((void *)data);
+    free((void *)data);
     return S_OK;
 }
 

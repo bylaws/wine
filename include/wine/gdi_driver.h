@@ -28,7 +28,9 @@
 #include "winternl.h"
 #include "ntuser.h"
 #include "immdev.h"
+#include "shellapi.h"
 #include "ddk/d3dkmthk.h"
+#include "kbd.h"
 #include "wine/list.h"
 
 struct gdi_dc_funcs;
@@ -249,6 +251,7 @@ struct gdi_gpu
     UINT subsys_id;
     UINT revision_id;
     GUID vulkan_uuid;     /* Vulkan device UUID */
+    ULONGLONG memory_size;
 };
 
 struct gdi_adapter
@@ -292,6 +295,8 @@ struct user_driver_funcs
     INT     (*pToUnicodeEx)(UINT,UINT,const BYTE *,LPWSTR,int,UINT,HKL);
     void    (*pUnregisterHotKey)(HWND, UINT, UINT);
     SHORT   (*pVkKeyScanEx)(WCHAR, HKL);
+    const KBDTABLES *(*pKbdLayerDescriptor)(HKL);
+    void    (*pReleaseKbdTables)(const KBDTABLES *);
     /* IME functions */
     UINT    (*pImeProcessKey)(HIMC,UINT,UINT,const BYTE*);
     UINT    (*pImeToAsciiEx)(UINT,UINT,const BYTE*,COMPOSITIONSTRING*,HIMC);
@@ -302,6 +307,13 @@ struct user_driver_funcs
     BOOL    (*pGetCursorPos)(LPPOINT);
     BOOL    (*pSetCursorPos)(INT,INT);
     BOOL    (*pClipCursor)(const RECT*,BOOL);
+    /* notify icon functions */
+    LRESULT (*pNotifyIcon)(HWND,UINT,NOTIFYICONDATAW *);
+    void    (*pCleanupIcons)(HWND);
+    void    (*pSystrayDockInit)(HWND);
+    BOOL    (*pSystrayDockInsert)(HWND,UINT,UINT,void *);
+    void    (*pSystrayDockClear)(HWND);
+    BOOL    (*pSystrayDockRemove)(HWND);
     /* clipboard functions */
     LRESULT (*pClipboardWindowProc)(HWND,UINT,WPARAM,LPARAM);
     void    (*pUpdateClipboard)(void);
@@ -347,9 +359,9 @@ struct user_driver_funcs
     void    (*pThreadDetach)(void);
 };
 
-extern void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version );
+W32KAPI void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version );
 
-extern BOOL win32u_set_window_pixel_format( HWND hwnd, int format, BOOL internal );
-extern int win32u_get_window_pixel_format( HWND hwnd );
+W32KAPI BOOL win32u_set_window_pixel_format( HWND hwnd, int format, BOOL internal );
+W32KAPI int win32u_get_window_pixel_format( HWND hwnd );
 
 #endif /* __WINE_WINE_GDI_DRIVER_H */

@@ -39,6 +39,7 @@ struct recordset
     ADORecordsetConstruction ADORecordsetConstruction_iface;
     ISupportErrorInfo  ISupportErrorInfo_iface;
     LONG               refs;
+    VARIANT            active_connection;
     LONG               state;
     struct fields     *fields;
     LONG               count;
@@ -297,6 +298,10 @@ static HRESULT WINAPI field_put_Value( Field *iface, VARIANT val )
     if ((hr = VariantCopy( &copy, &val )) != S_OK) return hr;
 
     field->recordset->data[row * col_count + col] = copy;
+
+    if (field->recordset->editmode == adEditNone)
+        field->recordset->editmode = adEditInProgress;
+
     return S_OK;
 }
 
@@ -1401,8 +1406,9 @@ static HRESULT WINAPI recordset_put_ActiveConnection( _Recordset *iface, VARIANT
 
 static HRESULT WINAPI recordset_get_ActiveConnection( _Recordset *iface, VARIANT *connection )
 {
-    FIXME( "%p, %p\n", iface, connection );
-    return E_NOTIMPL;
+    struct recordset *recordset = impl_from_Recordset( iface );
+    TRACE( "%p, %p\n", iface, connection );
+    return VariantCopy(connection, &recordset->active_connection);
 }
 
 static HRESULT WINAPI recordset_get_BOF( _Recordset *iface, VARIANT_BOOL *bof )
@@ -1580,18 +1586,27 @@ static HRESULT WINAPI recordset_AddNew( _Recordset *iface, VARIANT field_list, V
     struct recordset *recordset = impl_from_Recordset( iface );
 
     TRACE( "%p, %s, %s\n", recordset, debugstr_variant(&field_list), debugstr_variant(&values) );
-    FIXME( "ignoring field list and values\n" );
+    if (V_VT(&field_list) != VT_ERROR)
+        FIXME( "ignoring field list and values\n" );
 
     if (recordset->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
 
     if (!resize_recordset( recordset, recordset->count + 1 )) return E_OUTOFMEMORY;
-    recordset->index++;
+    recordset->index = recordset->count - 1;
+    recordset->editmode = adEditAdd;
     return S_OK;
 }
 
 static HRESULT WINAPI recordset_CancelUpdate( _Recordset *iface )
 {
+    struct recordset *recordset = impl_from_Recordset( iface );
+
     FIXME( "%p\n", iface );
+
+    if (V_DISPATCH(&recordset->active_connection) == NULL)
+        return S_OK;
+
+    recordset->editmode = adEditNone;
     return E_NOTIMPL;
 }
 
@@ -2069,6 +2084,10 @@ static HRESULT WINAPI recordset_Open( _Recordset *iface, VARIANT source, VARIANT
     if (FAILED(hr))
         return E_FAIL;
 
+    hr = VariantCopy(&recordset->active_connection, &active_connection);
+    if (FAILED(hr))
+        return E_FAIL;
+
     if (V_VT(&source) != VT_BSTR)
     {
         FIXME("Unsupported source type!\n");
@@ -2104,8 +2123,8 @@ static HRESULT WINAPI recordset_Open( _Recordset *iface, VARIANT source, VARIANT
         return hr;
     }
 
-    recordset->count = affected;
-    recordset->index = affected ? 0 : -1;
+    recordset->count = affected > 0 ? affected : 0;
+    recordset->index = affected > 0 ? 0 : -1;
 
     /*
      * We can safely just return with an empty recordset here
@@ -2147,7 +2166,14 @@ static HRESULT WINAPI recordset__xResync( _Recordset *iface, AffectEnum affect_r
 
 static HRESULT WINAPI recordset_Update( _Recordset *iface, VARIANT fields, VARIANT values )
 {
+    struct recordset *recordset = impl_from_Recordset( iface );
+
     FIXME( "%p, %s, %s\n", iface, debugstr_variant(&fields), debugstr_variant(&values) );
+
+    if (V_DISPATCH(&recordset->active_connection) == NULL)
+        return S_OK;
+
+    recordset->editmode = adEditNone;
     return E_NOTIMPL;
 }
 
@@ -2196,7 +2222,14 @@ static HRESULT WINAPI recordset_put_Filter( _Recordset *iface, VARIANT criteria 
 
     if (V_VT(&criteria) == VT_BSTR && recordset->state == adStateOpen)
     {
-        FIXME("Validating fields not performed\n");
+        FIXME("No filter performed.  Reporting no records found.\n");
+
+        /* Set the index to signal we didn't find a record. */
+        recordset->index = -1;
+    }
+    else
+    {
+        recordset->index = recordset->count ? 0 : -1; /* Reset */
     }
 
     VariantCopy(&recordset->filter, &criteria);
@@ -2257,13 +2290,27 @@ static HRESULT WINAPI recordset__xClone( _Recordset *iface, _Recordset **obj )
 
 static HRESULT WINAPI recordset_UpdateBatch( _Recordset *iface, AffectEnum affect_records )
 {
+    struct recordset *recordset = impl_from_Recordset( iface );
+
     FIXME( "%p, %u\n", iface, affect_records );
+
+    if (V_DISPATCH(&recordset->active_connection) == NULL)
+        return S_OK;
+
+    recordset->editmode = adEditNone;
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI recordset_CancelBatch( _Recordset *iface, AffectEnum affect_records )
 {
+    struct recordset *recordset = impl_from_Recordset( iface );
+
     FIXME( "%p, %u\n", iface, affect_records );
+
+    if (V_DISPATCH(&recordset->active_connection) == NULL)
+        return S_OK;
+
+    recordset->editmode = adEditNone;
     return E_NOTIMPL;
 }
 
@@ -2337,7 +2384,14 @@ static HRESULT WINAPI recordset_Find( _Recordset *iface, BSTR criteria, LONG ski
 
 static HRESULT WINAPI recordset_Cancel( _Recordset *iface )
 {
+    struct recordset *recordset = impl_from_Recordset( iface );
+
     FIXME( "%p\n", iface );
+
+    if (V_DISPATCH(&recordset->active_connection) == NULL)
+        return S_OK;
+
+    recordset->editmode = adEditNone;
     return E_NOTIMPL;
 }
 
@@ -2730,6 +2784,8 @@ HRESULT Recordset_create( void **obj )
     recordset->Recordset_iface.lpVtbl = &recordset_vtbl;
     recordset->ISupportErrorInfo_iface.lpVtbl = &recordset_supporterrorinfo_vtbl;
     recordset->ADORecordsetConstruction_iface.lpVtbl = &rsconstruction_vtbl;
+    V_VT(&recordset->active_connection) = VT_DISPATCH;
+    V_DISPATCH(&recordset->active_connection) = NULL;
     recordset->refs = 1;
     recordset->index = -1;
     recordset->cursor_location = adUseServer;

@@ -1,5 +1,6 @@
 MODULE = vcomp120.dll
 PARENTSRC = ../vcomp
 
-C_SRCS = \
+SOURCES = \
+	fork.c \
 	main.c

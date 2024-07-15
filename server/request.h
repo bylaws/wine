@@ -184,6 +184,7 @@ DECL_HANDLER(read_change);
 DECL_HANDLER(create_mapping);
 DECL_HANDLER(open_mapping);
 DECL_HANDLER(get_mapping_info);
+DECL_HANDLER(get_image_map_address);
 DECL_HANDLER(map_view);
 DECL_HANDLER(map_image_view);
 DECL_HANDLER(map_builtin_view);
@@ -331,6 +332,7 @@ DECL_HANDLER(get_clipboard_info);
 DECL_HANDLER(set_clipboard_viewer);
 DECL_HANDLER(add_clipboard_listener);
 DECL_HANDLER(remove_clipboard_listener);
+DECL_HANDLER(create_token);
 DECL_HANDLER(open_token);
 DECL_HANDLER(set_global_windows);
 DECL_HANDLER(adjust_token_privileges);
@@ -472,6 +474,7 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_create_mapping,
     (req_handler)req_open_mapping,
     (req_handler)req_get_mapping_info,
+    (req_handler)req_get_image_map_address,
     (req_handler)req_map_view,
     (req_handler)req_map_image_view,
     (req_handler)req_map_builtin_view,
@@ -619,6 +622,7 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_set_clipboard_viewer,
     (req_handler)req_add_clipboard_listener,
     (req_handler)req_remove_clipboard_listener,
+    (req_handler)req_create_token,
     (req_handler)req_open_token,
     (req_handler)req_set_global_windows,
     (req_handler)req_adjust_token_privileges,
@@ -715,13 +719,13 @@ C_ASSERT( sizeof(mem_size_t) == 8 );
 C_ASSERT( sizeof(message_data_t) == 56 );
 C_ASSERT( sizeof(mod_handle_t) == 8 );
 C_ASSERT( sizeof(obj_handle_t) == 4 );
-C_ASSERT( sizeof(pe_image_info_t) == 80 );
+C_ASSERT( sizeof(pe_image_info_t) == 88 );
 C_ASSERT( sizeof(process_id_t) == 4 );
 C_ASSERT( sizeof(property_data_t) == 16 );
 C_ASSERT( sizeof(rectangle_t) == 16 );
 C_ASSERT( sizeof(select_op_t) == 264 );
 C_ASSERT( sizeof(short int) == 2 );
-C_ASSERT( sizeof(startup_info_t) == 92 );
+C_ASSERT( sizeof(startup_info_t) == 96 );
 C_ASSERT( sizeof(struct filesystem_event) == 12 );
 C_ASSERT( sizeof(struct handle_info) == 20 );
 C_ASSERT( sizeof(struct luid) == 8 );
@@ -774,9 +778,8 @@ C_ASSERT( FIELD_OFFSET(struct init_process_done_request, teb) == 16 );
 C_ASSERT( FIELD_OFFSET(struct init_process_done_request, peb) == 24 );
 C_ASSERT( FIELD_OFFSET(struct init_process_done_request, ldt_copy) == 32 );
 C_ASSERT( sizeof(struct init_process_done_request) == 40 );
-C_ASSERT( FIELD_OFFSET(struct init_process_done_reply, entry) == 8 );
-C_ASSERT( FIELD_OFFSET(struct init_process_done_reply, suspend) == 16 );
-C_ASSERT( sizeof(struct init_process_done_reply) == 24 );
+C_ASSERT( FIELD_OFFSET(struct init_process_done_reply, suspend) == 8 );
+C_ASSERT( sizeof(struct init_process_done_reply) == 16 );
 C_ASSERT( FIELD_OFFSET(struct init_first_thread_request, unix_pid) == 12 );
 C_ASSERT( FIELD_OFFSET(struct init_first_thread_request, unix_tid) == 16 );
 C_ASSERT( FIELD_OFFSET(struct init_first_thread_request, debug_level) == 20 );
@@ -856,7 +859,7 @@ C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, exit_code) == 40 );
 C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, priority) == 44 );
 C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, last) == 48 );
 C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, suspend_count) == 52 );
-C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, dbg_hidden) == 56 );
+C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, flags) == 56 );
 C_ASSERT( FIELD_OFFSET(struct get_thread_info_reply, desc_len) == 60 );
 C_ASSERT( sizeof(struct get_thread_info_reply) == 64 );
 C_ASSERT( FIELD_OFFSET(struct get_thread_times_request, handle) == 12 );
@@ -1141,6 +1144,10 @@ C_ASSERT( FIELD_OFFSET(struct get_mapping_info_reply, flags) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_mapping_info_reply, shared_file) == 20 );
 C_ASSERT( FIELD_OFFSET(struct get_mapping_info_reply, total) == 24 );
 C_ASSERT( sizeof(struct get_mapping_info_reply) == 32 );
+C_ASSERT( FIELD_OFFSET(struct get_image_map_address_request, handle) == 12 );
+C_ASSERT( sizeof(struct get_image_map_address_request) == 16 );
+C_ASSERT( FIELD_OFFSET(struct get_image_map_address_reply, addr) == 8 );
+C_ASSERT( sizeof(struct get_image_map_address_reply) == 16 );
 C_ASSERT( FIELD_OFFSET(struct map_view_request, mapping) == 12 );
 C_ASSERT( FIELD_OFFSET(struct map_view_request, access) == 16 );
 C_ASSERT( FIELD_OFFSET(struct map_view_request, base) == 24 );
@@ -1970,6 +1977,17 @@ C_ASSERT( FIELD_OFFSET(struct add_clipboard_listener_request, window) == 12 );
 C_ASSERT( sizeof(struct add_clipboard_listener_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct remove_clipboard_listener_request, window) == 12 );
 C_ASSERT( sizeof(struct remove_clipboard_listener_request) == 16 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, token_id) == 12 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, access) == 20 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, primary) == 24 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, impersonation_level) == 28 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, expire) == 32 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, group_count) == 40 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, primary_group) == 44 );
+C_ASSERT( FIELD_OFFSET(struct create_token_request, priv_count) == 48 );
+C_ASSERT( sizeof(struct create_token_request) == 56 );
+C_ASSERT( FIELD_OFFSET(struct create_token_reply, token) == 8 );
+C_ASSERT( sizeof(struct create_token_reply) == 16 );
 C_ASSERT( FIELD_OFFSET(struct open_token_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct open_token_request, access) == 16 );
 C_ASSERT( FIELD_OFFSET(struct open_token_request, attributes) == 20 );
@@ -2228,7 +2246,7 @@ C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, rootdir) == 16 );
 C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, namelen) == 20 );
 C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, link) == 24 );
-C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, replace) == 28 );
+C_ASSERT( FIELD_OFFSET(struct set_fd_name_info_request, flags) == 28 );
 C_ASSERT( sizeof(struct set_fd_name_info_request) == 32 );
 C_ASSERT( FIELD_OFFSET(struct set_fd_eof_info_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct set_fd_eof_info_request, eof) == 16 );

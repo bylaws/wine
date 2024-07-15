@@ -433,7 +433,7 @@ static LRESULT WINAPI ime_ui_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LP
     case WM_IME_CONTROL:
         FIXME( "hwnd %p, himc %p, msg %s, wparam %s, lparam %#Ix stub!\n", hwnd, himc,
                debugstr_wm_ime(msg), debugstr_imc(wparam), lparam );
-        return 1;
+        return 0;
     }
 
     return DefWindowProcW( hwnd, msg, wparam, lparam );
@@ -696,7 +696,8 @@ BOOL WINAPI NotifyIME( HIMC himc, DWORD action, DWORD index, DWORD value )
         }
         case CPS_CANCEL:
             input_context_set_comp_str( ctx, NULL, 0 );
-            ImmSetOpenStatus( himc, FALSE );
+            if ((msg = ime_set_composition_status( himc, FALSE ))) ime_send_message( himc, msg, 0, 0 );
+            NtUserNotifyIMEStatus( ctx->hWnd, FALSE );
             break;
         default:
             FIXME( "himc %p, action %#lx, index %#lx, value %#lx stub!\n", himc, action, index, value );

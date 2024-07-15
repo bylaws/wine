@@ -21,6 +21,9 @@
 
 #define COBJMACROS
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+
 #include <wchar.h>
 
 #include <audiopolicy.h>
@@ -40,12 +43,12 @@ typedef struct tagLANGANDCODEPAGE
     WORD wCodePage;
 } LANGANDCODEPAGE;
 
-extern void sessions_lock(void) DECLSPEC_HIDDEN;
-extern void sessions_unlock(void) DECLSPEC_HIDDEN;
+extern void sessions_lock(void);
+extern void sessions_unlock(void);
 
 extern HRESULT get_audio_session(const GUID *sessionguid, IMMDevice *device, UINT channels,
-                                 struct audio_session **out) DECLSPEC_HIDDEN;
-extern struct audio_session_wrapper *session_wrapper_create(struct audio_client *client) DECLSPEC_HIDDEN;
+                                 struct audio_session **out);
+extern struct audio_session_wrapper *session_wrapper_create(struct audio_client *client);
 
 static HANDLE main_loop_thread;
 
@@ -87,6 +90,11 @@ static inline struct audio_client *impl_from_IAudioClock(IAudioClock *iface)
 static inline struct audio_client *impl_from_IAudioClock2(IAudioClock2 *iface)
 {
     return CONTAINING_RECORD(iface, struct audio_client, IAudioClock2_iface);
+}
+
+static inline ACImpl *impl_from_IAudioClockAdjustment(IAudioClockAdjustment *iface)
+{
+    return CONTAINING_RECORD(iface, ACImpl, IAudioClockAdjustment_iface);
 }
 
 static inline struct audio_client *impl_from_IAudioRenderClient(IAudioRenderClient *iface)
@@ -407,6 +415,8 @@ const IAudioCaptureClientVtbl AudioCaptureClient_Vtbl =
 
 static HRESULT WINAPI client_QueryInterface(IAudioClient3 *iface, REFIID riid, void **ppv)
 {
+    struct audio_client *This = impl_from_IAudioClient3(iface);
+
     TRACE("(%p)->(%s, %p)\n", iface, debugstr_guid(riid), ppv);
 
     if (!ppv)
@@ -417,6 +427,8 @@ static HRESULT WINAPI client_QueryInterface(IAudioClient3 *iface, REFIID riid, v
         IsEqualIID(riid, &IID_IAudioClient2) ||
         IsEqualIID(riid, &IID_IAudioClient3))
         *ppv = iface;
+    else if (IsEqualIID(riid, &IID_IAudioClockAdjustment))
+        *ppv = &This->IAudioClockAdjustment_iface;
     else if(IsEqualIID(riid, &IID_IMarshal)) {
         struct audio_client *This = impl_from_IAudioClient3(iface);
         return IUnknown_QueryInterface(This->marshal, riid, ppv);
@@ -460,7 +472,8 @@ static ULONG WINAPI client_Release(IAudioClient3 *iface)
         if (This->stream)
             stream_release(This->stream, This->timer_thread);
 
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This->device_name);
+        free(This);
     }
 
     return ref;
@@ -512,6 +525,42 @@ static HRESULT WINAPI client_Initialize(IAudioClient3 *iface, AUDCLNT_SHAREMODE 
     if (FAILED(params.result = main_loop_start())) {
         sessions_unlock();
         return params.result;
+    }
+
+    if (flags & AUDCLNT_STREAMFLAGS_LOOPBACK)
+    {
+        struct get_loopback_capture_device_params params;
+
+        if (This->dataflow != eRender)
+        {
+            sessions_unlock();
+            return AUDCLNT_E_WRONG_ENDPOINT_TYPE;
+        }
+
+        params.device = This->device_name;
+        params.name = name = get_application_name();
+        params.ret_device_len = 0;
+        params.ret_device = NULL;
+        params.result = E_NOTIMPL;
+        wine_unix_call(get_loopback_capture_device, &params);
+        while (params.result == STATUS_BUFFER_TOO_SMALL)
+        {
+            free(params.ret_device);
+            params.ret_device = malloc(params.ret_device_len);
+            wine_unix_call(get_loopback_capture_device, &params);
+        }
+        free(name);
+        if (FAILED(params.result))
+        {
+            sessions_unlock();
+            free(params.ret_device);
+            if (params.result == E_NOTIMPL)
+                FIXME("get_loopback_capture_device is not supported by backend.\n");
+            return params.result;
+        }
+        free(This->device_name);
+        This->device_name = params.ret_device;
+        This->dataflow = eCapture;
     }
 
     params.name = name   = get_application_name();
@@ -1131,6 +1180,52 @@ const IAudioClock2Vtbl AudioClock2_Vtbl =
     clock2_GetDevicePosition
 };
 
+static HRESULT WINAPI AudioClockAdjustment_QueryInterface(IAudioClockAdjustment *iface,
+        REFIID riid, void **ppv)
+{
+    ACImpl *This = impl_from_IAudioClockAdjustment(iface);
+    return IAudioClock_QueryInterface(&This->IAudioClock_iface, riid, ppv);
+}
+
+static ULONG WINAPI AudioClockAdjustment_AddRef(IAudioClockAdjustment *iface)
+{
+    ACImpl *This = impl_from_IAudioClockAdjustment(iface);
+    return IAudioClient_AddRef((IAudioClient *)&This->IAudioClient3_iface);
+}
+
+static ULONG WINAPI AudioClockAdjustment_Release(IAudioClockAdjustment *iface)
+{
+    ACImpl *This = impl_from_IAudioClockAdjustment(iface);
+    return IAudioClient_Release((IAudioClient *)&This->IAudioClient3_iface);
+}
+
+static HRESULT WINAPI AudioClockAdjustment_SetSampleRate(IAudioClockAdjustment *iface,
+        float new_rate)
+{
+    ACImpl *This = impl_from_IAudioClockAdjustment(iface);
+    struct set_sample_rate_params params;
+
+    TRACE("(%p)->(%f)\n", This, new_rate);
+
+    if (!This->stream)
+        return AUDCLNT_E_NOT_INITIALIZED;
+
+    params.stream = This->stream;
+    params.new_rate = new_rate;
+
+    wine_unix_call(set_sample_rate, &params);
+
+    return params.result;
+}
+
+const IAudioClockAdjustmentVtbl AudioClockAdjustment_Vtbl =
+{
+    AudioClockAdjustment_QueryInterface,
+    AudioClockAdjustment_AddRef,
+    AudioClockAdjustment_Release,
+    AudioClockAdjustment_SetSampleRate
+};
+
 static HRESULT WINAPI render_QueryInterface(IAudioRenderClient *iface, REFIID riid, void **ppv)
 {
     struct audio_client *This = impl_from_IAudioRenderClient(iface);
@@ -1388,7 +1483,6 @@ HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out)
     struct audio_client *This;
     char *name;
     EDataFlow dataflow;
-    size_t size;
     HRESULT hr;
 
     TRACE("%s %p %p\n", debugstr_guid(guid), device, out);
@@ -1403,20 +1497,19 @@ HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out)
         return E_UNEXPECTED;
     }
 
-    size = strlen(name) + 1;
-    This = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, FIELD_OFFSET(struct audio_client, device_name[size]));
+    This = calloc(1, sizeof(*This));
     if (!This) {
         free(name);
         return E_OUTOFMEMORY;
     }
 
-    memcpy(This->device_name, name, size);
-    free(name);
+    This->device_name = name;
 
     This->IAudioCaptureClient_iface.lpVtbl = &AudioCaptureClient_Vtbl;
     This->IAudioClient3_iface.lpVtbl       = &AudioClient3_Vtbl;
     This->IAudioClock_iface.lpVtbl         = &AudioClock_Vtbl;
     This->IAudioClock2_iface.lpVtbl        = &AudioClock2_Vtbl;
+    This->IAudioClockAdjustment_iface.lpVtbl = &AudioClockAdjustment_Vtbl;
     This->IAudioRenderClient_iface.lpVtbl  = &AudioRenderClient_Vtbl;
     This->IAudioStreamVolume_iface.lpVtbl  = &AudioStreamVolume_Vtbl;
 
@@ -1425,7 +1518,8 @@ HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out)
 
     hr = CoCreateFreeThreadedMarshaler((IUnknown *)&This->IAudioClient3_iface, &This->marshal);
     if (FAILED(hr)) {
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This->device_name);
+        free(This);
         return hr;
     }
 

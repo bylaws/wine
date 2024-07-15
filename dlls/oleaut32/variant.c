@@ -5401,7 +5401,6 @@ end:
  */
 HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
 {
-    BOOL         lOk        = TRUE;
     HRESULT      rc         = E_FAIL;
     int          resT = 0;
     VARIANT      lv,rv;
@@ -5411,6 +5410,7 @@ HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
     VariantInit(&tempRight);
     VariantInit(&lv);
     VariantInit(&rv);
+    V_VT(result) = VT_EMPTY;
 
     TRACE("(%s,%s,%p)\n", debugstr_variant(left), debugstr_variant(right), result);
 
@@ -5429,7 +5429,6 @@ HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
     }
 
     /* check for invalid inputs */
-    lOk = TRUE;
     switch (V_VT(left) & VT_TYPEMASK) {
     case VT_BOOL :
     case VT_I1   :
@@ -5501,6 +5500,7 @@ HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
       if(V_VT(left) == VT_EMPTY)
       {
 	V_VT(result) = VT_I4;
+        V_I4(result) = 0;
         rc = S_OK;
         goto end;
       }
@@ -5531,15 +5531,10 @@ HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
       {
 	V_VT(result) = VT_EMPTY;
         rc = DISP_E_BADVARTYPE;
-      } else if((V_VT(left) == VT_NULL) || (V_VT(left) == VT_EMPTY) || (V_VT(left) == VT_ERROR) ||
-		lOk)
+      } else
       {
         V_VT(result) = VT_NULL;
         rc = S_OK;
-      } else
-      {
-	V_VT(result) = VT_NULL;
-        rc = DISP_E_BADVARTYPE;
       }
       goto end;
     case VT_VARIANT:
@@ -5551,7 +5546,7 @@ HRESULT WINAPI VarMod(LPVARIANT left, LPVARIANT right, LPVARIANT result)
       rc = DISP_E_TYPEMISMATCH;
       goto end;
     case VT_RECORD:
-      if((V_VT(left) == 15) || ((V_VT(left) >= 24) && (V_VT(left) <= 35)) || !lOk)
+      if((V_VT(left) == 15) || ((V_VT(left) >= 24) && (V_VT(left) <= 35)))
       {
 	V_VT(result) = VT_EMPTY;
         rc = DISP_E_BADVARTYPE;

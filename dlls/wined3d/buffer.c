@@ -23,6 +23,7 @@
  */
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 #include "wined3d_vk.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
@@ -69,38 +70,38 @@ static void buffer_invalidate_bo_range(struct wined3d_buffer *buffer, unsigned i
         goto invalidate_all;
     }
 
-    if (!wined3d_array_reserve((void **)&buffer->maps, &buffer->maps_size,
-            buffer->modified_areas + 1, sizeof(*buffer->maps)))
+    if (!wined3d_array_reserve((void **)&buffer->dirty_ranges, &buffer->dirty_ranges_capacity,
+            buffer->dirty_range_count + 1, sizeof(*buffer->dirty_ranges)))
     {
-        ERR("Failed to allocate maps array, invalidating entire buffer.\n");
+        ERR("Failed to allocate dirty ranges array, invalidating entire buffer.\n");
         goto invalidate_all;
     }
 
-    buffer->maps[buffer->modified_areas].offset = offset;
-    buffer->maps[buffer->modified_areas].size = size;
-    ++buffer->modified_areas;
+    buffer->dirty_ranges[buffer->dirty_range_count].offset = offset;
+    buffer->dirty_ranges[buffer->dirty_range_count].size = size;
+    ++buffer->dirty_range_count;
     return;
 
 invalidate_all:
-    buffer->modified_areas = 1;
-    buffer->maps[0].offset = 0;
-    buffer->maps[0].size = buffer->resource.size;
+    buffer->dirty_range_count = 1;
+    buffer->dirty_ranges[0].offset = 0;
+    buffer->dirty_ranges[0].size = buffer->resource.size;
 }
 
-static inline void buffer_clear_dirty_areas(struct wined3d_buffer *This)
+static inline void buffer_clear_dirty_areas(struct wined3d_buffer *buffer)
 {
-    This->modified_areas = 0;
+    buffer->dirty_range_count = 0;
 }
 
 static BOOL buffer_is_dirty(const struct wined3d_buffer *buffer)
 {
-    return !!buffer->modified_areas;
+    return !!buffer->dirty_range_count;
 }
 
 static BOOL buffer_is_fully_dirty(const struct wined3d_buffer *buffer)
 {
-    return buffer->modified_areas == 1
-            && !buffer->maps->offset && buffer->maps->size == buffer->resource.size;
+    return buffer->dirty_range_count == 1
+            && !buffer->dirty_ranges[0].offset && buffer->dirty_ranges[0].size == buffer->resource.size;
 }
 
 void wined3d_buffer_validate_location(struct wined3d_buffer *buffer, uint32_t location)
@@ -121,7 +122,7 @@ static void wined3d_buffer_invalidate_range(struct wined3d_buffer *buffer, DWORD
     TRACE("buffer %p, location %s, offset %u, size %u.\n",
             buffer, wined3d_debug_location(location), offset, size);
 
-    if (location & WINED3D_LOCATION_BUFFER)
+    if ((location & WINED3D_LOCATION_BUFFER) && (buffer->flags & WINED3D_BUFFER_USE_BO))
         buffer_invalidate_bo_range(buffer, offset, size);
 
     buffer->locations &= ~location;
@@ -533,10 +534,10 @@ static void buffer_conversion_upload(struct wined3d_buffer *buffer, struct wined
         return;
     }
 
-    for (range_idx = 0; range_idx < buffer->modified_areas; ++range_idx)
+    for (range_idx = 0; range_idx < buffer->dirty_range_count; ++range_idx)
     {
-        start = buffer->maps[range_idx].offset;
-        end = start + buffer->maps[range_idx].size;
+        start = buffer->dirty_ranges[range_idx].offset;
+        end = start + buffer->dirty_ranges[range_idx].size;
 
         memcpy(data + start, (BYTE *)buffer->resource.heap_memory + start, end - start);
         for (i = start / buffer->stride; i < min((end / buffer->stride) + 1, vertex_count); ++i)
@@ -567,7 +568,8 @@ static void buffer_conversion_upload(struct wined3d_buffer *buffer, struct wined
     dst.addr = NULL;
     src.buffer_object = NULL;
     src.addr = data;
-    wined3d_context_copy_bo_address(context, &dst, &src, buffer->modified_areas, buffer->maps, WINED3D_MAP_WRITE);
+    wined3d_context_copy_bo_address(context, &dst, &src,
+            buffer->dirty_range_count, buffer->dirty_ranges, WINED3D_MAP_WRITE);
 
     heap_free(data);
 }
@@ -656,11 +658,11 @@ BOOL wined3d_buffer_load_location(struct wined3d_buffer *buffer,
             {
                 uint32_t map_flags = WINED3D_MAP_WRITE;
 
-                if (buffer->modified_areas == 1 && !buffer->maps[0].offset
-                        && buffer->maps[0].size == buffer->resource.size)
+                if (buffer_is_fully_dirty(buffer))
                     map_flags |= WINED3D_MAP_DISCARD;
 
-                wined3d_context_copy_bo_address(context, &dst, &src, buffer->modified_areas, buffer->maps, map_flags);
+                wined3d_context_copy_bo_address(context, &dst, &src,
+                        buffer->dirty_range_count, buffer->dirty_ranges, map_flags);
             }
             else
             {
@@ -775,7 +777,7 @@ static void wined3d_buffer_destroy_object(void *object)
         context_release(context);
     }
     heap_free(buffer->conversion_map);
-    heap_free(buffer->maps);
+    heap_free(buffer->dirty_ranges);
 }
 
 void wined3d_buffer_cleanup(struct wined3d_buffer *buffer)
@@ -1078,7 +1080,6 @@ static HRESULT buffer_resource_sub_resource_map(struct wined3d_resource *resourc
 static HRESULT buffer_resource_sub_resource_unmap(struct wined3d_resource *resource, unsigned int sub_resource_idx)
 {
     struct wined3d_buffer *buffer = buffer_from_resource(resource);
-    unsigned int range_count = buffer->modified_areas;
     struct wined3d_device *device = resource->device;
     struct wined3d_context *context;
     struct wined3d_bo_address addr;
@@ -1111,7 +1112,7 @@ static HRESULT buffer_resource_sub_resource_unmap(struct wined3d_resource *resou
 
     addr.buffer_object = buffer->buffer_object;
     addr.addr = 0;
-    wined3d_context_unmap_bo_address(context, &addr, range_count, buffer->maps);
+    wined3d_context_unmap_bo_address(context, &addr, buffer->dirty_range_count, buffer->dirty_ranges);
 
     context_release(context);
 
@@ -1368,7 +1369,7 @@ static HRESULT wined3d_buffer_init(struct wined3d_buffer *buffer, struct wined3d
         access |= WINED3D_RESOURCE_ACCESS_MAP_W;
 
     if (FAILED(hr = resource_init(resource, device, WINED3D_RTYPE_BUFFER, format,
-            WINED3D_MULTISAMPLE_NONE, 0, desc->usage, desc->bind_flags, access,
+            WINED3D_MULTISAMPLE_NONE, 0, desc->usage & ~WINED3DUSAGE_PRIVATE, desc->bind_flags, access,
             desc->byte_width, 1, 1, desc->byte_width, parent, parent_ops, &buffer_resource_ops)))
     {
         WARN("Failed to initialize resource, hr %#lx.\n", hr);
@@ -1381,8 +1382,8 @@ static HRESULT wined3d_buffer_init(struct wined3d_buffer *buffer, struct wined3d
     TRACE("buffer %p, size %#x, usage %#x, memory @ %p.\n",
             buffer, buffer->resource.size, buffer->resource.usage, buffer->resource.heap_memory);
 
-    if (device->create_parms.flags & WINED3DCREATE_SOFTWARE_VERTEXPROCESSING
-            || (desc->usage & WINED3DUSAGE_MANAGED))
+    if (!(desc->usage & WINED3DUSAGE_PRIVATE) && (device->create_parms.flags & WINED3DCREATE_SOFTWARE_VERTEXPROCESSING
+            || (desc->usage & WINED3DUSAGE_MANAGED)))
     {
         /* SWvp and managed buffers always return the same pointer in buffer
          * maps and retain data in DISCARD maps. Keep a system memory copy of
@@ -1398,7 +1399,8 @@ static HRESULT wined3d_buffer_init(struct wined3d_buffer *buffer, struct wined3d
             return E_OUTOFMEMORY;
     }
 
-    if (!(buffer->maps = heap_alloc(sizeof(*buffer->maps))))
+    if ((buffer->flags & WINED3D_BUFFER_USE_BO) && !wined3d_array_reserve((void **)&buffer->dirty_ranges,
+            &buffer->dirty_ranges_capacity, 1, sizeof(*buffer->dirty_ranges)))
     {
         ERR("Out of memory.\n");
         buffer_resource_unload(resource);
@@ -1406,7 +1408,6 @@ static HRESULT wined3d_buffer_init(struct wined3d_buffer *buffer, struct wined3d
         wined3d_resource_wait_idle(resource);
         return E_OUTOFMEMORY;
     }
-    buffer->maps_size = 1;
 
     if (buffer->locations & WINED3D_LOCATION_DISCARDED)
         buffer->resource.client.addr.buffer_object = CLIENT_BO_DISCARDED;
@@ -1759,7 +1760,7 @@ static HRESULT wined3d_streaming_buffer_prepare(struct wined3d_device *device,
     TRACE("Growing buffer to %u bytes.\n", size);
 
     desc.byte_width = size;
-    desc.usage = WINED3DUSAGE_DYNAMIC;
+    desc.usage = WINED3DUSAGE_DYNAMIC | WINED3DUSAGE_PRIVATE;
     desc.bind_flags = buffer->bind_flags;
     desc.access = WINED3D_RESOURCE_ACCESS_GPU | WINED3D_RESOURCE_ACCESS_MAP_W;
     desc.misc_flags = 0;

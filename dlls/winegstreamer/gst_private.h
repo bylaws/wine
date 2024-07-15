@@ -35,6 +35,7 @@
 #include "mfidl.h"
 #include "wine/debug.h"
 #include "wine/strmbase.h"
+#include "wine/mfinternal.h"
 
 #include "unixlib.h"
 
@@ -69,10 +70,10 @@ HRESULT wg_sample_queue_create(struct wg_sample_queue **out);
 void wg_sample_queue_destroy(struct wg_sample_queue *queue);
 void wg_sample_queue_flush(struct wg_sample_queue *queue, bool all);
 
-wg_parser_t wg_parser_create(enum wg_parser_type type);
+wg_parser_t wg_parser_create(enum wg_parser_type type, bool output_compressed, bool use_opengl);
 void wg_parser_destroy(wg_parser_t parser);
 
-HRESULT wg_parser_connect(wg_parser_t parser, uint64_t file_size);
+HRESULT wg_parser_connect(wg_parser_t parser, uint64_t file_size, const WCHAR *uri);
 void wg_parser_disconnect(wg_parser_t parser);
 
 bool wg_parser_get_next_read_offset(wg_parser_t parser, uint64_t *offset, uint32_t *size);
@@ -81,8 +82,10 @@ void wg_parser_push_data(wg_parser_t parser, const void *data, uint32_t size);
 uint32_t wg_parser_get_stream_count(wg_parser_t parser);
 wg_parser_stream_t wg_parser_get_stream(wg_parser_t parser, uint32_t index);
 
-void wg_parser_stream_get_preferred_format(wg_parser_stream_t stream, struct wg_format *format);
+void wg_parser_stream_get_current_format(wg_parser_stream_t stream, struct wg_format *format);
+HRESULT wg_parser_stream_get_current_type_mf(wg_parser_stream_t stream, IMFMediaType **media_type);
 void wg_parser_stream_get_codec_format(wg_parser_stream_t stream, struct wg_format *format);
+HRESULT wg_parser_stream_enable_mf(wg_parser_stream_t stream, IMFMediaType *media_type);
 void wg_parser_stream_enable(wg_parser_stream_t stream, const struct wg_format *format);
 void wg_parser_stream_disable(wg_parser_stream_t stream);
 
@@ -101,19 +104,52 @@ char *wg_parser_stream_get_tag(wg_parser_stream_t stream, enum wg_parser_tag tag
 void wg_parser_stream_seek(wg_parser_stream_t stream, double rate,
         uint64_t start_pos, uint64_t stop_pos, DWORD start_flags, DWORD stop_flags);
 
-wg_transform_t wg_transform_create(const struct wg_format *input_format,
-        const struct wg_format *output_format, const struct wg_transform_attrs *attrs);
+HRESULT wg_source_create(const WCHAR *url, uint64_t file_size,
+        const void *data, uint32_t size, WCHAR mime_type[256],
+        wg_source_t *out);
+void wg_source_destroy(wg_source_t source);
+HRESULT wg_source_get_stream_count(wg_source_t source, uint32_t *stream_count);
+HRESULT wg_source_get_duration(wg_source_t source, uint64_t *duration);
+HRESULT wg_source_set_position(wg_source_t source, uint64_t time);
+HRESULT wg_source_get_position(wg_source_t source, uint64_t *read_offset);
+HRESULT wg_source_push_data(wg_source_t source, UINT64 offset, const void *data, uint32_t size);
+HRESULT wg_source_read_data(wg_source_t source, UINT32 index, IMFSample **out);
+HRESULT wg_source_get_stream_type(wg_source_t source, UINT32 index, IMFMediaType **media_type);
+char *wg_source_get_stream_tag(wg_source_t source, UINT32 index,
+        wg_parser_tag tag);
+void wg_source_set_stream_flags(wg_source_t source, UINT32 index, BOOL select);
+
+HRESULT wg_transform_create_mf(IMFMediaType *input_type, IMFMediaType *output_type,
+        const struct wg_transform_attrs *attrs, wg_transform_t *transform);
+HRESULT wg_transform_create_quartz(const AM_MEDIA_TYPE *input_format, const AM_MEDIA_TYPE *output_format,
+        const struct wg_transform_attrs *attrs, wg_transform_t *transform);
 void wg_transform_destroy(wg_transform_t transform);
-bool wg_transform_set_output_format(wg_transform_t transform, struct wg_format *format);
+HRESULT wg_transform_get_output_type(wg_transform_t transform, IMFMediaType **media_type);
+HRESULT wg_transform_set_output_type(wg_transform_t transform, IMFMediaType *media_type);
 bool wg_transform_get_status(wg_transform_t transform, bool *accepts_input);
 HRESULT wg_transform_drain(wg_transform_t transform);
 HRESULT wg_transform_flush(wg_transform_t transform);
+void wg_transform_notify_qos(wg_transform_t transform,
+        bool underflow, double proportion, int64_t diff, uint64_t timestamp);
 
+HRESULT check_audio_transform_support(const WAVEFORMATEX *input, const WAVEFORMATEX *output);
+HRESULT check_video_transform_support(const MFVIDEOFORMAT *input, const MFVIDEOFORMAT *output);
+
+HRESULT wg_muxer_create(const char *format, wg_muxer_t *muxer);
+void wg_muxer_destroy(wg_muxer_t muxer);
+HRESULT wg_muxer_add_stream(wg_muxer_t muxer, UINT32 stream_id, const struct wg_format *format);
+HRESULT wg_muxer_start(wg_muxer_t muxer);
+HRESULT wg_muxer_push_sample(wg_muxer_t muxer, struct wg_sample *sample, UINT32 stream_id);
+HRESULT wg_muxer_read_data(wg_muxer_t muxer, void *buffer, UINT32 *size, UINT64 *offset);
+HRESULT wg_muxer_finalize(wg_muxer_t muxer);
+
+unsigned int wg_format_get_bytes_for_uncompressed(wg_video_format format, unsigned int width, unsigned int height);
 unsigned int wg_format_get_max_size(const struct wg_format *format);
 
 HRESULT avi_splitter_create(IUnknown *outer, IUnknown **out);
 HRESULT decodebin_parser_create(IUnknown *outer, IUnknown **out);
 HRESULT mpeg_audio_codec_create(IUnknown *outer, IUnknown **out);
+HRESULT mpeg_video_codec_create(IUnknown *outer, IUnknown **out);
 HRESULT mpeg_layer3_decoder_create(IUnknown *outer, IUnknown **out);
 HRESULT mpeg_splitter_create(IUnknown *outer, IUnknown **out);
 HRESULT wave_parser_create(IUnknown *outer, IUnknown **out);
@@ -121,6 +157,8 @@ HRESULT wma_decoder_create(IUnknown *outer, IUnknown **out);
 HRESULT wmv_decoder_create(IUnknown *outer, IUnknown **out);
 HRESULT resampler_create(IUnknown *outer, IUnknown **out);
 HRESULT color_convert_create(IUnknown *outer, IUnknown **out);
+HRESULT mp3_sink_class_factory_create(IUnknown *outer, IUnknown **out);
+HRESULT mpeg4_sink_class_factory_create(IUnknown *outer, IUnknown **out);
 
 bool amt_from_wg_format(AM_MEDIA_TYPE *mt, const struct wg_format *format, bool wm);
 bool amt_to_wg_format(const AM_MEDIA_TYPE *mt, struct wg_format *format);
@@ -145,19 +183,29 @@ HRESULT wg_transform_push_quartz(wg_transform_t transform, struct wg_sample *sam
 HRESULT wg_transform_push_dmo(wg_transform_t transform, IMediaBuffer *media_buffer,
         DWORD flags, REFERENCE_TIME time_stamp, REFERENCE_TIME time_length, struct wg_sample_queue *queue);
 HRESULT wg_transform_read_mf(wg_transform_t transform, IMFSample *sample,
-        DWORD sample_size, struct wg_format *format, DWORD *flags);
+        DWORD sample_size, DWORD *flags);
 HRESULT wg_transform_read_quartz(wg_transform_t transform, struct wg_sample *sample);
 HRESULT wg_transform_read_dmo(wg_transform_t transform, DMO_OUTPUT_DATA_BUFFER *buffer);
 
+/* These unixlib entry points should not be used directly, they assume samples
+ * to be queued and zero-copy support, use the helpers below instead.
+ */
+HRESULT wg_transform_push_data(wg_transform_t transform, struct wg_sample *sample);
+HRESULT wg_transform_read_data(wg_transform_t transform, struct wg_sample *sample);
+
 HRESULT gstreamer_byte_stream_handler_create(REFIID riid, void **obj);
+HRESULT gstreamer_byte_stream_handler_2_create(REFIID riid, void **obj);
 
 unsigned int wg_format_get_stride(const struct wg_format *format);
 
 bool wg_video_format_is_rgb(enum wg_video_format format);
 
+HRESULT audio_decoder_create(REFIID riid, void **ret);
+HRESULT video_decoder_create(REFIID riid, void **ret);
 HRESULT aac_decoder_create(REFIID riid, void **ret);
 HRESULT h264_decoder_create(REFIID riid, void **ret);
 HRESULT video_processor_create(REFIID riid, void **ret);
+HRESULT gstreamer_scheme_handler_create(REFIID riid, void **ret);
 
 extern const GUID MFAudioFormat_RAW_AAC;
 

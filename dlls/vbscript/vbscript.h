@@ -187,6 +187,7 @@ struct vbcaller {
 
     LONG ref;
 
+    script_ctx_t *ctx;
     IServiceProvider *caller;
 };
 
@@ -278,6 +279,7 @@ typedef enum {
     X(not,            1, 0,           0)          \
     X(nothing,        1, 0,           0)          \
     X(null,           1, 0,           0)          \
+    X(numval,         1, 0,           0)          \
     X(or,             1, 0,           0)          \
     X(pop,            1, ARG_UINT,    0)          \
     X(redim,          1, ARG_BSTR,    ARG_UINT)   \

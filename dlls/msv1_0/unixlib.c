@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <spawn.h>
 #include <sys/wait.h>
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -39,8 +40,9 @@
 #include "wine/debug.h"
 #include "unixlib.h"
 
+extern char **environ;
+
 WINE_DEFAULT_DEBUG_CHANNEL(ntlm);
-WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
 #define INITIAL_BUFFER_SIZE 200
 
@@ -155,6 +157,7 @@ static NTSTATUS ntlm_fork( void *args )
 {
     const struct fork_params *params = args;
     struct ntlm_ctx *ctx = params->ctx;
+    posix_spawn_file_actions_t file_actions;
     int pipe_in[2], pipe_out[2];
 
 #ifdef HAVE_PIPE2
@@ -179,28 +182,28 @@ static NTSTATUS ntlm_fork( void *args )
         fcntl( pipe_out[1], F_SETFD, FD_CLOEXEC );
     }
 
-    if (!(ctx->pid = fork())) /* child */
+    posix_spawn_file_actions_init( &file_actions );
+
+    posix_spawn_file_actions_adddup2( &file_actions, pipe_out[0], 0 );
+    posix_spawn_file_actions_addclose( &file_actions, pipe_out[0] );
+    posix_spawn_file_actions_addclose( &file_actions, pipe_out[1] );
+
+    posix_spawn_file_actions_adddup2( &file_actions, pipe_in[1], 1 );
+    posix_spawn_file_actions_addclose( &file_actions, pipe_in[0] );
+    posix_spawn_file_actions_addclose( &file_actions, pipe_in[1] );
+
+    if (posix_spawnp( &ctx->pid, params->argv[0], &file_actions, NULL, params->argv, environ ))
     {
-        dup2( pipe_out[0], 0 );
-        close( pipe_out[0] );
-        close( pipe_out[1] );
-
-        dup2( pipe_in[1], 1 );
-        close( pipe_in[0] );
-        close( pipe_in[1] );
-
-        execvp( params->argv[0], params->argv );
-
-        write( 1, "BH\n", 3 );
-        _exit( 1 );
+        ctx->pid = -1;
+        write( pipe_in[1], "BH\n", 3 );
     }
-    else
-    {
-        ctx->pipe_in = pipe_in[0];
-        close( pipe_in[1] );
-        ctx->pipe_out = pipe_out[1];
-        close( pipe_out[0] );
-    }
+
+    ctx->pipe_in = pipe_in[0];
+    close( pipe_in[1] );
+    ctx->pipe_out = pipe_out[1];
+    close( pipe_out[0] );
+
+    posix_spawn_file_actions_destroy( &file_actions );
 
     return SEC_E_OK;
 }
@@ -229,7 +232,7 @@ static NTSTATUS ntlm_check_version( void *args )
         status = STATUS_SUCCESS;
     }
 
-    if (status) ERR_(winediag)( "ntlm_auth was not found. Make sure that ntlm_auth >= 3.0.25 is in your path. "
+    if (status) WARN( "ntlm_auth was not found. Make sure that ntlm_auth >= 3.0.25 is in your path. "
                                 "Usually, you can find it in the winbind package of your distribution.\n" );
     ntlm_cleanup( &ctx );
     return status;
@@ -242,6 +245,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     ntlm_fork,
     ntlm_check_version,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
 
 #ifdef _WIN64
 
@@ -300,5 +305,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     wow64_ntlm_fork,
     ntlm_check_version,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
 
 #endif  /* _WIN64 */

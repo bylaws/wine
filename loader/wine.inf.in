@@ -89,13 +89,17 @@ AddReg=\
     MCI,\
     Misc,\
     OLE,\
+    Packages,\
     Printing,\
     Services, \
     SessionMgr,\
     Tapi,\
     ThemeManager,\
     VersionInfo,\
-    LicenseInformation
+    LicenseInformation,\
+    NVIDIANGX, \
+    ProtonOverrides,\
+    SteamClient
 
 [DefaultInstall.ntamd64]
 RegisterDlls=RegisterDllsSection
@@ -114,13 +118,17 @@ AddReg=\
     MCI,\
     Misc,\
     OLE,\
+    Packages.ntamd64,\
     Printing,\
     Services, \
     SessionMgr,\
     Tapi,\
     ThemeManager,\
     VersionInfo,\
-    LicenseInformation
+    LicenseInformation,\
+    NVIDIANGX, \
+    ProtonOverrides,\
+    SteamClient.ntamd64
 
 [DefaultInstall.ntarm64]
 RegisterDlls=RegisterDllsSection
@@ -139,6 +147,7 @@ AddReg=\
     MCI,\
     Misc,\
     OLE,\
+    Packages.ntarm64,\
     Printing,\
     Services, \
     SessionMgr,\
@@ -158,9 +167,13 @@ AddReg=\
     DirectX,\
     MCI,\
     Misc,\
+    Packages.wow64,\
     Tapi,\
     VersionInfo,\
-    LicenseInformation
+    LicenseInformation,\
+    NVIDIANGX, \
+    ProtonOverrides,\
+    SteamClient.ntamd64
 
 [Wow64Install.ntarm]
 RegisterDlls=RegisterDllsSection
@@ -196,6 +209,7 @@ AddService=Winmgmt,0,WinmgmtService
 AddService=wuauserv,0,wuauService
 AddService=NDIS,0x800,NDISService
 AddService=nsiproxy,0x800,NsiProxyService
+AddService=SharedGpuResources,0x800,SharedGpuResourcesService
 
 [DefaultInstall.NT.Services]
 AddService=BITS,0,BITSService
@@ -216,6 +230,7 @@ AddService=Winmgmt,0,WinmgmtService
 AddService=wuauserv,0,wuauService
 AddService=NDIS,0x800,NDISService
 AddService=nsiproxy,0x800,NsiProxyService
+AddService=SharedGpuResources,0x800,SharedGpuResourcesService
 
 [DefaultInstall.ntamd64.Services]
 AddService=BITS,0,BITSService
@@ -236,6 +251,7 @@ AddService=Winmgmt,0,WinmgmtService
 AddService=wuauserv,0,wuauService
 AddService=NDIS,0x800,NDISService
 AddService=nsiproxy,0x800,NsiProxyService
+AddService=SharedGpuResources,0x800,SharedGpuResourcesService
 
 [DefaultInstall.ntarm64.Services]
 AddService=BITS,0,BITSService
@@ -256,6 +272,7 @@ AddService=Winmgmt,0,WinmgmtService
 AddService=wuauserv,0,wuauService
 AddService=NDIS,0x800,NDISService
 AddService=nsiproxy,0x800,NsiProxyService
+AddService=SharedGpuResources,0x800,SharedGpuResourcesService
 
 [Strings]
 MciExtStr="Software\Microsoft\Windows NT\CurrentVersion\MCI Extensions"
@@ -264,6 +281,8 @@ CurrentVersion="Software\Microsoft\Windows\CurrentVersion"
 CurrentVersionNT="Software\Microsoft\Windows NT\CurrentVersion"
 FontSubStr="Software\Microsoft\Windows NT\CurrentVersion\FontSubstitutes"
 Control="System\CurrentControlSet\Control"
+FontsNT="Software\Microsoft\Windows NT\CurrentVersion\Fonts"
+Packages="Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\PackageRepository\Packages"
 
 [Classes]
 HKCR,.chm,,2,"chm.file"
@@ -332,6 +351,7 @@ HKCR,ftp\shell\open\command,,2,"""%11%\winebrowser.exe"" ""%1"""
 HKCR,http\shell\open\command,,2,"""%11%\winebrowser.exe"" ""%1"""
 HKCR,https\shell\open\command,,2,"""%11%\winebrowser.exe"" ""%1"""
 HKCR,mailto\shell\open\command,,2,"""%11%\winebrowser.exe"" ""%1"""
+HKCR,steam\shell\open\command,,,"""%16426%\Steam\Steam.exe"" -- ""%1"""
 
 [ContentIndex]
 HKLM,System\CurrentControlSet\Control\ContentIndex\Language\Neutral,"WBreakerClass",,"{369647e0-17b0-11ce-9950-00aa004bbb1f}"
@@ -355,11 +375,12 @@ HKLM,System\CurrentControlSet\Control\Class\{745a17a0-74d3-11d0-b6fe-00a0c90f57d
 HKLM,System\CurrentControlSet\Control\Class\{745a17a0-74d3-11d0-b6fe-00a0c90f57da},"Class",,"HIDClass"
 
 [CurrentVersion]
+HKCU,%CurrentVersion%\Explorer\Advanced,,16
 HKCU,%CurrentVersion%\Run,,16
 HKCU,%CurrentVersionNT%\Winlogon,,16
 HKLM,%CurrentVersion%,"CommonFilesDir",,"%16427%"
 HKLM,%CurrentVersion%,"FirstInstallDateTime",1,21,81,7c,23
-HKLM,%CurrentVersion%,"ProductId",,"12345-oem-0000001-54321"
+HKLM,%CurrentVersion%,"ProductId",,"00330-50000-00000-AAOEM"
 HKLM,%CurrentVersion%,"ProgramFilesDir",,"%16422%"
 HKLM,%CurrentVersion%,"ProgramFilesPath",0x20000,"%%ProgramFiles%%"
 HKLM,%CurrentVersion%,"RegisteredOrganization",2,""
@@ -369,6 +390,7 @@ HKLM,%CurrentVersion%\Control Panel\Cursors\Schemes,,16
 HKLM,%CurrentVersion%\Controls Folder\PowerCfg,"DiskSpinDownMax",,"3600"
 HKLM,%CurrentVersion%\Controls Folder\PowerCfg,"DiskSpinDownMin",,"3"
 HKLM,%CurrentVersion%\Controls Folder\PowerCfg,"LastID",,"5"
+HKLM,%CurrentVersion%\Explorer\Advanced,,16
 HKLM,%CurrentVersion%\Explorer\AutoplayHandlers,,16
 HKLM,%CurrentVersion%\Explorer\DriveIcons,,16
 HKLM,%CurrentVersion%\Explorer\KindMap,,16
@@ -384,7 +406,7 @@ HKLM,%CurrentVersion%\Shell Extensions\Approved,,16
 HKLM,%CurrentVersion%\Time Zones,"SymbolicLinkValue",0x60000,"\Registry\Machine\%CurrentVersionNT%\Time Zones"
 HKLM,%CurrentVersion%\Uninstall,,16
 HKLM,%CurrentVersionNT%,"InstallDate",0x10003,1273299354
-HKLM,%CurrentVersionNT%,"ProductId",,"12345-oem-0000001-54321"
+HKLM,%CurrentVersionNT%,"ProductId",,"00330-50000-00000-AAOEM"
 HKLM,%CurrentVersionNT%,"RegisteredOrganization",2,""
 HKLM,%CurrentVersionNT%,"RegisteredOwner",2,""
 HKLM,%CurrentVersionNT%,"SystemRoot",,"%10%"
@@ -414,6 +436,9 @@ HKLM,%CurrentVersionNT%\Ports,,16
 HKLM,%CurrentVersionNT%\Print,,16
 HKLM,%CurrentVersionNT%\ProfileList,,16
 HKLM,%CurrentVersionNT%\Winlogon,"Shell",,"explorer.exe"
+;; App specific heap debug flags
+HKLM,%CurrentVersionNT%\Image File Execution Options\ChaosCode.exe,GlobalFlag,0x00040002,0x00000020
+HKLM,%CurrentVersionNT%\Image File Execution Options\Crysis2Remastered.exe,GlobalFlag,0x00040002,0x00000020
 
 [CurrentVersionWow64.ntamd64]
 HKLM,%CurrentVersion%,"ProgramFilesDir (x86)",,"%16426%"
@@ -426,7 +451,7 @@ HKLM,%CurrentVersion%,"CommonFilesDir (x86)",,"%16428%"
 HKLM,%CurrentVersion%,"ProgramFilesDir (Arm)",,"C:\Program Files (Arm)"
 HKLM,%CurrentVersion%,"CommonFilesDir (Arm)",,"C:\Program Files (Arm)\Common Files"
 HKLM,Software\Microsoft\Wow64\arm,,2,"wowarmhw.dll"
-HKLM,Software\Microsoft\Wow64\x86,,2,"xtajit.dll"
+HKLM,Software\Microsoft\Wow64\x86,,2,"libwow64fex.dll"
 
 [CurrentVersionWow64.ntx86]
 HKLM,%CurrentVersion%,"ProgramFilesDir (x86)",,"%16422%"
@@ -441,6 +466,7 @@ HKLM,%CurrentVersionNT%\AeDebug,"Debugger",2,"winedbg --auto %ld %ld"
 HKLM,%CurrentVersionNT%\AeDebug,"Auto",2,"1"
 HKCU,Software\Wine\Debug,"RelayExclude",2,"ntdll.RtlEnterCriticalSection;ntdll.RtlTryEnterCriticalSection;ntdll.RtlLeaveCriticalSection;kernel32.48;kernel32.49;kernel32.94;kernel32.95;kernel32.96;kernel32.97;kernel32.98;kernel32.TlsGetValue;kernel32.TlsSetValue;kernel32.FlsGetValue;kernel32.FlsSetValue;kernel32.SetLastError"
 HKCU,Software\Wine\Debug,"RelayFromExclude",2,"winex11.drv;winemac.drv;user32;gdi32;advapi32;kernel32"
+HKCU,Software\Wine\WineDbg,"ShowCrashDialog",0x00010003,0x00000000
 
 [DirectX]
 HKLM,Software\Microsoft\DirectX,"Version",,"4.09.00.0904"
@@ -490,6 +516,51 @@ HKLM,%Control%\Session Manager\Environment,"windir",0x00020000,"%SystemRoot%"
 HKLM,%Control%\Session Manager\Environment,"winsysdir",,"%11%"
 HKLM,%Control%\Session Manager\Memory Management,PagingFiles,,"%24%\pagefile.sys 27 77"
 HKLM,%Control%\Session Manager\Memory Management,WriteWatch,0x00040002,1
+;;KnownDLLs
+HKLM,%Control%\Session Manager\KnownDLLs,"_wow64cpu",,"wow64cpu.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"_wowarmhw",,"wowarmhw.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"_xtajit",,"_xtajit.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"advapi32",,"advapi32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"clbcatq",,"clbcatq.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"combase",,"combase.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"COMDLG32",,"COMDLG32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"coml2",,"coml2.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"DifxApi",,"difxapi.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"gdi32",,"gdi32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"gdiplus",,"gdiplus.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"IMAGEHLP",,"IMAGEHLP.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"IMM32",,"IMM32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"kernel32",,"kernel32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"MSCTF",,"MSCTF.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"MSVCRT",,"MSVCRT.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"NORMALIZ",,"NORMALIZ.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"NSI",,"NSI.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"ole32",,"ole32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"OLEAUT32",,"OLEAUT32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"PSAPI",,"PSAPI.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"rpcrt4",,"rpcrt4.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"sechost",,"sechost.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"Setupapi",,"Setupapi.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"SHCORE",,"SHCORE.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"SHELL32",,"SHELL32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"SHLWAPI",,"SHLWAPI.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"user32",,"user32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"wow64",,"wow64.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"wow64win",,"wow64win.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"WS2_32",,"WS2_32.dll"
+;;KnownDLLs not present in registry on Windows but present in \\KnownDLLs directory
+HKLM,%Control%\Session Manager\KnownDLLs,"ucrtbase",,"ucrtbase.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"msvcp_win",,"msvcp_win.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"bcrypt",,"bcrypt.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"COMCTL32",,"COMCTL32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"cfgmgr32",,"cfgmgr32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"ntdll",,"ntdll.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"bcryptPrimitives",,"bcryptPrimitives.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"win32u",,"win32u.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"gdi32full",,"gdi32full.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"WINTRUST",,"WINTRUST.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"CRYPT32",,"CRYPT32.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"WLDAP32",,"WLDAP32.dll"
 
 [Fonts]
 HKLM,%FontSubStr%,"Arial Baltic,186",,"Arial,186"
@@ -512,6 +583,29 @@ HKLM,%FontSubStr%,"Times New Roman CYR,204",,"Times New Roman,204"
 HKLM,%FontSubStr%,"Times New Roman Greek,161",,"Times New Roman,161"
 HKLM,%FontSubStr%,"Times New Roman TUR,162",,"Times New Roman,162"
 HKLM,System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts,"LogPixels",0x10003,0x00000060
+HKLM,%FontsNT%,"Arial (TrueType)",,"arial.ttf"
+HKLM,%FontsNT%,"Arial Bold (TrueType)",,"arialbd.ttf"
+HKLM,%FontsNT%,"Courier New (TrueType)",,"cour.ttf"
+HKLM,%FontsNT%,"Courier New Bold (TrueType)",,"courbd.ttf"
+HKLM,%FontsNT%,"Malgun Gothic (TrueType)",,"malgun.ttf"
+HKLM,%FontsNT%,"Marlett (TrueType)",,"marlett.ttf"
+HKLM,%FontsNT%,"Microsoft Sans Serif (TrueType)",,"micross.ttf"
+HKLM,%FontsNT%,"MS Gothic (TrueType)",,"msgothic.ttc"
+HKLM,%FontsNT%,"MS PGothic (TrueType)",,"msgothic.ttc"
+HKLM,%FontsNT%,"MS UI Gothic (TrueType)",,"msgothic.ttc"
+HKLM,%FontsNT%,"Microsoft YaHei (TrueType)",,"msyh.ttf"
+HKLM,%FontsNT%,"Nirmala UI (TrueType)",,"nirmala.ttf"
+HKLM,%FontsNT%,"SimSun (TrueType)",,"simsun.ttc"
+HKLM,%FontsNT%,"NSimSun (TrueType)",,"simsun.ttc"
+HKLM,%FontsNT%,"Symbol (TrueType)",,"symbol.ttf"
+HKLM,%FontsNT%,"Tahoma (TrueType)",,"tahoma.ttf"
+HKLM,%FontsNT%,"Tahoma Bold (TrueType)",,"tahomabd.ttf"
+HKLM,%FontsNT%,"Times New Roman (TrueType)",,"times.ttf"
+HKLM,%FontsNT%,"Webdings (TrueType)",,"webdings.ttf"
+HKLM,%FontsNT%,"Wingdings (TrueType)",,"wingdings.ttf"
+HKCU,Software\Wine\Fonts\Replacements,"Palatino Linotype",,"Times New Roman"
+HKCU,Software\Wine\Fonts\Replacements,"Verdana",,"Times New Roman"
+HKCU,Software\Wine\Fonts\Replacements,"Segoe UI",,"Times New Roman"
 
 [MCI]
 HKLM,%Mci32Str%,"AVIVideo",,"mciavi32.dll"
@@ -631,6 +725,18 @@ HKCU,Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserCho
 [OLE]
 HKLM,"Software\Microsoft\OLE","EnableDCOM",,"Y"
 HKLM,"Software\Microsoft\OLE","EnableRemoteConnect",,"N"
+
+[Packages]
+HKLM,"%Packages%\Microsoft.VCLibs.140.00_14.0.29231.0_x86__8wekyb3d8bbwe","Path",0x00020002,"%SystemRoot%\system32"
+
+[Packages.ntamd64]
+HKLM,"%Packages%\Microsoft.VCLibs.140.00_14.0.29231.0_x64__8wekyb3d8bbwe","Path",0x00020002,"%SystemRoot%\system32"
+
+[Packages.wow64]
+HKLM,"%Packages%\Microsoft.VCLibs.140.00_14.0.29231.0_x86__8wekyb3d8bbwe","Path",0x00020002,"%SystemRoot%\syswow64"
+
+[Packages.arm64]
+HKLM,"%Packages%\Microsoft.VCLibs.140.00_14.0.29231.0_arm64__8wekyb3d8bbwe","Path",0x00020002,"%SystemRoot%\system32"
 
 [Printing]
 HKLM,%Control%\Print\Monitors\Local Port,"Driver",2,"localspl.dll"
@@ -2145,6 +2251,7 @@ HKLM,%CurrentVersion%\Telephony\Country List\998,"SameAreaRule",,"G"
 11,mui,
 11,gecko\plugin,npmshtml.dll
 11,Speech\Common,sapi.dll
+11,Speech\Engines\TTS,msttsengine.dll
 11,wbem,mofcomp.exe
 11,wbem,wbemdisp.dll
 11,wbem,wbemprox.dll
@@ -2230,6 +2337,7 @@ HKLM,%CurrentVersion%\Telephony\Country List\998,"SameAreaRule",,"G"
 11,,shdocvw.dll
 11,gecko\plugin,npmshtml.dll
 11,Speech\Common,sapi.dll
+11,Speech\Engines\TTS,msttsengine.dll
 11,wbem,mofcomp.exe
 11,wbem,wbemdisp.dll
 11,wbem,wbemprox.dll
@@ -2346,6 +2454,15 @@ LoadOrderGroup="System Bus Extender"
 [NsiProxyServiceKeys]
 HKR,,"Tag",0x10001,1
 
+[SharedGpuResourcesService]
+Description="Shared GPU Resources Manager Service"
+DisplayName="Shared GPU Resources Manager"
+ServiceBinary="%12%\sharedgpures.sys"
+ServiceType=1
+StartType=2
+ErrorControl=1
+LoadOrderGroup="System Bus Extender"
+
 [RpcSsService]
 Description="RPC service"
 DisplayName="Remote Procedure Call (RPC)"
@@ -2448,12 +2565,12 @@ Description="Lanman Server"
 DisplayName="Lanman Server"
 ServiceBinary="%11%\svchost.exe -k netsvcs"
 ServiceType=32
-StartType=4
+StartType=3
 ErrorControl=1
 
 [LanmanServerServiceKeys]
 HKR,Parameters,"ServiceDll",,"%11%\srvsvc.dll"
-;; HKLM,%CurrentVersionNT%\SvcHost,"netsvcs",0x00010008,"lanmanserver"
+HKLM,%CurrentVersionNT%\SvcHost,"netsvcs",0x00010008,"lanmanserver"
 
 [FontCacheService]
 AddReg=FontCacheServiceKeys
@@ -2490,7 +2607,6 @@ StartType=3
 ErrorControl=1
 
 [Services]
-HKLM,%CurrentVersion%\RunServices,"winemenubuilder",2,"%11%\winemenubuilder.exe -a -r"
 HKLM,"System\CurrentControlSet\Services\Eventlog\Application",,16
 HKLM,"System\CurrentControlSet\Services\Eventlog\System","Sources",0x10000,""
 HKLM,"System\CurrentControlSet\Services\Tcpip\Parameters","DataBasePath",,"%12%\etc"
@@ -2502,18 +2618,21 @@ HKLM,"System\CurrentControlSet\Services\Winsock2\Parameters\Protocol_Catalog9\Ca
 HKLM,%CurrentVersionNT%,"CurrentVersion",2,"6.3"
 HKLM,%CurrentVersionNT%,"CurrentMajorVersionNumber",0x10003,10
 HKLM,%CurrentVersionNT%,"CurrentMinorVersionNumber",0x10003,0
-HKLM,%CurrentVersionNT%,"CurrentBuild",2,"18362"
-HKLM,%CurrentVersionNT%,"CurrentBuildNumber",2,"18362"
+HKLM,%CurrentVersionNT%,"CurrentBuild",2,"19043"
+HKLM,%CurrentVersionNT%,"CurrentBuildNumber",2,"19043"
 HKLM,%CurrentVersionNT%,"CurrentType",2,"Multiprocessor Free"
-HKLM,%CurrentVersionNT%,"DigitalProductId",1,00,00,00,00,00,00,00,00,00,00,00,\
+HKLM,%CurrentVersionNT%,"DigitalProductId",2,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
 00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
+HKLM,%CurrentVersionNT%,"DisplayVersion",2,"21H1"
 HKLM,%CurrentVersionNT%,"EditionId",2,"Professional"
+HKLM,%CurrentVersionNT%,"InstallationType",2,"Client"
 HKLM,%CurrentVersionNT%,"ProductName",2,"Windows 10 Pro"
+HKLM,%CurrentVersionNT%,"ReleaseId",,"2009"
 HKLM,%Control%\ProductOptions,"ProductType",2,"WinNT"
 HKLM,%Control%\Windows,"CSDVersion",0x10003,0
 HKLM,%Control%\Session Manager\Environment,"OS",2,"Windows_NT"
@@ -2700,3 +2819,101 @@ EtcFiles  = 12,etc
 InfFiles  = 17
 NlsFiles  = 11
 SortFiles = 10,globalization\sorting
+
+[SteamClient]
+HKCU,Software\Valve\Steam,"SteamPath",,"%16422%\Steam"
+HKCU,Software\Valve\Steam,"SteamExe",,"%16422%\Steam\Steam.exe"
+HKCU,Software\Valve\Steam\ActiveProcess,"PID",0x10001,0x0000fffe
+HKCU,Software\Valve\Steam\ActiveProcess,"SteamClientDll",,"%16422%\Steam\steamclient.dll"
+HKCU,Software\Valve\Steam\ActiveProcess,"SteamPath",,"%16422%\Steam"
+
+[SteamClient.ntamd64]
+HKCU,Software\Valve\Steam,"SteamPath",,"%16422%\Steam"
+HKCU,Software\Valve\Steam,"SteamExe",,"%16422%\Steam\Steam.exe"
+HKCU,Software\Valve\Steam\ActiveProcess,"PID",0x10001,0x0000fffe
+HKCU,Software\Valve\Steam\ActiveProcess,"SteamClientDll",,"%16426%\Steam\steamclient.dll"
+HKCU,Software\Valve\Steam\ActiveProcess,"SteamClientDll64",,"%16426%\Steam\steamclient64.dll"
+HKCU,Software\Valve\Steam\ActiveProcess,"SteamPath",,"%16426%\Steam"
+HKLM,Software\Wow6432Node\Valve\Steam,"InstallPath",,"%16422%\Steam"
+
+[NVIDIANGX]
+HKLM,Software\NVIDIA Corporation\Global\NGXCore,"FullPath",,"C:\Windows\System32"
+
+[ProtonOverrides]
+HKLM,Software\Khronos\OpenXR\1,"ActiveRuntime",,"C:\openxr\wineopenxr64.json"
+;;Likely want *80 and *90 too, but those require removing Wine's manifest files.
+HKCU,Software\Wine\DllOverrides,"atl100",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcp100",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcr100",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"vcomp100",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"atl110",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcp110",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcr110",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"vcomp110",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"atl120",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcp120",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcr120",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"vcomp120",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-conio-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-heap-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-locale-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-math-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-runtime-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-stdio-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-time-l1-1-0",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"atl140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"concrt140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcp140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcp140_atomic_wait",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"msvcr140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"ucrtbase",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"vcomp140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"vcruntime140",0x2,"native,builtin"
+HKCU,Software\Wine\DllOverrides,"atiadlxx",,"disabled"
+HKCU,Software\Wine\DllOverrides,"nvcuda",0x2,"disabled"
+;;App-specific overrides to limit the number of resolutions
+HKCU,Software\Wine\AppDefaults\DarkSoulsIII.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
+HKCU,Software\Wine\AppDefaults\sekiro.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
+HKCU,Software\Wine\AppDefaults\NieRAutomata.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
+HKCU,Software\Wine\AppDefaults\SpellForce.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"16"
+;;Other app-specific overrides
+HKCU,Software\Wine\AppDefaults\Pentiment.exe\DllOverrides,"SpeechSynthesisWrapper",,"disabled"
+HKCU,Software\Wine\AppDefaults\Maine-Win64-Shipping.exe\DllOverrides,"SpeechSynthWrapper",0x2,"disabled"
+HKCU,Software\Wine\AppDefaults\rayne1.exe\DllOverrides,"d3d8",,"native"
+HKCU,Software\Wine\AppDefaults\rayne2.exe\DllOverrides,"d3d8",,"native"
+HKCU,Software\Wine\AppDefaults\RDR2.exe\DllOverrides,"vulkan-1",,"native"
+HKCU,Software\Wine\AppDefaults\ShadowOfWar.exe\DllOverrides,"amd_ags_x64",,"disabled"
+;;App-specific overrides for atiadlxx.dll.
+HKCU,Software\Wine\AppDefaults\s2_sp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\s2_mp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\h1_sp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\h1_mp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\iw7_ship.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\BlackOps3.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\NFS16.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\ShadowOfWar.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\DIRT5.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\Paradox Launcher.exe\DllOverrides,,4,
+HKCU,Software\Wine\AppDefaults\gotg.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\RelicCardinal.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\msedgewebview2.exe,"Version",,"win81"
+HKCU,Software\Wine\AppDefaults\Avengers.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\starwarssquadrons.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\GW2.Main_Win64_Retail.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\Spider-Man.exe\DllOverrides,"atiadlxx",,"builtin"
+HKCU,Software\Wine\AppDefaults\RiftApart.exe\DllOverrides,"atiadlxx",,"builtin"
+HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Height",0x10001,480
+HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Width",0x10001,640
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.8,"4.8",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.7.2,"4.7.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.6.2,"4.6.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.5.2,"4.5.2",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.0,"4.0",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\4.0 Client Profile,"4.0 Client Profile",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\3.5,"3.5",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\.NET\3.5 Client Profile,"3.5 Client Profile",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\3.0,"3.0",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\3.1,"3.1",0x10001,1
+HKLM,Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\XNA\4.0,"4.0",0x10001,1
+HKLM,Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4\Full,"Release",0x10001,528040
+HKLM,Software\Wow6432Node\Microsoft\XNA\Framework\v4.0,"Installed",0x10001,1

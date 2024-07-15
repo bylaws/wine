@@ -1,6 +1,6 @@
 /* FAudio - XAudio Reimplementation for FNA
  *
- * Copyright (c) 2011-2023 Ethan Lee, Luigi Auriemma, and the MonoGame Team
+ * Copyright (c) 2011-2024 Ethan Lee, Luigi Auriemma, and the MonoGame Team
  *
  * This software is provided 'as-is', without any express or implied warranty.
  * In no event will the authors be held liable for any damages arising from
@@ -39,6 +39,8 @@
 #define FACT_CONTENT_VERSION_3_4 45
 #define FACT_CONTENT_VERSION_3_1 44
 #define FACT_CONTENT_VERSION_3_0 43
+#define FACT_CONTENT_VERSION_2_4 41
+#define FACT_CONTENT_VERSION_2_0 37
 
 static inline int FACT_INTERNAL_SupportedContent(uint16_t version)
 {
@@ -513,7 +515,7 @@ uint8_t FACT_INTERNAL_CreateSound(FACTCue *cue, uint16_t fadeInMS)
 		/* Sound */
 		baseSound = cue->sound;
 	}
-	else
+	else if (cue->variation)
 	{
 		/* Variation */
 		if (cue->variation->flags == 3)
@@ -1660,7 +1662,7 @@ void FACT_INTERNAL_UpdateCue(FACTCue *cue)
 	FACTSoundInstance *sound;
 
 	/* Interactive sound selection */
-	if (!(cue->data->flags & 0x04) && cue->variation->flags == 3)
+	if (!(cue->data->flags & 0x04) && cue->variation && cue->variation->flags == 3)
 	{
 		/* Interactive */
 		if (cue->parentBank->parentEngine->variables[cue->variation->variable].accessibility & 0x04)
@@ -3105,7 +3107,17 @@ uint32_t FACT_INTERNAL_ParseWaveBank(
 	#define DOSWAP_64(x) x = FAudio_swap64BE(x)
 
 	fileOffset = offset;
-	READ(&header, sizeof(header))
+
+	FAudio_zero(&header, sizeof(header));
+	READ(&header.dwSignature, sizeof(header.dwSignature));
+	READ(&header.dwVersion, sizeof(header.dwVersion));
+	if (header.dwVersion > FACT_CONTENT_VERSION_2_4)
+	{
+		READ(&header.dwHeaderVersion, sizeof(header.dwHeaderVersion));
+	}
+
+	READ(&header.Segments, sizeof(header.Segments));
+
 	se = header.dwSignature == 0x57424E44;
 	if (se)
 	{
@@ -3123,12 +3135,20 @@ uint32_t FACT_INTERNAL_ParseWaveBank(
 		return -1; /* TODO: NOT XACT FILE */
 	}
 
-	if (!FACT_INTERNAL_SupportedContent(header.dwVersion))
+	/* We support all Wavebank versions - Restore when SoundBank support them also. */
+	/*if (!FACT_INTERNAL_SupportedContent(header.dwVersion))
+	{
+		return -2;
+	}
+	*/
+	if (	header.dwVersion < FACT_CONTENT_VERSION_2_4 ||
+		header.dwVersion > FACT_CONTENT_VERSION	)
 	{
 		return -2;
 	}
 
-	if (!FACT_INTERNAL_SupportedWBContent(header.dwHeaderVersion))
+	if (	header.dwVersion > FACT_CONTENT_VERSION_2_4 &&
+		!FACT_INTERNAL_SupportedWBContent(header.dwHeaderVersion)	)
 	{
 		return -3;
 	}

@@ -27,6 +27,7 @@
 #include "winerror.h"
 #include "winternl.h"
 #include "wmistr.h"
+#define _WMI_SOURCE_
 #include "evntrace.h"
 #include "evntprov.h"
 
@@ -58,7 +59,7 @@ BOOL WINAPI BackupEventLogA( HANDLE hEventLog, LPCSTR lpBackupFileName )
 
     backupW = strdupAW(lpBackupFileName);
     ret = BackupEventLogW(hEventLog, backupW);
-    heap_free(backupW);
+    free(backupW);
 
     return ret;
 }
@@ -115,7 +116,7 @@ BOOL WINAPI ClearEventLogA( HANDLE hEventLog, LPCSTR lpBackupFileName )
 
     backupW = strdupAW(lpBackupFileName);
     ret = ClearEventLogW(hEventLog, backupW);
-    heap_free(backupW);
+    free(backupW);
 
     return ret;
 }
@@ -394,8 +395,8 @@ HANDLE WINAPI OpenBackupEventLogA( LPCSTR lpUNCServerName, LPCSTR lpFileName )
     uncnameW = strdupAW(lpUNCServerName);
     filenameW = strdupAW(lpFileName);
     handle = OpenBackupEventLogW(uncnameW, filenameW);
-    heap_free(uncnameW);
-    heap_free(filenameW);
+    free(uncnameW);
+    free(filenameW);
 
     return handle;
 }
@@ -453,8 +454,8 @@ HANDLE WINAPI OpenEventLogA( LPCSTR uncname, LPCSTR source )
     uncnameW = strdupAW(uncname);
     sourceW = strdupAW(source);
     handle = OpenEventLogW(uncnameW, sourceW);
-    heap_free(uncnameW);
-    heap_free(sourceW);
+    free(uncnameW);
+    free(sourceW);
 
     return handle;
 }
@@ -608,7 +609,7 @@ BOOL WINAPI ReportEventA ( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD d
     if (wNumStrings == 0) return TRUE;
     if (!lpStrings) return TRUE;
 
-    wideStrArray = heap_alloc(sizeof(LPWSTR) * wNumStrings);
+    wideStrArray = malloc(sizeof(WCHAR *) * wNumStrings);
     for (i = 0; i < wNumStrings; i++)
     {
         RtlCreateUnicodeStringFromAsciiz(&str, lpStrings[i]);
@@ -617,8 +618,8 @@ BOOL WINAPI ReportEventA ( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD d
     ret = ReportEventW(hEventLog, wType, wCategory, dwEventID, lpUserSid,
                        wNumStrings, dwDataSize, (LPCWSTR *)wideStrArray, lpRawData);
     for (i = 0; i < wNumStrings; i++)
-        heap_free( wideStrArray[i] );
-    heap_free(wideStrArray);
+        free(wideStrArray[i]);
+    free(wideStrArray);
     return ret;
 }
 

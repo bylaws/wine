@@ -22,7 +22,6 @@
 #define __WINE_NTOSKRNL_PRIVATE_H
 
 #include <stdarg.h>
-#include <stdbool.h>
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "windef.h"
@@ -72,8 +71,8 @@ struct _ETHREAD
     struct _KTHREAD kthread;
 };
 
-void *alloc_kernel_object( POBJECT_TYPE type, HANDLE handle, SIZE_T size, LONG ref ) DECLSPEC_HIDDEN;
-NTSTATUS kernel_object_from_handle( HANDLE handle, POBJECT_TYPE type, void **ret ) DECLSPEC_HIDDEN;
+void *alloc_kernel_object( POBJECT_TYPE type, HANDLE handle, SIZE_T size, LONG ref );
+NTSTATUS kernel_object_from_handle( HANDLE handle, POBJECT_TYPE type, void **ret );
 
 extern POBJECT_TYPE ExEventObjectType;
 extern POBJECT_TYPE ExSemaphoreObjectType;
@@ -100,15 +99,15 @@ struct wine_driver
     struct list root_pnp_devices;
 };
 
-void ObReferenceObject( void *obj ) DECLSPEC_HIDDEN;
+void ObReferenceObject( void *obj );
 
-void pnp_manager_start(void) DECLSPEC_HIDDEN;
-void pnp_manager_stop_driver( struct wine_driver *driver ) DECLSPEC_HIDDEN;
-void pnp_manager_stop(void) DECLSPEC_HIDDEN;
+void pnp_manager_start(void);
+void pnp_manager_stop_driver( struct wine_driver *driver );
+void pnp_manager_stop(void);
 
 void CDECL wine_enumerate_root_devices( const WCHAR *driver_name );
 
-struct wine_driver *get_driver( const WCHAR *name ) DECLSPEC_HIDDEN;
+struct wine_driver *get_driver( const WCHAR *name );
 
 static const WCHAR servicesW[] = {'\\','R','e','g','i','s','t','r','y',
                                   '\\','M','a','c','h','i','n','e',

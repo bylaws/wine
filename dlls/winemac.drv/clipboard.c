@@ -569,7 +569,7 @@ static void *import_html(CFDataRef data, size_t *ret_size)
     if ((ret = malloc(total)))
     {
         char *p = ret;
-        p += sprintf(p, header, total - 1, len, len + size + 1 /* include the final \n in the data */);
+        p += snprintf(p, total, header, total - 1, len, len + size + 1 /* include the final \n in the data */);
         CFDataGetBytes(data, CFRangeMake(0, size), (UInt8*)p);
         strcpy(p + size, trailer);
         *ret_size = total;
@@ -1665,8 +1665,7 @@ void macdrv_UpdateClipboard(void)
 
     if (!NtUserIsWindow(clipboard_manager))
     {
-        UNICODE_STRING str;
-        RtlInitUnicodeString(&str, clipboard_classname);
+        UNICODE_STRING str = RTL_CONSTANT_STRING(clipboard_classname);
         clipboard_manager = NtUserFindWindowEx(NULL, NULL, &str, NULL, 0);
         if (!clipboard_manager)
         {

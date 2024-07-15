@@ -418,7 +418,7 @@ HGDIOBJ WINAPI GetCurrentObject( HDC hdc, UINT type )
 /***********************************************************************
  *           GetStockObject    (GDI32.@)
  */
-HGDIOBJ WINAPI GetStockObject( INT obj )
+HGDIOBJ WINAPI DECLSPEC_HOTPATCH GetStockObject( INT obj )
 {
     if (obj < 0 || obj > STOCK_LAST + 1 || obj == 9) return 0;
 
@@ -969,6 +969,12 @@ done:
     SetupDiDestroyDeviceInfoList( devinfo );
     release_display_device_init_mutex( mutex );
     return status;
+}
+
+NTSTATUS WINAPI D3DKMTEnumAdapters2( const void *param )
+{
+    FIXME( "param %p stub.\n", param );
+    return STATUS_NOT_SUPPORTED;
 }
 
 /***********************************************************************

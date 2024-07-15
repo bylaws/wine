@@ -28,6 +28,63 @@
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
+struct wined3d_saved_states
+{
+    uint32_t vs_consts_f[WINED3D_BITMAP_SIZE(WINED3D_MAX_VS_CONSTS_F)];
+    uint16_t vertexShaderConstantsI;                        /* WINED3D_MAX_CONSTS_I, 16 */
+    uint16_t vertexShaderConstantsB;                        /* WINED3D_MAX_CONSTS_B, 16 */
+    uint32_t ps_consts_f[WINED3D_BITMAP_SIZE(WINED3D_MAX_PS_CONSTS_F)];
+    uint16_t pixelShaderConstantsI;                         /* WINED3D_MAX_CONSTS_I, 16 */
+    uint16_t pixelShaderConstantsB;                         /* WINED3D_MAX_CONSTS_B, 16 */
+    uint32_t transform[WINED3D_BITMAP_SIZE(WINED3D_HIGHEST_TRANSFORM_STATE + 1)];
+    uint16_t streamSource;                                  /* WINED3D_MAX_STREAMS, 16 */
+    uint16_t streamFreq;                                    /* WINED3D_MAX_STREAMS, 16 */
+    uint32_t renderState[WINED3D_BITMAP_SIZE(WINEHIGHEST_RENDER_STATE + 1)];
+    uint32_t textureState[WINED3D_MAX_FFP_TEXTURES];        /* WINED3D_HIGHEST_TEXTURE_STATE + 1, 18 */
+    uint16_t samplerState[WINED3D_MAX_COMBINED_SAMPLERS];   /* WINED3D_HIGHEST_SAMPLER_STATE + 1, 14 */
+    uint32_t clipplane;                                     /* WINED3D_MAX_CLIP_DISTANCES, 8 */
+    uint32_t textures : 20;                                 /* WINED3D_MAX_COMBINED_SAMPLERS, 20 */
+    uint32_t indices : 1;
+    uint32_t material : 1;
+    uint32_t viewport : 1;
+    uint32_t vertexDecl : 1;
+    uint32_t pixelShader : 1;
+    uint32_t vertexShader : 1;
+    uint32_t scissorRect : 1;
+    uint32_t store_stream_offset : 1;
+    uint32_t alpha_to_coverage : 1;
+    uint32_t lights : 1;
+    uint32_t transforms : 1;
+    uint32_t padding : 1;
+
+    struct list changed_lights;
+};
+
+struct stage_state
+{
+    unsigned int stage, state;
+};
+
+struct wined3d_stateblock
+{
+    LONG ref;
+    struct wined3d_device *device;
+
+    struct wined3d_saved_states changed;
+
+    struct wined3d_stateblock_state stateblock_state;
+    struct wined3d_light_state light_state;
+
+    unsigned int contained_render_states[WINEHIGHEST_RENDER_STATE + 1];
+    unsigned int num_contained_render_states;
+    unsigned int contained_transform_states[WINED3D_HIGHEST_TRANSFORM_STATE + 1];
+    unsigned int num_contained_transform_states;
+    struct stage_state contained_tss_states[WINED3D_MAX_FFP_TEXTURES * (WINED3D_HIGHEST_TEXTURE_STATE + 1)];
+    unsigned int num_contained_tss_states;
+    struct stage_state contained_sampler_states[WINED3D_MAX_COMBINED_SAMPLERS * WINED3D_HIGHEST_SAMPLER_STATE];
+    unsigned int num_contained_sampler_states;
+};
+
 static const DWORD pixel_states_render[] =
 {
     WINED3D_RS_ALPHABLENDENABLE,
@@ -217,7 +274,7 @@ static void stateblock_savedstates_set_all(struct wined3d_saved_states *states, 
     states->textures = 0xfffff;
     stateblock_set_all_bits(states->transform, WINED3D_HIGHEST_TRANSFORM_STATE + 1);
     stateblock_set_all_bits(states->renderState, WINEHIGHEST_RENDER_STATE + 1);
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i) states->textureState[i] = 0x3ffff;
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i) states->textureState[i] = 0x3ffff;
     for (i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i) states->samplerState[i] = 0x3ffe;
     states->clipplane = wined3d_mask_from_size(WINED3D_MAX_CLIP_DISTANCES);
     states->pixelShaderConstantsB = 0xffff;
@@ -245,7 +302,7 @@ static void stateblock_savedstates_set_pixel(struct wined3d_saved_states *states
 
     for (i = 0; i < ARRAY_SIZE(pixel_states_texture); ++i)
         texture_mask |= 1u << pixel_states_texture[i];
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i) states->textureState[i] = texture_mask;
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i) states->textureState[i] = texture_mask;
     for (i = 0; i < ARRAY_SIZE(pixel_states_sampler); ++i)
         sampler_mask |= 1u << pixel_states_sampler[i];
     for (i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i) states->samplerState[i] = sampler_mask;
@@ -274,7 +331,7 @@ static void stateblock_savedstates_set_vertex(struct wined3d_saved_states *state
 
     for (i = 0; i < ARRAY_SIZE(vertex_states_texture); ++i)
         texture_mask |= 1u << vertex_states_texture[i];
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i) states->textureState[i] = texture_mask;
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i) states->textureState[i] = texture_mask;
     for (i = 0; i < ARRAY_SIZE(vertex_states_sampler); ++i)
         sampler_mask |= 1u << vertex_states_sampler[i];
     for (i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i) states->samplerState[i] = sampler_mask;
@@ -312,7 +369,7 @@ void CDECL wined3d_stateblock_init_contained_states(struct wined3d_stateblock *s
         }
     }
 
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i)
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
     {
         DWORD map = stateblock->changed.textureState[i];
 
@@ -374,7 +431,6 @@ void state_unbind_resources(struct wined3d_state *state)
     struct wined3d_blend_state *blend_state;
     struct wined3d_rendertarget_view *rtv;
     struct wined3d_sampler *sampler;
-    struct wined3d_texture *texture;
     struct wined3d_buffer *buffer;
     struct wined3d_shader *shader;
     unsigned int i, j;
@@ -383,15 +439,6 @@ void state_unbind_resources(struct wined3d_state *state)
     {
         state->vertex_declaration = NULL;
         wined3d_vertex_declaration_decref(decl);
-    }
-
-    for (i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i)
-    {
-        if ((texture = state->textures[i]))
-        {
-            state->textures[i] = NULL;
-            wined3d_texture_decref(texture);
-        }
     }
 
     for (i = 0; i < WINED3D_MAX_STREAM_OUTPUT_BUFFERS; ++i)
@@ -489,7 +536,7 @@ void state_unbind_resources(struct wined3d_state *state)
     }
 }
 
-void wined3d_stateblock_state_cleanup(struct wined3d_stateblock_state *state)
+static void wined3d_stateblock_state_cleanup(struct wined3d_stateblock_state *state)
 {
     struct wined3d_light_info *light, *cursor;
     struct wined3d_vertex_declaration *decl;
@@ -1462,10 +1509,10 @@ void CDECL wined3d_stateblock_set_texture_stage_state(struct wined3d_stateblock 
         return;
     }
 
-    if (stage >= WINED3D_MAX_TEXTURES)
+    if (stage >= WINED3D_MAX_FFP_TEXTURES)
     {
         WARN("Attempting to set stage %u which is higher than the max stage %u, ignoring.\n",
-                stage, WINED3D_MAX_TEXTURES - 1);
+                stage, WINED3D_MAX_FFP_TEXTURES - 1);
         return;
     }
 
@@ -1933,14 +1980,12 @@ static void state_init_default(struct wined3d_state *state, const struct wined3d
     init_default_render_states(state->render_states, d3d_info);
 
     /* Texture Stage States - Put directly into state block, we will call function below */
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i)
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
     {
         TRACE("Setting up default texture states for texture Stage %u.\n", i);
         state->transforms[WINED3D_TS_TEXTURE0 + i] = identity;
         init_default_texture_state(i, state->texture_states[i]);
     }
-
-    init_default_sampler_states(state->sampler_states);
 
     state->blend_factor.r = 1.0f;
     state->blend_factor.g = 1.0f;
@@ -2053,7 +2098,7 @@ static void stateblock_state_init_default(struct wined3d_stateblock_state *state
 
     init_default_render_states(state->rs, d3d_info);
 
-    for (i = 0; i < WINED3D_MAX_TEXTURES; ++i)
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
     {
         state->transforms[WINED3D_TS_TEXTURE0 + i] = identity;
         init_default_texture_state(i, state->texture_states[i]);
@@ -2065,7 +2110,7 @@ static void stateblock_state_init_default(struct wined3d_stateblock_state *state
         state->streams[i].frequency = 1;
 }
 
-void wined3d_stateblock_state_init(struct wined3d_stateblock_state *state,
+static void wined3d_stateblock_state_init(struct wined3d_stateblock_state *state,
         const struct wined3d_device *device, uint32_t flags)
 {
     rb_init(&state->light_state->lights_tree, lights_compare);
@@ -2398,30 +2443,22 @@ static void wined3d_device_set_light_enable(struct wined3d_device *device, unsig
         wined3d_device_context_emit_set_light_enable(&device->cs->c, light_idx, enable);
 }
 
-static HRESULT wined3d_device_set_clip_plane(struct wined3d_device *device,
+static void wined3d_device_set_clip_plane(struct wined3d_device *device,
         unsigned int plane_idx, const struct wined3d_vec4 *plane)
 {
     struct wined3d_vec4 *clip_planes = device->cs->c.state->clip_planes;
 
     TRACE("device %p, plane_idx %u, plane %p.\n", device, plane_idx, plane);
 
-    if (plane_idx >= device->adapter->d3d_info.limits.max_clip_distances)
-    {
-        TRACE("Application has requested clipplane this device doesn't support.\n");
-        return WINED3DERR_INVALIDCALL;
-    }
-
     if (!memcmp(&clip_planes[plane_idx], plane, sizeof(*plane)))
     {
         TRACE("Application is setting old values over, nothing to do.\n");
-        return WINED3D_OK;
+        return;
     }
 
     clip_planes[plane_idx] = *plane;
 
     wined3d_device_context_emit_set_clip_plane(&device->cs->c, plane_idx, plane);
-
-    return WINED3D_OK;
 }
 
 static void resolve_depth_buffer(struct wined3d_device *device)
@@ -2431,7 +2468,7 @@ static void resolve_depth_buffer(struct wined3d_device *device)
     struct wined3d_resource *dst_resource;
     struct wined3d_texture *dst_texture;
 
-    if (!(dst_texture = state->textures[0]))
+    if (!(dst_texture = wined3d_state_get_ffp_texture(state, 0)))
         return;
     dst_resource = &dst_texture->resource;
     if (!dst_resource->format->depth_size)
@@ -2446,12 +2483,6 @@ static void resolve_depth_buffer(struct wined3d_device *device)
 static void wined3d_device_set_render_state(struct wined3d_device *device,
         enum wined3d_render_state state, unsigned int value)
 {
-    if (state > WINEHIGHEST_RENDER_STATE)
-    {
-        WARN("Unhandled render state %#x.\n", state);
-        return;
-    }
-
     if (value == device->cs->c.state->render_states[state])
     {
         TRACE("Application is setting the old value over, nothing to do.\n");
@@ -2472,17 +2503,8 @@ static void wined3d_device_set_render_state(struct wined3d_device *device,
 static void wined3d_device_set_texture_stage_state(struct wined3d_device *device,
         unsigned int stage, enum wined3d_texture_stage_state state, uint32_t value)
 {
-    const struct wined3d_d3d_info *d3d_info = &device->adapter->d3d_info;
-
     TRACE("device %p, stage %u, state %s, value %#x.\n",
             device, stage, debug_d3dtexturestate(state), value);
-
-    if (stage >= d3d_info->limits.ffp_blend_stages)
-    {
-        WARN("Attempting to set stage %u which is higher than the max stage %u, ignoring.\n",
-                stage, d3d_info->limits.ffp_blend_stages - 1);
-        return;
-    }
 
     if (value == device->cs->c.state->texture_states[stage][state])
     {
@@ -2495,53 +2517,40 @@ static void wined3d_device_set_texture_stage_state(struct wined3d_device *device
     wined3d_device_context_emit_set_texture_state(&device->cs->c, stage, state, value);
 }
 
-static void wined3d_device_set_sampler_state(struct wined3d_device *device,
-        unsigned int sampler_idx, enum wined3d_sampler_state state, unsigned int value)
-{
-    TRACE("device %p, sampler_idx %u, state %s, value %#x.\n",
-            device, sampler_idx, debug_d3dsamplerstate(state), value);
-
-    if (value == device->cs->c.state->sampler_states[sampler_idx][state])
-    {
-        TRACE("Application is setting the old value over, nothing to do.\n");
-        return;
-    }
-
-    device->cs->c.state->sampler_states[sampler_idx][state] = value;
-    wined3d_device_context_emit_set_sampler_state(&device->cs->c, sampler_idx, state, value);
-}
-
 static void wined3d_device_set_texture(struct wined3d_device *device,
         unsigned int stage, struct wined3d_texture *texture)
 {
+    enum wined3d_shader_type shader_type = WINED3D_SHADER_TYPE_PIXEL;
+    struct wined3d_shader_resource_view *srv = NULL, *prev;
     struct wined3d_state *state = device->cs->c.state;
-    struct wined3d_texture *prev;
 
     TRACE("device %p, stage %u, texture %p.\n", device, stage, texture);
 
-    if (stage >= ARRAY_SIZE(state->textures))
+    if (stage >= WINED3D_VERTEX_SAMPLER_OFFSET)
     {
-        WARN("Ignoring invalid stage %u.\n", stage);
-        return;
+        shader_type = WINED3D_SHADER_TYPE_VERTEX;
+        stage -= WINED3D_VERTEX_SAMPLER_OFFSET;
     }
 
-    prev = state->textures[stage];
+    if (texture && !(srv = wined3d_texture_acquire_identity_srv(texture)))
+        return;
+
+    prev = state->shader_resource_view[shader_type][stage];
     TRACE("Previous texture %p.\n", prev);
 
-    if (texture == prev)
+    if (srv == prev)
     {
         TRACE("App is setting the same texture again, nothing to do.\n");
         return;
     }
 
-    TRACE("Setting new texture to %p.\n", texture);
-    state->textures[stage] = texture;
+    state->shader_resource_view[shader_type][stage] = srv;
 
-    if (texture)
-        wined3d_texture_incref(texture);
-    wined3d_device_context_emit_set_texture(&device->cs->c, stage, texture);
+    if (srv)
+        wined3d_shader_resource_view_incref(srv);
+    wined3d_device_context_emit_set_texture(&device->cs->c, shader_type, stage, srv);
     if (prev)
-        wined3d_texture_decref(prev);
+        wined3d_shader_resource_view_decref(prev);
 
     return;
 }
@@ -2577,6 +2586,90 @@ static void wined3d_device_set_transform(struct wined3d_device *device,
 
     device->cs->c.state->transforms[state] = *matrix;
     wined3d_device_context_emit_set_transform(&device->cs->c, state, matrix);
+}
+
+static enum wined3d_texture_address get_texture_address_mode(const struct wined3d_texture *texture,
+        enum wined3d_texture_address t)
+{
+    if (t < WINED3D_TADDRESS_WRAP || t > WINED3D_TADDRESS_MIRROR_ONCE)
+    {
+        FIXME("Unrecognized or unsupported texture address mode %#x.\n", t);
+        return WINED3D_TADDRESS_WRAP;
+    }
+
+    /* Cubemaps are always set to clamp, regardless of the sampler state. */
+    if ((texture->resource.usage & WINED3DUSAGE_LEGACY_CUBEMAP)
+            || ((texture->flags & WINED3D_TEXTURE_COND_NP2) && t == WINED3D_TADDRESS_WRAP))
+        return WINED3D_TADDRESS_CLAMP;
+
+    return t;
+}
+
+static void sampler_desc_from_sampler_states(struct wined3d_sampler_desc *desc,
+        const uint32_t *sampler_states, const struct wined3d_texture *texture)
+{
+    const struct wined3d_d3d_info *d3d_info = &texture->resource.device->adapter->d3d_info;
+
+    desc->address_u = get_texture_address_mode(texture, sampler_states[WINED3D_SAMP_ADDRESS_U]);
+    desc->address_v = get_texture_address_mode(texture, sampler_states[WINED3D_SAMP_ADDRESS_V]);
+    desc->address_w = get_texture_address_mode(texture, sampler_states[WINED3D_SAMP_ADDRESS_W]);
+    wined3d_color_from_d3dcolor((struct wined3d_color *)desc->border_color,
+            sampler_states[WINED3D_SAMP_BORDER_COLOR]);
+    if (sampler_states[WINED3D_SAMP_MAG_FILTER] > WINED3D_TEXF_ANISOTROPIC)
+        FIXME("Unrecognized or unsupported WINED3D_SAMP_MAG_FILTER %#x.\n",
+                sampler_states[WINED3D_SAMP_MAG_FILTER]);
+    desc->mag_filter = min(max(sampler_states[WINED3D_SAMP_MAG_FILTER], WINED3D_TEXF_POINT), WINED3D_TEXF_LINEAR);
+    if (sampler_states[WINED3D_SAMP_MIN_FILTER] > WINED3D_TEXF_ANISOTROPIC)
+        FIXME("Unrecognized or unsupported WINED3D_SAMP_MIN_FILTER %#x.\n",
+                sampler_states[WINED3D_SAMP_MIN_FILTER]);
+    desc->min_filter = min(max(sampler_states[WINED3D_SAMP_MIN_FILTER], WINED3D_TEXF_POINT), WINED3D_TEXF_LINEAR);
+    if (sampler_states[WINED3D_SAMP_MIP_FILTER] > WINED3D_TEXF_ANISOTROPIC)
+        FIXME("Unrecognized or unsupported WINED3D_SAMP_MIP_FILTER %#x.\n",
+                sampler_states[WINED3D_SAMP_MIP_FILTER]);
+    desc->mip_filter = min(max(sampler_states[WINED3D_SAMP_MIP_FILTER], WINED3D_TEXF_NONE), WINED3D_TEXF_LINEAR);
+    desc->lod_bias = int_to_float(sampler_states[WINED3D_SAMP_MIPMAP_LOD_BIAS]);
+    desc->min_lod = -1000.0f;
+    desc->max_lod = 1000.0f;
+
+    /* The LOD is already clamped to texture->level_count in wined3d_stateblock_set_texture_lod(). */
+    if (texture->flags & WINED3D_TEXTURE_COND_NP2)
+        desc->mip_base_level = 0;
+    else if (desc->mip_filter == WINED3D_TEXF_NONE)
+        desc->mip_base_level = texture->lod;
+    else
+        desc->mip_base_level = min(max(sampler_states[WINED3D_SAMP_MAX_MIP_LEVEL], texture->lod), texture->level_count - 1);
+
+    desc->max_anisotropy = sampler_states[WINED3D_SAMP_MAX_ANISOTROPY];
+    if ((sampler_states[WINED3D_SAMP_MAG_FILTER] != WINED3D_TEXF_ANISOTROPIC
+                && sampler_states[WINED3D_SAMP_MIN_FILTER] != WINED3D_TEXF_ANISOTROPIC
+                && sampler_states[WINED3D_SAMP_MIP_FILTER] != WINED3D_TEXF_ANISOTROPIC)
+            || (texture->flags & WINED3D_TEXTURE_COND_NP2))
+        desc->max_anisotropy = 1;
+    desc->compare = texture->resource.format_caps & WINED3D_FORMAT_CAP_SHADOW;
+    desc->comparison_func = WINED3D_CMP_LESSEQUAL;
+
+    /* Only use the LSB of the WINED3D_SAMP_SRGB_TEXTURE value. This matches
+     * the behaviour of the AMD Windows driver.
+     *
+     * Might & Magic: Heroes VI - Shades of Darkness sets
+     * WINED3D_SAMP_SRGB_TEXTURE to a large value that looks like a
+     * pointer—presumably by accident—and expects sRGB decoding to be
+     * disabled. */
+    desc->srgb_decode = sampler_states[WINED3D_SAMP_SRGB_TEXTURE] & 0x1;
+
+    if (!(texture->resource.format_caps & WINED3D_FORMAT_CAP_FILTERING))
+    {
+        desc->mag_filter = WINED3D_TEXF_POINT;
+        desc->min_filter = WINED3D_TEXF_POINT;
+        desc->mip_filter = WINED3D_TEXF_NONE;
+    }
+
+    if (texture->flags & WINED3D_TEXTURE_COND_NP2)
+    {
+        desc->mip_filter = WINED3D_TEXF_NONE;
+        if (d3d_info->normalized_texrect)
+            desc->min_filter = WINED3D_TEXF_POINT;
+    }
 }
 
 void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
@@ -3131,11 +3224,43 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
 
     for (i = 0; i < ARRAY_SIZE(changed->samplerState); ++i)
     {
-        map = changed->samplerState[i];
-        while (map)
+        enum wined3d_shader_type shader_type = WINED3D_SHADER_TYPE_PIXEL;
+        struct wined3d_sampler_desc desc;
+        struct wined3d_texture *texture;
+        struct wined3d_sampler *sampler;
+        unsigned int bind_index = i;
+        struct wine_rb_entry *entry;
+
+        if (!changed->samplerState[i] && !(changed->textures & (1u << i)))
+            continue;
+
+        if (!(texture = state->textures[i]))
+            continue;
+
+        memset(&desc, 0, sizeof(desc));
+        sampler_desc_from_sampler_states(&desc, state->sampler_states[i], texture);
+
+        if (i >= WINED3D_VERTEX_SAMPLER_OFFSET)
         {
-            j = wined3d_bit_scan(&map);
-            wined3d_device_set_sampler_state(device, i, j, state->sampler_states[i][j]);
+            shader_type = WINED3D_SHADER_TYPE_VERTEX;
+            bind_index -= WINED3D_VERTEX_SAMPLER_OFFSET;
+        }
+
+        if ((entry = wine_rb_get(&device->samplers, &desc)))
+        {
+            sampler = WINE_RB_ENTRY_VALUE(entry, struct wined3d_sampler, entry);
+
+            wined3d_device_context_set_samplers(context, shader_type, bind_index, 1, &sampler);
+        }
+        else if (SUCCEEDED(wined3d_sampler_create(device, &desc, NULL, &wined3d_null_parent_ops, &sampler)))
+        {
+            wined3d_device_context_set_samplers(context, shader_type, bind_index, 1, &sampler);
+
+            if (wine_rb_put(&device->samplers, &desc, &sampler->entry) == -1)
+            {
+                ERR("Failed to insert sampler.\n");
+                wined3d_sampler_decref(sampler);
+            }
         }
     }
 
@@ -3191,4 +3316,43 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
     list_init(&stateblock->changed.changed_lights);
 
     TRACE("Applied stateblock %p.\n", stateblock);
+}
+
+unsigned int CDECL wined3d_stateblock_set_texture_lod(struct wined3d_stateblock *stateblock,
+        struct wined3d_texture *texture, unsigned int lod)
+{
+    unsigned int old;
+
+    TRACE("texture %p, lod %u.\n", texture, lod);
+
+    old = wined3d_texture_set_lod(texture, lod);
+
+    if (old != lod)
+    {
+        for (unsigned int i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i)
+        {
+            /* Mark the texture as changed. The next time the appplication
+             * draws from this texture, wined3d_device_apply_stateblock() will
+             * recompute the texture LOD.
+             *
+             * We only need to do this for the primary stateblock.
+             * If a recording stateblock uses a texture whose LOD is changed,
+             * that texture will be invalidated on the primary stateblock
+             * anyway when the recording stateblock is applied. */
+            if (stateblock->stateblock_state.textures[i] == texture)
+                stateblock->changed.textures |= (1u << i);
+        }
+    }
+
+    return old;
+}
+
+void CDECL wined3d_stateblock_texture_changed(struct wined3d_stateblock *stateblock,
+        const struct wined3d_texture *texture)
+{
+    for (unsigned int i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i)
+    {
+        if (stateblock->stateblock_state.textures[i] == texture)
+            stateblock->changed.textures |= (1u << i);
+    }
 }

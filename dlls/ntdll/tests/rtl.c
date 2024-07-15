@@ -22,12 +22,19 @@
  */
 
 #include <stdlib.h>
+#include <stdarg.h>
 
-#include "ntdll_test.h"
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winbase.h"
+#include "winreg.h"
+#include "winternl.h"
 #include "in6addr.h"
 #include "inaddr.h"
 #include "ip2string.h"
 #include "ddk/ntifs.h"
+#include "wine/test.h"
 #include "wine/asm.h"
 
 #ifndef __WINE_WINTERNL_H
@@ -95,6 +102,7 @@ static NTSTATUS  (WINAPI *pRtlIpv6StringToAddressExW)(PCWSTR, struct in6_addr *,
 static BOOL      (WINAPI *pRtlIsCriticalSectionLocked)(CRITICAL_SECTION *);
 static BOOL      (WINAPI *pRtlIsCriticalSectionLockedByThread)(CRITICAL_SECTION *);
 static NTSTATUS  (WINAPI *pRtlInitializeCriticalSectionEx)(CRITICAL_SECTION *, ULONG, ULONG);
+static void *    (WINAPI *pRtlFindExportedRoutineByName)(HMODULE,const char *);
 static NTSTATUS  (WINAPI *pLdrEnumerateLoadedModules)(void *, void *, void *);
 static NTSTATUS  (WINAPI *pLdrRegisterDllNotification)(ULONG, PLDR_DLL_NOTIFICATION_FUNCTION, void *, void **);
 static NTSTATUS  (WINAPI *pLdrUnregisterDllNotification)(void *);
@@ -137,6 +145,7 @@ static void InitFunctionPtrs(void)
         pRtlIsCriticalSectionLocked = (void *)GetProcAddress(hntdll, "RtlIsCriticalSectionLocked");
         pRtlIsCriticalSectionLockedByThread = (void *)GetProcAddress(hntdll, "RtlIsCriticalSectionLockedByThread");
         pRtlInitializeCriticalSectionEx = (void *)GetProcAddress(hntdll, "RtlInitializeCriticalSectionEx");
+        pRtlFindExportedRoutineByName = (void *)GetProcAddress(hntdll, "RtlFindExportedRoutineByName");
         pLdrEnumerateLoadedModules = (void *)GetProcAddress(hntdll, "LdrEnumerateLoadedModules");
         pLdrRegisterDllNotification = (void *)GetProcAddress(hntdll, "LdrRegisterDllNotification");
         pLdrUnregisterDllNotification = (void *)GetProcAddress(hntdll, "LdrUnregisterDllNotification");
@@ -199,17 +208,17 @@ static void test_RtlCompareMemoryUlong(void)
     result = RtlCompareMemoryUlong(a, 4, 0x0123);
     ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 5, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 7, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 8, 0x0123);
     ok(result == 4, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 9, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x0127);
     ok(result == 0, "RtlCompareMemoryUlong(%p, 4, 0x0127) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x7123);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 4, 0x7123) returns %lu, expected 0\n", a, result);
+    ok(result == 0 || result == 1 /* arm64 */, "RtlCompareMemoryUlong(%p, 4, 0x7123) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 16, 0x4567);
     ok(result == 0, "RtlCompareMemoryUlong(%p, 16, 0x4567) returns %lu, expected 0\n", a, result);
 
@@ -219,13 +228,13 @@ static void test_RtlCompareMemoryUlong(void)
     result = RtlCompareMemoryUlong(a, 4, 0x0123);
     ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 5, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 7, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 8, 0x0123);
     ok(result == 8, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %lu, expected 8\n", a, result);
     result = RtlCompareMemoryUlong(a, 9, 0x0123);
-    ok(result == 8, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 8\n", a, result);
+    ok(result == 8 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 8\n", a, result);
 }
 
 #define COPY(len) memset(dest,0,sizeof(dest_aligned_block)); pRtlMoveMemory(dest, src, len)
@@ -2729,11 +2738,9 @@ static void test_RtlDecompressBuffer(void)
             memset(buf, 0x11, sizeof(buf));
             status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf, test_lznt[i].uncompressed_size - 1,
                                          test_lznt[i].compressed, test_lznt[i].compressed_size, &final_size);
-            if (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_TRUNCATED)
-                todo_wine
-                ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08lx\n", i, status);
-            else
-                ok(status == test_lznt[i].status, "%d: got wrong status 0x%08lx\n", i, status);
+            ok(status == test_lznt[i].status ||
+               broken(status == STATUS_BAD_COMPRESSION_BUFFER && (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_TRUNCATED)),
+               "%d: got wrong status 0x%08lx\n", i, status);
             if (!status)
             {
                 ok(final_size == test_lznt[i].uncompressed_size - 1,
@@ -3511,6 +3518,10 @@ static LONG CALLBACK test_heap_destroy_except_handler( EXCEPTION_POINTERS *eptrs
         eptrs->ContextRecord->Rip += 1;
         test_heap_destroy_break = TRUE;
         return (LONG)EXCEPTION_CONTINUE_EXECUTION;
+#elif defined( __aarch64__ )
+        eptrs->ContextRecord->Pc += 4;
+        test_heap_destroy_break = TRUE;
+        return (LONG)EXCEPTION_CONTINUE_EXECUTION;
 #endif
     }
 
@@ -3649,6 +3660,21 @@ static void test_RtlValidSecurityDescriptor(void)
     free(sd);
 }
 
+static void test_RtlFindExportedRoutineByName(void)
+{
+    void *proc;
+
+    if (!pRtlFindExportedRoutineByName)
+    {
+        win_skip( "RtlFindExportedRoutineByName is not present\n" );
+        return;
+    }
+    proc = pRtlFindExportedRoutineByName( GetModuleHandleW( L"kernelbase" ), "CtrlRoutine" );
+    ok( proc != NULL, "Expected non NULL address\n" );
+    proc = pRtlFindExportedRoutineByName( GetModuleHandleW( L"kernel32" ), "CtrlRoutine" );
+    ok( proc == NULL, "Shouldn't find forwarded function\n" );
+}
+
 START_TEST(rtl)
 {
     InitFunctionPtrs();
@@ -3695,4 +3721,5 @@ START_TEST(rtl)
     test_RtlFirstFreeAce();
     test_RtlInitializeSid();
     test_RtlValidSecurityDescriptor();
+    test_RtlFindExportedRoutineByName();
 }

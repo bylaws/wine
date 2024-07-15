@@ -609,6 +609,7 @@ static void test_WinHttpAddHeaders(void)
         L"field: value ",
         L"name: value",
         L"name:",
+        L"g : value",
     };
     static const WCHAR test_indices[][6] =
     {
@@ -949,6 +950,9 @@ static void test_WinHttpAddHeaders(void)
 
     ret = WinHttpAddRequestHeaders(request, test_headers[13], ~0u, WINHTTP_ADDREQ_FLAG_ADD);
     ok(ret, "WinHttpAddRequestHeaders failed\n");
+
+    ret = WinHttpAddRequestHeaders(request, test_headers[16], ~0u, WINHTTP_ADDREQ_FLAG_ADD);
+    ok(!ret, "adding %s succeeded.\n", debugstr_w(test_headers[16]));
 
     index = 0;
     buffer[0] = 0;
@@ -2197,6 +2201,12 @@ static const char okmsg[] =
 "Server: winetest\r\n"
 "\r\n";
 
+static const char okmsg_length0[] =
+"HTTP/1.1 200 OK\r\n"
+"Server: winetest\r\n"
+"Content-length: 0\r\n"
+"\r\n";
+
 static const char notokmsg[] =
 "HTTP/1.1 400 Bad Request\r\n"
 "\r\n";
@@ -2281,6 +2291,13 @@ static const char redirectmsg[] =
 "Location: /temporary\r\n"
 "Connection: close\r\n\r\n";
 
+static const char badreplyheadermsg[] =
+"HTTP/1.1 200 OK\r\n"
+"Server: winetest\r\n"
+"SpaceAfterHdr  :   bad\r\n"
+"OkHdr: ok\r\n"
+"\r\n";
+
 static const char unauthorized[] = "Unauthorized";
 static const char hello_world[] = "Hello World";
 static const char auth_unseen[] = "Auth Unseen";
@@ -2318,6 +2335,24 @@ static void create_websocket_accept(const char *key, char *buf, unsigned int buf
     CryptBinaryToStringA( (BYTE *)sha1, sizeof(sha1), CRYPT_STRING_BASE64, buf, &len);
 }
 
+static int server_receive_request(int c, char *buffer, size_t buffer_size)
+{
+    int i, r;
+
+    memset(buffer, 0, buffer_size);
+    for(i = 0; i < buffer_size - 1; i++)
+    {
+        r = recv(c, &buffer[i], 1, 0);
+        if (r != 1)
+            break;
+        if (i < 4) continue;
+        if (buffer[i - 2] == '\n' && buffer[i] == '\n' &&
+            buffer[i - 3] == '\r' && buffer[i - 1] == '\r')
+            break;
+    }
+    return r;
+}
+
 static DWORD CALLBACK server_thread(LPVOID param)
 {
     struct server_info *si = param;
@@ -2351,18 +2386,7 @@ static DWORD CALLBACK server_thread(LPVOID param)
     do
     {
         if (c == -1) c = accept(s, NULL, NULL);
-
-        memset(buffer, 0, sizeof buffer);
-        for(i = 0; i < sizeof buffer - 1; i++)
-        {
-            r = recv(c, &buffer[i], 1, 0);
-            if (r != 1)
-                break;
-            if (i < 4) continue;
-            if (buffer[i - 2] == '\n' && buffer[i] == '\n' &&
-                buffer[i - 3] == '\r' && buffer[i - 1] == '\r')
-                break;
-        }
+        server_receive_request(c, buffer, sizeof(buffer));
         if (strstr(buffer, "GET /basic"))
         {
             send(c, okmsg, sizeof okmsg - 1, 0);
@@ -2539,12 +2563,41 @@ static DWORD CALLBACK server_thread(LPVOID param)
             ok(!!strstr(buffer, "Test5: Value5\r\n"), "Header missing from request %s.\n", debugstr_a(buffer));
             ok(!!strstr(buffer, "Test6: Value6\r\n"), "Header missing from request %s.\n", debugstr_a(buffer));
             ok(!!strstr(buffer, "Cookie: 111\r\n"), "Header missing from request %s.\n", debugstr_a(buffer));
+            send(c, badreplyheadermsg, sizeof(badreplyheadermsg) - 1, 0);
+        }
+
+        if (strstr(buffer, "PUT /test") || strstr(buffer, "POST /test"))
+        {
+            if (strstr(buffer, "Transfer-Encoding: chunked\r\n"))
+            {
+                ok(!strstr(buffer, "Content-Length:"), "Unexpected Content-Length in request %s.\n", debugstr_a(buffer));
+                r = recv(c, buffer, sizeof(buffer), 0);
+                ok(r == 4, "got %d.\n", r);
+                buffer[r] = 0;
+                ok(!strcmp(buffer, "post"), "got %s.\n", debugstr_a(buffer));
+            }
+            else
+            {
+                ok(!!strstr(buffer, "Content-Length: 0\r\n"), "Header missing from request %s.\n", debugstr_a(buffer));
+            }
             send(c, okmsg, sizeof(okmsg) - 1, 0);
         }
-        if (strstr(buffer, "PUT /test"))
+
+        if (strstr(buffer, "GET /cached"))
         {
-            ok(!!strstr(buffer, "Content-Length: 0\r\n"), "Header missing from request %s.\n", debugstr_a(buffer));
-            send(c, okmsg, sizeof(okmsg) - 1, 0);
+            send(c, okmsg_length0, sizeof okmsg_length0 - 1, 0);
+            r = server_receive_request(c, buffer, sizeof(buffer));
+            ok(r > 0, "got %d.\n", r);
+            ok(!!strstr(buffer, "GET /cached"), "request not found.\n");
+            send(c, okmsg_length0, sizeof okmsg_length0 - 1, 0);
+            r = server_receive_request(c, buffer, sizeof(buffer));
+            ok(!r, "got %d, buffer[0] %d.\n", r, buffer[0]);
+        }
+        if (strstr(buffer, "GET /notcached"))
+        {
+            send(c, okmsg, sizeof okmsg - 1, 0);
+            r = server_receive_request(c, buffer, sizeof(buffer));
+            ok(!r, "got %d, buffer[0] %d.\n", r, buffer[0] );
         }
         shutdown(c, 2);
         closesocket(c);
@@ -2649,6 +2702,44 @@ static void test_basic_request(int port, const WCHAR *verb, const WCHAR *path)
     }
 
     WinHttpCloseHandle(req);
+    WinHttpCloseHandle(con);
+    WinHttpCloseHandle(ses);
+}
+
+static void test_chunked_request(int port)
+{
+    static const WCHAR *methods[] = {L"POST", L"PUT"};
+    HINTERNET ses, con, req;
+    char buffer[0x100];
+    unsigned int i;
+    DWORD count;
+    BOOL ret;
+
+    ses = WinHttpOpen(L"winetest", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    ok(ses != NULL, "failed to open session %lu\n", GetLastError());
+
+    con = WinHttpConnect(ses, L"localhost", port, 0);
+    ok(con != NULL, "failed to open a connection %lu\n", GetLastError());
+    for (i = 0; i < ARRAY_SIZE(methods); ++i)
+    {
+        req = WinHttpOpenRequest(con, methods[i], L"/test", NULL, NULL, NULL, 0);
+        ok(req != NULL, "failed to open a request %lu\n", GetLastError());
+
+        ret = WinHttpAddRequestHeaders(req, L"Transfer-Encoding: chunked", -1, WINHTTP_ADDREQ_FLAG_ADD);
+        ok(ret, "failed to add header %lu\n", GetLastError());
+
+        strcpy(buffer, "post");
+        ret = WinHttpSendRequest(req, NULL, 0, buffer, 4, 4, 0);
+        ok(ret, "failed to send request %lu\n", GetLastError());
+        ret = WinHttpReceiveResponse(req, NULL);
+        ok(ret, "failed to receive response %lu\n", GetLastError());
+        count = 0;
+        memset(buffer, 0, sizeof(buffer));
+        ret = WinHttpReadData(req, buffer, sizeof buffer, &count);
+        ok(ret, "failed to read data %lu\n", GetLastError());
+        ok(!count, "got count %ld\n", count);
+        WinHttpCloseHandle(req);
+    }
     WinHttpCloseHandle(con);
     WinHttpCloseHandle(ses);
 }
@@ -3761,8 +3852,17 @@ static void test_not_modified(int port)
 
 static void test_bad_header( int port )
 {
-    WCHAR buffer[32];
+    static const WCHAR expected_headers[] =
+    {
+        L"HTTP/1.1 200 OK\r\n"
+        L"Server: winetest\r\n"
+        L"SpaceAfterHdr: bad\r\n"
+        L"OkHdr: ok\r\n"
+        L"\r\n"
+    };
+
     HINTERNET ses, con, req;
+    WCHAR buffer[512];
     DWORD index, len;
     unsigned int i;
     BOOL ret;
@@ -3820,6 +3920,20 @@ static void test_bad_header( int port )
 
     ret = WinHttpReceiveResponse( req, NULL );
     ok( ret, "failed to receive response %lu\n", GetLastError() );
+
+    len = sizeof(buffer);
+    ret = WinHttpQueryHeaders( req, WINHTTP_QUERY_CUSTOM, L"OkHdr", buffer, &len, WINHTTP_NO_HEADER_INDEX );
+    ok( ret, "got error %lu.\n", GetLastError() );
+
+    len = sizeof(buffer);
+    ret = WinHttpQueryHeaders( req, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, buffer, &len, WINHTTP_NO_HEADER_INDEX );
+    ok( ret, "got error %lu.\n", GetLastError() );
+    ok( !wcscmp( buffer, expected_headers ), "got %s.\n", debugstr_w(buffer) );
+
+    len = sizeof(buffer);
+    ret = WinHttpQueryHeaders( req, WINHTTP_QUERY_CUSTOM, L"SpaceAfterHdr", buffer, &len, WINHTTP_NO_HEADER_INDEX );
+    ok( ret, "got error %lu.\n", GetLastError() );
+    ok( !wcscmp( buffer, L"bad" ), "got %s.\n", debugstr_w(buffer) );
 
     WinHttpCloseHandle( req );
     WinHttpCloseHandle( con );
@@ -5772,6 +5886,65 @@ static void test_client_cert_authentication(void)
     WinHttpCloseHandle( ses );
 }
 
+static void test_connection_cache(int port)
+{
+    HINTERNET ses, con, req;
+    DWORD status, size;
+    char buffer[256];
+    BOOL ret;
+
+    ses = WinHttpOpen(L"winetest", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    ok(ses != NULL, "failed to open session %lu\n", GetLastError());
+
+    con = WinHttpConnect(ses, L"localhost", port, 0);
+    ok(con != NULL, "failed to open a connection %lu\n", GetLastError());
+
+    req = WinHttpOpenRequest(con, L"GET", L"/cached", NULL, NULL, NULL, 0);
+    ok(req != NULL, "failed to open a request %lu\n", GetLastError());
+    ret = WinHttpSendRequest(req, NULL, 0, NULL, 0, 0, 0);
+    ok(ret, "failed to send request %lu\n", GetLastError());
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "failed to receive response %lu\n", GetLastError());
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &size, NULL);
+    ok(ret, "failed to query status code %lu\n", GetLastError());
+    ok(status == HTTP_STATUS_OK, "request failed unexpectedly %lu\n", status);
+    ret = WinHttpReadData(req, buffer, sizeof buffer, &size);
+    ok(ret, "failed to read data %lu\n", GetLastError());
+    ok(!size, "got size %lu.\n", size);
+    WinHttpCloseHandle(req);
+
+    req = WinHttpOpenRequest(con, L"GET", L"/cached", NULL, NULL, NULL, 0);
+    ok(req != NULL, "failed to open a request %lu\n", GetLastError());
+    ret = WinHttpSendRequest(req, L"Connection: close", ~0ul, NULL, 0, 0, 0);
+    ok(ret, "failed to send request %lu\n", GetLastError());
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "failed to receive response %lu\n", GetLastError());
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &size, NULL);
+    ok(ret, "failed to query status code %lu\n", GetLastError());
+    ok(status == HTTP_STATUS_OK, "request failed unexpectedly %lu\n", status);
+    ret = WinHttpReadData(req, buffer, sizeof buffer, &size);
+    ok(ret, "failed to read data %lu\n", GetLastError());
+    ok(!size, "got size %lu.\n", size);
+    WinHttpCloseHandle(req);
+
+    req = WinHttpOpenRequest(con, L"GET", L"/notcached", NULL, NULL, NULL, 0);
+    ok(req != NULL, "failed to open a request %lu\n", GetLastError());
+    ret = WinHttpSendRequest(req, L"Connection: close", ~0ul, NULL, 0, 0, 0);
+    ok(ret, "failed to send request %lu\n", GetLastError());
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "failed to receive response %lu\n", GetLastError());
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &size, NULL);
+    ok(ret, "failed to query status code %lu\n", GetLastError());
+    ok(status == HTTP_STATUS_OK, "request failed unexpectedly %lu\n", status);
+    WinHttpCloseHandle(req);
+
+    WinHttpCloseHandle(con);
+    WinHttpCloseHandle(ses);
+}
+
 START_TEST (winhttp)
 {
     struct server_info si;
@@ -5820,10 +5993,12 @@ START_TEST (winhttp)
         CloseHandle(thread);
         return;
     }
+
     test_IWinHttpRequest(si.port);
     test_connection_info(si.port);
     test_basic_request(si.port, NULL, L"/basic");
     test_basic_request(si.port, L"PUT", L"/test");
+    test_chunked_request(si.port);
     test_no_headers(si.port);
     test_no_content(si.port);
     test_head_request(si.port);
@@ -5838,6 +6013,7 @@ START_TEST (winhttp)
     test_passport_auth(si.port);
     test_websocket(si.port);
     test_redirect(si.port);
+    test_connection_cache(si.port);
 
     /* send the basic request again to shutdown the server thread */
     test_basic_request(si.port, NULL, L"/quit");

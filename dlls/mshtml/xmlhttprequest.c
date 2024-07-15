@@ -136,13 +136,15 @@ struct HTMLXMLHttpRequest {
     IHTMLXMLHttpRequest2 IHTMLXMLHttpRequest2_iface;
     IWineXMLHttpRequestPrivate IWineXMLHttpRequestPrivate_iface;
     IProvideClassInfo2 IProvideClassInfo2_iface;
-    LONG ref;
+    IHTMLXDomainRequest IHTMLXDomainRequest_iface;  /* only for XDomainRequests */
     LONG task_magic;
     LONG ready_state;
+    document_type_t doctype_override;
     response_type_t response_type;
     BOOLEAN synchronous;
     DWORD magic;
     DWORD pending_events_magic;
+    IDispatch *response_obj;
     HTMLInnerWindow *window;
     nsIXMLHttpRequest *nsxhr;
     XMLHttpReqEventListener *event_listener;
@@ -399,7 +401,7 @@ static nsresult NSAPI XMLHttpReqEventListener_HandleEvent(nsIDOMEventListener *i
         blocking_xhr = thread_data->blocking_xhr;
 
     compat_mode = dispex_compat_mode(&This->xhr->event_target.dispex);
-    hres = create_event_from_nsevent(nsevent, compat_mode, &event);
+    hres = create_event_from_nsevent(nsevent, This->xhr->window, compat_mode, &event);
     if(FAILED(hres)) {
         if(!blocking_xhr || This->xhr == blocking_xhr)
             This->xhr->ready_state = ready_state;
@@ -508,52 +510,19 @@ static inline HTMLXMLHttpRequest *impl_from_IHTMLXMLHttpRequest(IHTMLXMLHttpRequ
 static HRESULT WINAPI HTMLXMLHttpRequest_QueryInterface(IHTMLXMLHttpRequest *iface, REFIID riid, void **ppv)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequest, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequest2, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest2_iface;
-    }else if(IsEqualGUID(&IID_IWineXMLHttpRequestPrivate, riid)) {
-        *ppv = &This->IWineXMLHttpRequestPrivate_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo, riid)) {
-        *ppv = &This->IProvideClassInfo2_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo2, riid)) {
-        *ppv = &This->IProvideClassInfo2_iface;
-    }else {
-        return EventTarget_QI(&This->event_target, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->event_target.dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequest_AddRef(IHTMLXMLHttpRequest *iface)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->event_target.dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequest_Release(IHTMLXMLHttpRequest *iface)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->event_target.dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->event_target.dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequest_GetTypeInfoCount(IHTMLXMLHttpRequest *iface, UINT *pctinfo)
@@ -645,7 +614,11 @@ static HRESULT WINAPI HTMLXMLHttpRequest_get_responseXML(IHTMLXMLHttpRequest *if
     }
 
     if(dispex_compat_mode(&This->event_target.dispex) >= COMPAT_MODE_IE10) {
+        nsACString header, nscstr;
+        document_type_t doctype;
+        HTMLDocumentNode *doc;
         nsIDOMDocument *nsdoc;
+        const char *type;
         nsresult nsres;
 
         nsres = nsIXMLHttpRequest_GetResponseXML(This->nsxhr, &nsdoc);
@@ -655,7 +628,36 @@ static HRESULT WINAPI HTMLXMLHttpRequest_get_responseXML(IHTMLXMLHttpRequest *if
             *p = NULL;
             return S_OK;
         }
+
+        if(!This->window->base.outer_window || !This->window->base.outer_window->browser)
+            hres = E_UNEXPECTED;
+        else {
+            if(This->doctype_override != DOCTYPE_INVALID)
+                doctype = This->doctype_override;
+            else {
+                doctype = DOCTYPE_XML;
+                nsACString_InitDepend(&header, "Content-Type");
+                nsACString_InitDepend(&nscstr, NULL);
+                nsres = nsIXMLHttpRequest_GetResponseHeader(This->nsxhr, &header, &nscstr);
+                nsACString_Finish(&header);
+                if(NS_SUCCEEDED(nsres)) {
+                    nsACString_GetData(&nscstr, &type);
+                    if(!stricmp(type, "application/xhtml+xml"))
+                        doctype = DOCTYPE_XHTML;
+                    else if(!stricmp(type, "image/svg+xml"))
+                        doctype = DOCTYPE_SVG;
+                }
+                nsACString_Finish(&nscstr);
+            }
+            hres = create_document_node(nsdoc, This->window->base.outer_window->browser, NULL, doctype,
+                                        dispex_compat_mode(&This->window->event_target.dispex), &doc);
+        }
         nsIDOMDocument_Release(nsdoc);
+        if(FAILED(hres))
+            return hres;
+
+        *p = (IDispatch*)&doc->IHTMLDocument2_iface;
+        return S_OK;
     }
 
     hres = CoCreateInstance(&CLSID_DOMDocument, NULL, CLSCTX_INPROC_SERVER, &IID_IXMLDOMDocument, (void**)&xmldoc);
@@ -1193,9 +1195,20 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_Invoke(IWineXMLHttpRequestPriva
 static HRESULT WINAPI HTMLXMLHttpRequest_private_get_response(IWineXMLHttpRequestPrivate *iface, VARIANT *p)
 {
     HTMLXMLHttpRequest *This = impl_from_IWineXMLHttpRequestPrivate(iface);
+    IWineDispatchProxyCbPrivate *proxy;
     HRESULT hres = S_OK;
+    UINT32 buf_size;
+    nsresult nsres;
+    void *buf;
 
     TRACE("(%p)->(%p)\n", This, p);
+
+    if(This->response_obj) {
+        V_VT(p) = VT_DISPATCH;
+        V_DISPATCH(p) = This->response_obj;
+        IDispatch_AddRef(This->response_obj);
+        return S_OK;
+    }
 
     switch(This->response_type) {
     case response_type_empty:
@@ -1215,10 +1228,22 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_get_response(IWineXMLHttpReques
             V_VT(p) = VT_EMPTY;
             break;
         }
-        if(This->response_type == response_type_arraybuf) {
-            FIXME("response_type_arraybuf\n");
+        if(!(proxy = This->event_target.dispex.proxy)) {
+            FIXME("No proxy\n");
             return E_NOTIMPL;
         }
+        nsres = nsIXMLHttpRequest_GetResponseBuffer(This->nsxhr, NULL, 0, &buf_size);
+        assert(nsres == NS_OK);
+
+        if(This->response_type == response_type_arraybuf) {
+            hres = proxy->lpVtbl->CreateArrayBuffer(proxy, buf_size, &This->response_obj, &buf);
+            if(SUCCEEDED(hres)) {
+                nsres = nsIXMLHttpRequest_GetResponseBuffer(This->nsxhr, buf, buf_size, &buf_size);
+                assert(nsres == NS_OK);
+            }
+            break;
+        }
+
         FIXME("response_type_blob\n");
         return E_NOTIMPL;
 
@@ -1230,6 +1255,11 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_get_response(IWineXMLHttpReques
         assert(0);
     }
 
+    if(SUCCEEDED(hres) && This->response_obj) {
+        V_VT(p) = VT_DISPATCH;
+        V_DISPATCH(p) = This->response_obj;
+        IDispatch_AddRef(This->response_obj);
+    }
     return hres;
 }
 
@@ -1310,6 +1340,7 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_overrideMimeType(IWineXMLHttpRe
 {
     HTMLXMLHttpRequest *This = impl_from_IWineXMLHttpRequestPrivate(iface);
     static const WCHAR generic_type[] = L"application/octet-stream";
+    document_type_t doctype = DOCTYPE_XML;
     const WCHAR *type = NULL;
     WCHAR *lowercase = NULL;
     nsAString nsstr;
@@ -1323,6 +1354,11 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_overrideMimeType(IWineXMLHttpRe
                 return E_OUTOFMEMORY;
             _wcslwr(lowercase);
             type = lowercase;
+
+            if(!wcscmp(type, L"application/xhtml+xml"))
+                doctype = DOCTYPE_XHTML;
+            else if(!wcscmp(type, L"image/svg+xml"))
+                doctype = DOCTYPE_SVG;
         }else
             type = generic_type;
     }
@@ -1331,6 +1367,8 @@ static HRESULT WINAPI HTMLXMLHttpRequest_private_overrideMimeType(IWineXMLHttpRe
     nsres = nsIXMLHttpRequest_SlowOverrideMimeType(This->nsxhr, &nsstr);
     nsAString_Finish(&nsstr);
     free(lowercase);
+    if(NS_SUCCEEDED(nsres))
+        This->doctype_override = doctype;
     return map_nsresult(nsres);
 }
 
@@ -1521,10 +1559,41 @@ static inline HTMLXMLHttpRequest *impl_from_DispatchEx(DispatchEx *iface)
     return CONTAINING_RECORD(iface, HTMLXMLHttpRequest, event_target.dispex);
 }
 
+static void *HTMLXMLHttpRequest_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequest, riid))
+        return &This->IHTMLXMLHttpRequest_iface;
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequest2, riid))
+        return &This->IHTMLXMLHttpRequest2_iface;
+    if(IsEqualGUID(&IID_IWineXMLHttpRequestPrivate, riid))
+        return &This->IWineXMLHttpRequestPrivate_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo, riid))
+        return &This->IProvideClassInfo2_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo2, riid))
+        return &This->IProvideClassInfo2_iface;
+
+    return EventTarget_query_interface(&This->event_target, riid);
+}
+
+static void HTMLXMLHttpRequest_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+    if(This->window)
+        note_cc_edge((nsISupports*)&This->window->base.IHTMLWindow2_iface, "window", cb);
+    if(This->pending_progress_event)
+        note_cc_edge((nsISupports*)&This->pending_progress_event->IDOMEvent_iface, "pending_progress_event", cb);
+    if(This->response_obj)
+        note_cc_edge((nsISupports*)This->response_obj, "response_obj", cb);
+    if(This->nsxhr)
+        note_cc_edge((nsISupports*)This->nsxhr, "nsxhr", cb);
+    traverse_event_target(&This->event_target, cb);
+}
+
 static void HTMLXMLHttpRequest_unlink(DispatchEx *dispex)
 {
     HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
-    remove_target_tasks(This->task_magic);
     if(This->event_listener) {
         XMLHttpReqEventListener *event_listener = This->event_listener;
         This->event_listener = NULL;
@@ -1540,6 +1609,7 @@ static void HTMLXMLHttpRequest_unlink(DispatchEx *dispex)
         This->pending_progress_event = NULL;
         IDOMEvent_Release(&pending_progress_event->IDOMEvent_iface);
     }
+    unlink_ref(&This->response_obj);
     unlink_ref(&This->nsxhr);
     release_event_target(&This->event_target);
 }
@@ -1548,6 +1618,12 @@ static void HTMLXMLHttpRequest_destructor(DispatchEx *dispex)
 {
     HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
     free(This);
+}
+
+static void HTMLXMLHttpRequest_last_release(DispatchEx *dispex)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+    remove_target_tasks(This->task_magic);
 }
 
 static nsISupports *HTMLXMLHttpRequest_get_gecko_target(DispatchEx *dispex)
@@ -1592,22 +1668,26 @@ static void HTMLXMLHttpRequest_init_dispex_info(dispex_data_t *info, compat_mode
         compat_mode < COMPAT_MODE_IE11 ? private_ie10_hooks : NULL);
 }
 
-static event_target_vtbl_t HTMLXMLHttpRequest_event_target_vtbl = {
+static const event_target_vtbl_t HTMLXMLHttpRequest_event_target_vtbl = {
     {
-        HTMLXMLHttpRequest_destructor,
-        HTMLXMLHttpRequest_unlink
+        .query_interface     = HTMLXMLHttpRequest_query_interface,
+        .destructor          = HTMLXMLHttpRequest_destructor,
+        .traverse            = HTMLXMLHttpRequest_traverse,
+        .unlink              = HTMLXMLHttpRequest_unlink,
+        .last_release        = HTMLXMLHttpRequest_last_release
     },
-    HTMLXMLHttpRequest_get_gecko_target,
-    HTMLXMLHttpRequest_bind_event
+    .get_gecko_target        = HTMLXMLHttpRequest_get_gecko_target,
+    .bind_event              = HTMLXMLHttpRequest_bind_event
 };
 
 static const tid_t HTMLXMLHttpRequest_iface_tids[] = {
     IHTMLXMLHttpRequest2_tid,
     0
 };
-static dispex_static_data_t HTMLXMLHttpRequest_dispex = {
-    L"XMLHttpRequest",
+dispex_static_data_t HTMLXMLHttpRequest_dispex = {
+    "XMLHttpRequest",
     &HTMLXMLHttpRequest_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_HTMLXMLHttpRequest,
     DispHTMLXMLHttpRequest_tid,
     HTMLXMLHttpRequest_iface_tids,
     HTMLXMLHttpRequest_init_dispex_info
@@ -1615,68 +1695,39 @@ static dispex_static_data_t HTMLXMLHttpRequest_dispex = {
 
 
 /* IHTMLXMLHttpRequestFactory */
-static inline HTMLXMLHttpRequestFactory *impl_from_IHTMLXMLHttpRequestFactory(IHTMLXMLHttpRequestFactory *iface)
+static inline struct global_ctor *impl_from_IHTMLXMLHttpRequestFactory(IHTMLXMLHttpRequestFactory *iface)
 {
-    return CONTAINING_RECORD(iface, HTMLXMLHttpRequestFactory, IHTMLXMLHttpRequestFactory_iface);
+    return CONTAINING_RECORD(iface, struct global_ctor, IHTMLXMLHttpRequestFactory_iface);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_QueryInterface(IHTMLXMLHttpRequestFactory *iface, REFIID riid, void **ppv)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequestFactory, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        *ppv = NULL;
-        WARN("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequestFactory_AddRef(IHTMLXMLHttpRequestFactory *iface)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequestFactory_Release(IHTMLXMLHttpRequestFactory *iface)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetTypeInfoCount(IHTMLXMLHttpRequestFactory *iface, UINT *pctinfo)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
     return IDispatchEx_GetTypeInfoCount(&This->dispex.IDispatchEx_iface, pctinfo);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetTypeInfo(IHTMLXMLHttpRequestFactory *iface, UINT iTInfo,
         LCID lcid, ITypeInfo **ppTInfo)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
 
     return IDispatchEx_GetTypeInfo(&This->dispex.IDispatchEx_iface, iTInfo, lcid, ppTInfo);
 }
@@ -1684,7 +1735,7 @@ static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetTypeInfo(IHTMLXMLHttpRequestF
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetIDsOfNames(IHTMLXMLHttpRequestFactory *iface, REFIID riid, LPOLESTR *rgszNames, UINT cNames,
         LCID lcid, DISPID *rgDispId)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
 
     return IDispatchEx_GetIDsOfNames(&This->dispex.IDispatchEx_iface, riid, rgszNames, cNames,
             lcid, rgDispId);
@@ -1693,25 +1744,22 @@ static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetIDsOfNames(IHTMLXMLHttpReques
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_Invoke(IHTMLXMLHttpRequestFactory *iface, DISPID dispIdMember, REFIID riid, LCID lcid,
         WORD wFlags, DISPPARAMS *pDispParams, VARIANT *pVarResult, EXCEPINFO *pExcepInfo, UINT *puArgErr)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
 
     return IDispatchEx_Invoke(&This->dispex.IDispatchEx_iface, dispIdMember, riid, lcid, wFlags,
             pDispParams, pVarResult, pExcepInfo, puArgErr);
 }
 
-static HRESULT WINAPI HTMLXMLHttpRequestFactory_create(IHTMLXMLHttpRequestFactory *iface, IHTMLXMLHttpRequest **p)
+static HRESULT create_xhr(HTMLInnerWindow *window, dispex_static_data_t *dispex, HTMLXMLHttpRequest **p)
 {
-    HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-    HTMLXMLHttpRequest        *ret;
-    nsIXMLHttpRequest         *nsxhr;
-    nsIDOMEventTarget         *nstarget;
-    XMLHttpReqEventListener   *event_listener;
+    XMLHttpReqEventListener *event_listener;
+    nsIDOMEventTarget *nstarget;
+    nsIXMLHttpRequest *nsxhr;
+    HTMLXMLHttpRequest *ret;
     nsresult nsres;
     unsigned i;
 
-    TRACE("(%p)->(%p)\n", This, p);
-
-    nsxhr = create_nsxhr(This->window->base.outer_window->nswindow);
+    nsxhr = create_nsxhr(window->dom_window);
     if(!nsxhr)
         return E_FAIL;
 
@@ -1729,17 +1777,16 @@ static HRESULT WINAPI HTMLXMLHttpRequestFactory_create(IHTMLXMLHttpRequestFactor
     }
 
     ret->nsxhr = nsxhr;
-    ret->window = This->window;
+    ret->window = window;
+    ret->doctype_override = DOCTYPE_INVALID;
     ret->task_magic = get_task_target_magic();
-    IHTMLWindow2_AddRef(&This->window->base.IHTMLWindow2_iface);
+    IHTMLWindow2_AddRef(&window->base.IHTMLWindow2_iface);
 
     ret->IHTMLXMLHttpRequest_iface.lpVtbl = &HTMLXMLHttpRequestVtbl;
     ret->IHTMLXMLHttpRequest2_iface.lpVtbl = &HTMLXMLHttpRequest2Vtbl;
     ret->IWineXMLHttpRequestPrivate_iface.lpVtbl = &WineXMLHttpRequestPrivateVtbl;
     ret->IProvideClassInfo2_iface.lpVtbl = &ProvideClassInfo2Vtbl;
-    EventTarget_Init(&ret->event_target, (IUnknown*)&ret->IHTMLXMLHttpRequest_iface,
-                     &HTMLXMLHttpRequest_dispex, This->window->doc->document_mode);
-    ret->ref = 1;
+    EventTarget_Init(&ret->event_target, dispex, window);
 
     /* Always register the handlers because we need them to track state */
     event_listener->nsIDOMEventListener_iface.lpVtbl = &XMLHttpReqEventListenerVtbl;
@@ -1765,11 +1812,25 @@ static HRESULT WINAPI HTMLXMLHttpRequestFactory_create(IHTMLXMLHttpRequestFactor
     }
     nsIDOMEventTarget_Release(nstarget);
 
-    *p = &ret->IHTMLXMLHttpRequest_iface;
+    *p = ret;
     return S_OK;
 }
 
-static const IHTMLXMLHttpRequestFactoryVtbl HTMLXMLHttpRequestFactoryVtbl = {
+static HRESULT WINAPI HTMLXMLHttpRequestFactory_create(IHTMLXMLHttpRequestFactory *iface, IHTMLXMLHttpRequest **p)
+{
+    struct global_ctor *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
+    HTMLXMLHttpRequest *xhr;
+    HRESULT hres;
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    hres = create_xhr(This->window, &HTMLXMLHttpRequest_dispex, &xhr);
+    if(SUCCEEDED(hres))
+        *p = &xhr->IHTMLXMLHttpRequest_iface;
+    return hres;
+}
+
+const IHTMLXMLHttpRequestFactoryVtbl HTMLXMLHttpRequestFactoryVtbl = {
     HTMLXMLHttpRequestFactory_QueryInterface,
     HTMLXMLHttpRequestFactory_AddRef,
     HTMLXMLHttpRequestFactory_Release,
@@ -1780,72 +1841,594 @@ static const IHTMLXMLHttpRequestFactoryVtbl HTMLXMLHttpRequestFactoryVtbl = {
     HTMLXMLHttpRequestFactory_create
 };
 
-static inline HTMLXMLHttpRequestFactory *factory_from_DispatchEx(DispatchEx *iface)
+static inline struct global_ctor *ctor_from_DispatchEx(DispatchEx *iface)
 {
-    return CONTAINING_RECORD(iface, HTMLXMLHttpRequestFactory, dispex);
+    return CONTAINING_RECORD(iface, struct global_ctor, dispex);
 }
 
-static void HTMLXMLHttpRequestFactory_destructor(DispatchEx *dispex)
+static void *HTMLXMLHttpRequestFactory_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLXMLHttpRequestFactory *This = factory_from_DispatchEx(dispex);
-    free(This);
+    struct global_ctor *This = ctor_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequestFactory, riid))
+        return &This->IHTMLXMLHttpRequestFactory_iface;
+
+    return NULL;
 }
 
 static HRESULT HTMLXMLHttpRequestFactory_value(DispatchEx *iface, LCID lcid, WORD flags, DISPPARAMS *params,
         VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
-    HTMLXMLHttpRequestFactory *This = factory_from_DispatchEx(iface);
-    IHTMLXMLHttpRequest *xhr;
+    struct global_ctor *This = ctor_from_DispatchEx(iface);
+    HTMLXMLHttpRequest *xhr;
     HRESULT hres;
 
     TRACE("\n");
 
-    if(flags != DISPATCH_CONSTRUCT) {
-        FIXME("flags %x not supported\n", flags);
-        return E_NOTIMPL;
-    }
+    if(flags != DISPATCH_CONSTRUCT)
+        return S_FALSE;
 
-    hres = IHTMLXMLHttpRequestFactory_create(&This->IHTMLXMLHttpRequestFactory_iface, &xhr);
+    hres = create_xhr(This->window, &HTMLXMLHttpRequest_dispex, &xhr);
     if(FAILED(hres))
         return hres;
 
     V_VT(res) = VT_DISPATCH;
-    V_DISPATCH(res) = (IDispatch*)xhr;
+    V_DISPATCH(res) = (IDispatch*)&xhr->IHTMLXMLHttpRequest_iface;
     return S_OK;
 }
 
 static const dispex_static_data_vtbl_t HTMLXMLHttpRequestFactory_dispex_vtbl = {
-    HTMLXMLHttpRequestFactory_destructor,
-    NULL,
-    HTMLXMLHttpRequestFactory_value
+    .query_interface  = HTMLXMLHttpRequestFactory_query_interface,
+    .destructor       = global_ctor_destructor,
+    .traverse         = global_ctor_traverse,
+    .unlink           = global_ctor_unlink,
+    .value            = HTMLXMLHttpRequestFactory_value,
+    .get_dispid       = legacy_ctor_get_dispid,
+    .get_name         = legacy_ctor_get_name,
+    .invoke           = legacy_ctor_invoke,
+    .delete           = legacy_ctor_delete
 };
 
 static const tid_t HTMLXMLHttpRequestFactory_iface_tids[] = {
     IHTMLXMLHttpRequestFactory_tid,
     0
 };
-static dispex_static_data_t HTMLXMLHttpRequestFactory_dispex = {
-    L"Function",
+
+dispex_static_data_t HTMLXMLHttpRequestFactory_dispex = {
+    "XMLHttpRequest",
     &HTMLXMLHttpRequestFactory_dispex_vtbl,
+    PROTO_ID_NULL,
     IHTMLXMLHttpRequestFactory_tid,
     HTMLXMLHttpRequestFactory_iface_tids
 };
 
-HRESULT HTMLXMLHttpRequestFactory_Create(HTMLInnerWindow* window, HTMLXMLHttpRequestFactory **ret_ptr)
+static HRESULT HTMLXMLHttpRequestCtor_value(DispatchEx *iface, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
-    HTMLXMLHttpRequestFactory *ret;
+    if(flags == DISPATCH_CONSTRUCT)
+        return HTMLXMLHttpRequestFactory_value(iface, lcid, flags, params, res, ei, caller);
 
-    ret = malloc(sizeof(*ret));
-    if(!ret)
-        return E_OUTOFMEMORY;
+    return global_ctor_value(iface, lcid, flags, params, res, ei, caller);
+}
 
-    ret->IHTMLXMLHttpRequestFactory_iface.lpVtbl = &HTMLXMLHttpRequestFactoryVtbl;
-    ret->ref = 1;
-    ret->window = window;
+static const dispex_static_data_vtbl_t HTMLXMLHttpRequestCtor_dispex_vtbl = {
+    .query_interface  = HTMLXMLHttpRequestFactory_query_interface,
+    .destructor       = global_ctor_destructor,
+    .traverse         = global_ctor_traverse,
+    .unlink           = global_ctor_unlink,
+    .value            = HTMLXMLHttpRequestCtor_value,
+    .get_dispid       = legacy_ctor_get_dispid,
+    .get_name         = legacy_ctor_get_name,
+    .invoke           = legacy_ctor_invoke,
+    .delete           = legacy_ctor_delete
+};
 
-    init_dispatch(&ret->dispex, (IUnknown*)&ret->IHTMLXMLHttpRequestFactory_iface,
-                  &HTMLXMLHttpRequestFactory_dispex, dispex_compat_mode(&window->event_target.dispex));
+dispex_static_data_t HTMLXMLHttpRequestCtor_dispex = {
+    "XMLHttpRequest",
+    &HTMLXMLHttpRequestCtor_dispex_vtbl,
+    PROTO_ID_NULL,
+    IHTMLXMLHttpRequestFactory_tid,
+    HTMLXMLHttpRequestFactory_iface_tids
+};
 
-    *ret_ptr = ret;
+
+/* IHTMLXDomainRequest */
+static inline HTMLXMLHttpRequest *impl_from_IHTMLXDomainRequest(IHTMLXDomainRequest *iface)
+{
+    return CONTAINING_RECORD(iface, HTMLXMLHttpRequest, IHTMLXDomainRequest_iface);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_QueryInterface(IHTMLXDomainRequest *iface, REFIID riid, void **ppv)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_QueryInterface(&This->event_target.dispex.IDispatchEx_iface, riid, ppv);
+}
+
+static ULONG WINAPI HTMLXDomainRequest_AddRef(IHTMLXDomainRequest *iface)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_AddRef(&This->event_target.dispex.IDispatchEx_iface);
+}
+
+static ULONG WINAPI HTMLXDomainRequest_Release(IHTMLXDomainRequest *iface)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_Release(&This->event_target.dispex.IDispatchEx_iface);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_GetTypeInfoCount(IHTMLXDomainRequest *iface, UINT *pctinfo)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_GetTypeInfoCount(&This->event_target.dispex.IDispatchEx_iface, pctinfo);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_GetTypeInfo(IHTMLXDomainRequest *iface, UINT iTInfo,
+        LCID lcid, ITypeInfo **ppTInfo)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_GetTypeInfo(&This->event_target.dispex.IDispatchEx_iface, iTInfo, lcid, ppTInfo);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_GetIDsOfNames(IHTMLXDomainRequest *iface, REFIID riid, LPOLESTR *rgszNames, UINT cNames,
+        LCID lcid, DISPID *rgDispId)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_GetIDsOfNames(&This->event_target.dispex.IDispatchEx_iface, riid, rgszNames, cNames,
+            lcid, rgDispId);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_Invoke(IHTMLXDomainRequest *iface, DISPID dispIdMember, REFIID riid, LCID lcid,
+        WORD wFlags, DISPPARAMS *pDispParams, VARIANT *pVarResult, EXCEPINFO *pExcepInfo, UINT *puArgErr)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return IDispatchEx_Invoke(&This->event_target.dispex.IDispatchEx_iface, dispIdMember, riid, lcid, wFlags,
+            pDispParams, pVarResult, pExcepInfo, puArgErr);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_responseText(IHTMLXDomainRequest *iface, BSTR *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return HTMLXMLHttpRequest_get_responseText(&This->IHTMLXMLHttpRequest_iface, p);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_put_timeout(IHTMLXDomainRequest *iface, LONG v)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%ld)\n", This, v);
+
+    if(v < 0)
+        return E_INVALIDARG;
+    return map_nsresult(nsIXMLHttpRequest_SetTimeout(This->nsxhr, v));
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_timeout(IHTMLXDomainRequest *iface, LONG *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    nsresult nsres;
+    UINT32 timeout;
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    if(!p)
+        return E_INVALIDARG;
+
+    nsres = nsIXMLHttpRequest_GetTimeout(This->nsxhr, &timeout);
+    *p = timeout ? timeout : -1;
+    return map_nsresult(nsres);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_contentType(IHTMLXDomainRequest *iface, BSTR *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    nsAString nsstr;
+    nsresult nsres;
+    HRESULT hres;
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    if(!p)
+        return E_POINTER;
+
+    if(This->ready_state < READYSTATE_LOADED) {
+        *p = NULL;
+        return S_OK;
+    }
+
+    nsAString_InitDepend(&nsstr, NULL);
+    nsres = nsIXMLHttpRequest_GetResponseText(This->nsxhr, &nsstr);
+    if(NS_SUCCEEDED(nsres)) {
+        const PRUnichar *data;
+        char text[256 * 3];
+        unsigned len;
+        WCHAR *mime;
+
+        nsAString_GetData(&nsstr, &data);
+        len = WideCharToMultiByte(CP_ACP, 0, data, wcsnlen(data, 256), text, ARRAY_SIZE(text), NULL, NULL);
+        nsAString_Finish(&nsstr);
+
+        if(len) {
+            hres = FindMimeFromData(NULL, NULL, text, len, NULL, 0, &mime, 0);
+            if(SUCCEEDED(hres)) {
+                *p = SysAllocString(mime);
+                CoTaskMemFree(mime);
+                return *p ? S_OK : E_OUTOFMEMORY;
+            }
+        }
+    }
+
+    *p = SysAllocString(L"text/plain");
+    return *p ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_put_onprogress(IHTMLXDomainRequest *iface, VARIANT v)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%s)\n", This, debugstr_variant(&v));
+
+    return set_event_handler(&This->event_target, EVENTID_PROGRESS, &v);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_onprogress(IHTMLXDomainRequest *iface, VARIANT *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    return get_event_handler(&This->event_target, EVENTID_PROGRESS, p);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_put_onerror(IHTMLXDomainRequest *iface, VARIANT v)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%s)\n", This, debugstr_variant(&v));
+
+    return set_event_handler(&This->event_target, EVENTID_ERROR, &v);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_onerror(IHTMLXDomainRequest *iface, VARIANT *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    return get_event_handler(&This->event_target, EVENTID_ERROR, p);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_put_ontimeout(IHTMLXDomainRequest *iface, VARIANT v)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%s)\n", This, debugstr_variant(&v));
+
+    return set_event_handler(&This->event_target, EVENTID_TIMEOUT, &v);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_ontimeout(IHTMLXDomainRequest *iface, VARIANT *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    return get_event_handler(&This->event_target, EVENTID_TIMEOUT, p);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_put_onload(IHTMLXDomainRequest *iface, VARIANT v)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%s)\n", This, debugstr_variant(&v));
+
+    return set_event_handler(&This->event_target, EVENTID_LOAD, &v);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_get_onload(IHTMLXDomainRequest *iface, VARIANT *p)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    return get_event_handler(&This->event_target, EVENTID_LOAD, p);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_abort(IHTMLXDomainRequest *iface)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return HTMLXMLHttpRequest_abort(&This->IHTMLXMLHttpRequest_iface);
+}
+
+static HRESULT WINAPI HTMLXDomainRequest_open(IHTMLXDomainRequest *iface, BSTR bstrMethod, BSTR bstrUrl)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    VARIANT vtrue, vempty;
+    nsACString str1, str2;
+    nsAString nsstr;
+    nsresult nsres;
+    HRESULT hres;
+    DWORD magic;
+    WCHAR *p;
+
+    TRACE("(%p)->(%s %s)\n", This, debugstr_w(bstrMethod), debugstr_w(bstrUrl));
+
+    if((p = wcschr(bstrUrl, ':')) && p[1] == '/' && p[2] == '/') {
+        size_t len = p - bstrUrl;
+        BSTR bstr;
+
+        /* Native only allows http and https, and the scheme must match */
+        if(len < 4 || len > 5 || wcsnicmp(bstrUrl, L"https", len) || !This->window->base.outer_window || !This->window->base.outer_window->uri)
+            return E_ACCESSDENIED;
+
+        hres = IUri_GetSchemeName(This->window->base.outer_window->uri, &bstr);
+        if(FAILED(hres))
+            return hres;
+        if(SysStringLen(bstr) != len || wcsnicmp(bstr, bstrUrl, len))
+            hres = E_ACCESSDENIED;
+        SysFreeString(bstr);
+        if(FAILED(hres))
+            return hres;
+    }
+
+    V_VT(&vtrue) = VT_BOOL;
+    V_BOOL(&vtrue) = VARIANT_TRUE;
+    V_VT(&vempty) = VT_EMPTY;
+    magic = This->magic;
+    hres = HTMLXMLHttpRequest_open(&This->IHTMLXMLHttpRequest_iface, bstrMethod, bstrUrl, vtrue, vempty, vempty);
+    if(FAILED(hres) || magic != This->magic)
+        return hres;
+
+    /* Prevent Gecko from parsing responseXML for no reason */
+    nsAString_InitDepend(&nsstr, L"text/plain");
+    nsIXMLHttpRequest_SlowOverrideMimeType(This->nsxhr, &nsstr);
+    nsAString_Finish(&nsstr);
+
+    /* XDomainRequest only accepts text/plain */
+    nsACString_InitDepend(&str1, "Accept");
+    nsACString_InitDepend(&str2, "text/plain");
+    nsres = nsIXMLHttpRequest_SetRequestHeader(This->nsxhr, &str1, &str2);
+    nsACString_Finish(&str1);
+    nsACString_Finish(&str2);
+    if(NS_FAILED(nsres)) {
+        ERR("nsIXMLHttpRequest_SetRequestHeader failed: %08lx\n", nsres);
+        return map_nsresult(nsres);
+    }
+
+    /* IE always adds Origin header, even from same origin, but Gecko doesn't allow us to alter it. */
     return S_OK;
 }
+
+static HRESULT WINAPI HTMLXDomainRequest_send(IHTMLXDomainRequest *iface, VARIANT varBody)
+{
+    HTMLXMLHttpRequest *This = impl_from_IHTMLXDomainRequest(iface);
+    return HTMLXMLHttpRequest_send(&This->IHTMLXMLHttpRequest_iface, varBody);
+}
+
+static const IHTMLXDomainRequestVtbl HTMLXDomainRequestVtbl = {
+    HTMLXDomainRequest_QueryInterface,
+    HTMLXDomainRequest_AddRef,
+    HTMLXDomainRequest_Release,
+    HTMLXDomainRequest_GetTypeInfoCount,
+    HTMLXDomainRequest_GetTypeInfo,
+    HTMLXDomainRequest_GetIDsOfNames,
+    HTMLXDomainRequest_Invoke,
+    HTMLXDomainRequest_get_responseText,
+    HTMLXDomainRequest_put_timeout,
+    HTMLXDomainRequest_get_timeout,
+    HTMLXDomainRequest_get_contentType,
+    HTMLXDomainRequest_put_onprogress,
+    HTMLXDomainRequest_get_onprogress,
+    HTMLXDomainRequest_put_onerror,
+    HTMLXDomainRequest_get_onerror,
+    HTMLXDomainRequest_put_ontimeout,
+    HTMLXDomainRequest_get_ontimeout,
+    HTMLXDomainRequest_put_onload,
+    HTMLXDomainRequest_get_onload,
+    HTMLXDomainRequest_abort,
+    HTMLXDomainRequest_open,
+    HTMLXDomainRequest_send
+};
+
+static void *HTMLXDomainRequest_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXDomainRequest, riid))
+        return &This->IHTMLXDomainRequest_iface;
+
+    return EventTarget_query_interface(&This->event_target, riid);
+}
+
+static const event_target_vtbl_t HTMLXDomainRequest_event_target_vtbl = {
+    {
+        .query_interface     = HTMLXDomainRequest_query_interface,
+        .destructor          = HTMLXMLHttpRequest_destructor,
+        .traverse            = HTMLXMLHttpRequest_traverse,
+        .unlink              = HTMLXMLHttpRequest_unlink,
+        .last_release        = HTMLXMLHttpRequest_last_release
+    },
+    .get_gecko_target        = HTMLXMLHttpRequest_get_gecko_target,
+    .bind_event              = HTMLXMLHttpRequest_bind_event
+};
+
+static void HTMLXDomainRequest_init_dispex_info(dispex_data_t *info, compat_mode_t compat_mode)
+{
+    dispex_info_add_interface(info, IHTMLXDomainRequest_tid, NULL);
+}
+
+dispex_static_data_t HTMLXDomainRequest_dispex = {
+    "XDomainRequest",
+    &HTMLXDomainRequest_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_HTMLXDomainRequest,
+    DispXDomainRequest_tid,
+    no_iface_tids,
+    HTMLXDomainRequest_init_dispex_info
+};
+
+
+/* IHTMLXDomainRequestFactory */
+static inline struct global_ctor *impl_from_IHTMLXDomainRequestFactory(IHTMLXDomainRequestFactory *iface)
+{
+    return CONTAINING_RECORD(iface, struct global_ctor, IHTMLXDomainRequestFactory_iface);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_QueryInterface(IHTMLXDomainRequestFactory *iface, REFIID riid, void **ppv)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
+}
+
+static ULONG WINAPI HTMLXDomainRequestFactory_AddRef(IHTMLXDomainRequestFactory *iface)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
+}
+
+static ULONG WINAPI HTMLXDomainRequestFactory_Release(IHTMLXDomainRequestFactory *iface)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_GetTypeInfoCount(IHTMLXDomainRequestFactory *iface, UINT *pctinfo)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_GetTypeInfoCount(&This->dispex.IDispatchEx_iface, pctinfo);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_GetTypeInfo(IHTMLXDomainRequestFactory *iface, UINT iTInfo,
+        LCID lcid, ITypeInfo **ppTInfo)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_GetTypeInfo(&This->dispex.IDispatchEx_iface, iTInfo, lcid, ppTInfo);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_GetIDsOfNames(IHTMLXDomainRequestFactory *iface, REFIID riid, LPOLESTR *rgszNames, UINT cNames,
+        LCID lcid, DISPID *rgDispId)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_GetIDsOfNames(&This->dispex.IDispatchEx_iface, riid, rgszNames, cNames,
+            lcid, rgDispId);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_Invoke(IHTMLXDomainRequestFactory *iface, DISPID dispIdMember, REFIID riid, LCID lcid,
+        WORD wFlags, DISPPARAMS *pDispParams, VARIANT *pVarResult, EXCEPINFO *pExcepInfo, UINT *puArgErr)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    return IDispatchEx_Invoke(&This->dispex.IDispatchEx_iface, dispIdMember, riid, lcid, wFlags,
+            pDispParams, pVarResult, pExcepInfo, puArgErr);
+}
+
+static HRESULT WINAPI HTMLXDomainRequestFactory_create(IHTMLXDomainRequestFactory *iface, IHTMLXDomainRequest **p)
+{
+    struct global_ctor *This = impl_from_IHTMLXDomainRequestFactory(iface);
+    HTMLXMLHttpRequest *xhr;
+    HRESULT hres;
+
+    TRACE("(%p)->(%p)\n", This, p);
+
+    hres = create_xhr(This->window, &HTMLXDomainRequest_dispex, &xhr);
+    if(FAILED(hres))
+        return hres;
+
+    xhr->IHTMLXDomainRequest_iface.lpVtbl = &HTMLXDomainRequestVtbl;
+
+    *p = &xhr->IHTMLXDomainRequest_iface;
+    return hres;
+}
+
+const IHTMLXDomainRequestFactoryVtbl HTMLXDomainRequestFactoryVtbl = {
+    HTMLXDomainRequestFactory_QueryInterface,
+    HTMLXDomainRequestFactory_AddRef,
+    HTMLXDomainRequestFactory_Release,
+    HTMLXDomainRequestFactory_GetTypeInfoCount,
+    HTMLXDomainRequestFactory_GetTypeInfo,
+    HTMLXDomainRequestFactory_GetIDsOfNames,
+    HTMLXDomainRequestFactory_Invoke,
+    HTMLXDomainRequestFactory_create
+};
+
+static void *HTMLXDomainRequestFactory_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    struct global_ctor *This = ctor_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXDomainRequestFactory, riid))
+        return &This->IHTMLXDomainRequestFactory_iface;
+
+    return NULL;
+}
+
+static HRESULT HTMLXDomainRequestFactory_value(DispatchEx *iface, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+{
+    struct global_ctor *This = ctor_from_DispatchEx(iface);
+    IHTMLXDomainRequest *xdr;
+    HRESULT hres;
+
+    TRACE("\n");
+
+    if(flags != DISPATCH_CONSTRUCT)
+        return S_FALSE;
+
+    hres = IHTMLXDomainRequestFactory_create(&This->IHTMLXDomainRequestFactory_iface, &xdr);
+    if(FAILED(hres))
+        return hres;
+
+    V_VT(res) = VT_DISPATCH;
+    V_DISPATCH(res) = (IDispatch*)xdr;
+    return hres;
+}
+
+static const dispex_static_data_vtbl_t HTMLXDomainRequestFactory_dispex_vtbl = {
+    .query_interface  = HTMLXDomainRequestFactory_query_interface,
+    .destructor       = global_ctor_destructor,
+    .traverse         = global_ctor_traverse,
+    .unlink           = global_ctor_unlink,
+    .value            = HTMLXDomainRequestFactory_value,
+    .get_dispid       = legacy_ctor_get_dispid,
+    .get_name         = legacy_ctor_get_name,
+    .invoke           = legacy_ctor_invoke,
+    .delete           = legacy_ctor_delete
+};
+
+static const tid_t HTMLXDomainRequestFactory_iface_tids[] = {
+    IHTMLXDomainRequestFactory_tid,
+    0
+};
+
+dispex_static_data_t HTMLXDomainRequestFactory_dispex = {
+    "XDomainRequest",
+    &HTMLXDomainRequestFactory_dispex_vtbl,
+    PROTO_ID_NULL,
+    IHTMLXDomainRequestFactory_tid,
+    HTMLXDomainRequestFactory_iface_tids
+};
+
+static HRESULT HTMLXDomainRequestCtor_value(DispatchEx *iface, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+{
+    if(flags == DISPATCH_CONSTRUCT)
+        return HTMLXDomainRequestFactory_value(iface, lcid, flags, params, res, ei, caller);
+
+    return global_ctor_value(iface, lcid, flags, params, res, ei, caller);
+}
+
+static const dispex_static_data_vtbl_t HTMLXDomainRequestCtor_dispex_vtbl = {
+    .query_interface  = HTMLXDomainRequestFactory_query_interface,
+    .destructor       = global_ctor_destructor,
+    .traverse         = global_ctor_traverse,
+    .unlink           = global_ctor_unlink,
+    .value            = HTMLXDomainRequestCtor_value,
+    .get_dispid       = legacy_ctor_get_dispid,
+    .get_name         = legacy_ctor_get_name,
+    .invoke           = legacy_ctor_invoke,
+    .delete           = legacy_ctor_delete
+};
+
+dispex_static_data_t HTMLXDomainRequestCtor_dispex = {
+    "XDomainRequest",
+    &HTMLXDomainRequestCtor_dispex_vtbl,
+    PROTO_ID_NULL,
+    IHTMLXDomainRequestFactory_tid,
+    HTMLXDomainRequestFactory_iface_tids
+};

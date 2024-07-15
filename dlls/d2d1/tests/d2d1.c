@@ -1163,13 +1163,13 @@ static IDXGISwapChain *create_d3d10_swapchain(ID3D10Device1 *device, HWND window
 }
 
 static ID2D1RenderTarget *create_render_target_desc(IDXGISurface *surface,
-        const D2D1_RENDER_TARGET_PROPERTIES *desc, BOOL d3d11)
+        const D2D1_RENDER_TARGET_PROPERTIES *desc, BOOL d3d11, D2D1_FACTORY_TYPE factory_type)
 {
     ID2D1RenderTarget *render_target;
     ID2D1Factory *factory;
     HRESULT hr;
 
-    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &IID_ID2D1Factory, NULL, (void **)&factory);
+    hr = D2D1CreateFactory(factory_type, &IID_ID2D1Factory, NULL, (void **)&factory);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = ID2D1Factory_CreateDxgiSurfaceRenderTarget(factory, surface, desc, &render_target);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
@@ -1178,7 +1178,7 @@ static ID2D1RenderTarget *create_render_target_desc(IDXGISurface *surface,
     return render_target;
 }
 
-static ID2D1RenderTarget *create_render_target(IDXGISurface *surface, BOOL d3d11)
+static ID2D1RenderTarget *create_render_target(IDXGISurface *surface, BOOL d3d11, D2D1_FACTORY_TYPE factory_type)
 {
     D2D1_RENDER_TARGET_PROPERTIES desc;
 
@@ -1190,7 +1190,7 @@ static ID2D1RenderTarget *create_render_target(IDXGISurface *surface, BOOL d3d11
     desc.usage = D2D1_RENDER_TARGET_USAGE_NONE;
     desc.minLevel = D2D1_FEATURE_LEVEL_DEFAULT;
 
-    return create_render_target_desc(surface, &desc, d3d11);
+    return create_render_target_desc(surface, &desc, d3d11, factory_type);
 }
 
 #define release_test_context(ctx) release_test_context_(__LINE__, ctx)
@@ -1216,8 +1216,9 @@ static void release_test_context_(unsigned int line, struct d2d1_test_context *c
     ok_(__FILE__, line)(!ref, "Device has %lu references left.\n", ref);
 }
 
-#define init_test_context(ctx, d3d11) init_test_context_(__LINE__, ctx, d3d11)
-static BOOL init_test_context_(unsigned int line, struct d2d1_test_context *ctx, BOOL d3d11)
+#define init_test_context(ctx, d3d11) init_test_context_(__LINE__, ctx, d3d11, D2D1_FACTORY_TYPE_SINGLE_THREADED)
+#define init_test_multithreaded_context(ctx, d3d11) init_test_context_(__LINE__, ctx, d3d11, D2D1_FACTORY_TYPE_MULTI_THREADED)
+static BOOL init_test_context_(unsigned int line, struct d2d1_test_context *ctx, BOOL d3d11, D2D1_FACTORY_TYPE factory_type)
 {
     HRESULT hr;
 
@@ -1237,7 +1238,7 @@ static BOOL init_test_context_(unsigned int line, struct d2d1_test_context *ctx,
     hr = IDXGISwapChain_GetBuffer(ctx->swapchain, 0, &IID_IDXGISurface, (void **)&ctx->surface);
     ok_(__FILE__, line)(hr == S_OK, "Failed to get buffer, hr %#lx.\n", hr);
 
-    ctx->rt = create_render_target(ctx->surface, d3d11);
+    ctx->rt = create_render_target(ctx->surface, d3d11, factory_type);
     if (!ctx->rt && d3d11)
     {
         todo_wine win_skip_(__FILE__, line)("Skipping d3d11 tests.\n");
@@ -2266,41 +2267,41 @@ static void test_bitmap_brush(BOOL d3d11)
         /* Crash on Windows 7+ */
         if (0)
         {
-            ID2D1DeviceContext_DrawImage(context, NULL, NULL, NULL, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            ID2D1DeviceContext_DrawImage(context, NULL, NULL, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                     D2D1_COMPOSITE_MODE_SOURCE_OVER);
         }
 
-        ID2D1DeviceContext_DrawImage(context, image, NULL, NULL, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, NULL, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         set_rect(&src_rect, 0.0f, 0.0f, image_size.width, image_size.height);
 
-        ID2D1DeviceContext_DrawImage(context, image, NULL, &src_rect, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, NULL, &src_rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         offset.x = -1;
         offset.y = -1;
-        ID2D1DeviceContext_DrawImage(context, image, &offset, NULL, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         offset.x = image_size.width * 2;
         offset.y = image_size.height;
-        ID2D1DeviceContext_DrawImage(context, image, &offset, NULL, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         offset.x = image_size.width * 3;
         set_rect(&src_rect, image_size.width / 2, image_size.height / 2, image_size.width, image_size.height);
-        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         offset.x = image_size.width * 4;
         set_rect(&src_rect, 0.0f, 0.0f, image_size.width * 2, image_size.height * 2);
-        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         offset.x = image_size.width * 5;
         set_rect(&src_rect, image_size.width, image_size.height, 0.0f, 0.0f);
-        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         hr = ID2D1RenderTarget_EndDraw(rt, NULL, NULL);
@@ -2312,7 +2313,7 @@ static void test_bitmap_brush(BOOL d3d11)
 
         offset.x = image_size.width * 6;
         set_rect(&src_rect, 1.0f, 0.0f, 1.0f, image_size.height);
-        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        ID2D1DeviceContext_DrawImage(context, image, &offset, &src_rect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 D2D1_COMPOSITE_MODE_SOURCE_OVER);
 
         hr = ID2D1RenderTarget_EndDraw(rt, NULL, NULL);
@@ -4887,7 +4888,7 @@ static void test_alpha_mode(BOOL d3d11)
     rt_desc.dpiY = 0.0f;
     rt_desc.usage = D2D1_RENDER_TARGET_USAGE_NONE;
     rt_desc.minLevel = D2D1_FEATURE_LEVEL_DEFAULT;
-    rt = create_render_target_desc(ctx.surface, &rt_desc, d3d11);
+    rt = create_render_target_desc(ctx.surface, &rt_desc, d3d11, D2D1_FACTORY_TYPE_SINGLE_THREADED);
     ok(!!rt, "Failed to create render target.\n");
 
     ID2D1RenderTarget_SetAntialiasMode(rt, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -10433,6 +10434,7 @@ static void test_wic_bitmap_format(BOOL d3d11)
         {&GUID_WICPixelFormat32bppPBGRA, {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}},
         {&GUID_WICPixelFormat32bppPRGBA, {DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}},
         {&GUID_WICPixelFormat32bppBGR,   {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE}},
+        {&GUID_WICPixelFormat32bppRGB,   {DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_IGNORE}},
     };
 
     if (!init_test_context(&ctx, d3d11))
@@ -10693,8 +10695,24 @@ static DWORD WINAPI mt_factory_test_thread_func(void *param)
     return 0;
 }
 
+static DWORD WINAPI mt_factory_test_thread_draw_func(void *param)
+{
+    ID2D1RenderTarget *rt = param;
+    D2D1_COLOR_F color;
+    HRESULT hr;
+
+    ID2D1RenderTarget_BeginDraw(rt);
+    set_color(&color, 1.0f, 1.0f, 0.0f, 1.0f);
+    ID2D1RenderTarget_Clear(rt, &color);
+    hr = ID2D1RenderTarget_EndDraw(rt, NULL, NULL);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    return 0;
+}
+
 static void test_mt_factory(BOOL d3d11)
 {
+    struct d2d1_test_context ctx;
     ID2D1Multithread *multithread;
     ID2D1Factory *factory;
     HANDLE thread;
@@ -10749,6 +10767,42 @@ static void test_mt_factory(BOOL d3d11)
     ID2D1Multithread_Release(multithread);
 
     ID2D1Factory_Release(factory);
+
+    if (!init_test_multithreaded_context(&ctx, d3d11))
+        return;
+
+    hr = ID2D1Factory_QueryInterface(ctx.factory, &IID_ID2D1Multithread, (void **)&multithread);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1Multithread_Enter(multithread);
+    thread = CreateThread(NULL, 0, mt_factory_test_thread_draw_func, ctx.rt, 0, NULL);
+    ok(!!thread, "Failed to create a thread.\n");
+    ret = WaitForSingleObject(thread, 1000);
+    ok(ret == WAIT_TIMEOUT, "Expected timeout.\n");
+    ID2D1Multithread_Leave(multithread);
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+
+    ID2D1Multithread_Release(multithread);
+    release_test_context(&ctx);
+
+    if (!init_test_context(&ctx, d3d11))
+        return;
+
+    hr = ID2D1Factory_QueryInterface(ctx.factory, &IID_ID2D1Multithread, (void **)&multithread);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1Multithread_Enter(multithread);
+    thread = CreateThread(NULL, 0, mt_factory_test_thread_draw_func, ctx.rt, 0, NULL);
+    ok(!!thread, "Failed to create a thread.\n");
+    ret = WaitForSingleObject(thread, 1000);
+    ok(ret == WAIT_OBJECT_0, "Didn't expect timeout.\n");
+    ID2D1Multithread_Leave(multithread);
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+
+    ID2D1Multithread_Release(multithread);
+    release_test_context(&ctx);
 }
 
 #define check_system_properties(effect, is_builtin) check_system_properties_(__LINE__, effect, is_builtin)

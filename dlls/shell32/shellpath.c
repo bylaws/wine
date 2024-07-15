@@ -887,7 +887,7 @@ static ULONG WINAPI ApplicationDestinations_Release(IApplicationDestinations *if
     TRACE("(%p), new refcount=%li\n", This, ref);
 
     if (ref == 0)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -1006,7 +1006,7 @@ static ULONG WINAPI ApplicationDocumentLists_Release(IApplicationDocumentLists *
     TRACE("(%p), new refcount=%li\n", This, ref);
 
     if (ref == 0)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -2329,13 +2329,13 @@ static LPWSTR _GetUserSidStringFromToken(HANDLE Token)
     {
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
             return NULL;
-        UserInfo = heap_alloc(InfoSize);
+        UserInfo = malloc(InfoSize);
         if (UserInfo == NULL)
             return NULL;
         if (! GetTokenInformation(Token, TokenUser, UserInfo, InfoSize,
                                   &InfoSize))
         {
-            heap_free(UserInfo);
+            free(UserInfo);
             return NULL;
         }
     }
@@ -2344,7 +2344,7 @@ static LPWSTR _GetUserSidStringFromToken(HANDLE Token)
         SidStr = NULL;
 
     if (UserInfo != (PTOKEN_USER) InfoBuffer)
-        heap_free(UserInfo);
+        free(UserInfo);
 
     return SidStr;
 }
@@ -2639,180 +2639,6 @@ end:
     return hr;
 }
 
-static char *xdg_config;
-static DWORD xdg_config_len;
-
-static BOOL WINAPI init_xdg_dirs( INIT_ONCE *once, void *param, void **context )
-{
-    const WCHAR *var, *fmt = L"\\??\\unix%s/user-dirs.dirs";
-    char *p;
-    WCHAR *name, *ptr;
-    HANDLE file;
-    DWORD len;
-
-    if (!(var = _wgetenv( L"XDG_CONFIG_HOME" )) || var[0] != '/')
-    {
-        if (!(var = _wgetenv( L"WINEHOMEDIR" ))) return TRUE;
-        fmt = L"%s/.config/user-dirs.dirs";
-    }
-    len = lstrlenW(var) + lstrlenW(fmt);
-    name = heap_alloc( len * sizeof(WCHAR) );
-    swprintf( name, len, fmt, var );
-    name[1] = '\\';  /* change \??\ to \\?\ */
-    for (ptr = name; *ptr; ptr++) if (*ptr == '/') *ptr = '\\';
-
-    file = CreateFileW( name, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
-    heap_free( name );
-    if (file != INVALID_HANDLE_VALUE)
-    {
-        len = GetFileSize( file, NULL );
-        if (!(xdg_config = heap_alloc( len + 1 ))) return TRUE;
-        if (!ReadFile( file, xdg_config, len, &xdg_config_len, NULL ))
-        {
-            heap_free( xdg_config );
-            xdg_config = NULL;
-        }
-        else
-        {
-            for (p = xdg_config; p < xdg_config + xdg_config_len; p++) if (*p == '\n') *p = 0;
-            *p = 0;  /* append null to simplify string parsing */
-        }
-        CloseHandle( file );
-    }
-    return TRUE;
-}
-
-static char *get_xdg_path( const char *var )
-{
-    static INIT_ONCE once;
-    char *p, *ret = NULL;
-    int i;
-
-    InitOnceExecuteOnce( &once, init_xdg_dirs, NULL, NULL );
-    if (!xdg_config) return NULL;
-
-    for (p = xdg_config; p < xdg_config + xdg_config_len; p += strlen(p) + 1)
-    {
-        while (*p == ' ' || *p == '\t') p++;
-        if (strncmp( p, var, strlen(var) )) continue;
-        p += strlen(var);
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p != '=') continue;
-        p++;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p != '"') continue;
-        p++;
-        if (*p != '/' && strncmp( p, "$HOME/", 6 )) continue;
-
-        if (!(ret = heap_alloc( strlen(p) + 1 ))) break;
-        for (i = 0; *p && *p != '"'; i++, p++)
-        {
-            if (*p == '\\' && p[1]) p++;
-            ret[i] = *p;
-        }
-        ret[i] = 0;
-        if (*p != '"')
-        {
-            heap_free( ret );
-            ret = NULL;
-        }
-        break;
-    }
-    return ret;
-}
-
-static BOOL link_folder( HANDLE mgr, const UNICODE_STRING *path, const char *link )
-{
-    struct mountmgr_shell_folder *ioctl;
-    DWORD len = sizeof(*ioctl) + path->Length + strlen(link) + 1;
-    BOOL ret;
-
-    if (!(ioctl = heap_alloc( len ))) return FALSE;
-    ioctl->create_backup = FALSE;
-    ioctl->folder_offset = sizeof(*ioctl);
-    ioctl->folder_size = path->Length;
-    memcpy( (char *)ioctl + ioctl->folder_offset, path->Buffer, ioctl->folder_size );
-    ioctl->symlink_offset = ioctl->folder_offset + ioctl->folder_size;
-    strcpy( (char *)ioctl + ioctl->symlink_offset, link );
-
-    ret = DeviceIoControl( mgr, IOCTL_MOUNTMGR_DEFINE_SHELL_FOLDER, ioctl, len, NULL, 0, NULL, NULL );
-    heap_free( ioctl );
-    return ret;
-}
-
-/******************************************************************************
- * create_link
- *
- * Sets up a symbolic link for one of the 'My Whatever' shell folders to point
- * into the corresponding XDG directory.
- */
-static void create_link( const WCHAR *path, const char *xdg_name, const char *default_name )
-{
-    UNICODE_STRING nt_name;
-    char *target = NULL;
-    HANDLE mgr;
-
-    if ((mgr = CreateFileW( MOUNTMGR_DOS_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                            0, 0 )) == INVALID_HANDLE_VALUE)
-    {
-        FIXME( "failed to connect to mount manager\n" );
-        return;
-    }
-
-    nt_name.Buffer = NULL;
-    if (!RtlDosPathNameToNtPathName_U( path, &nt_name, NULL, NULL )) goto done;
-
-    if ((target = get_xdg_path( xdg_name )))
-    {
-        if (link_folder( mgr, &nt_name, target )) goto done;
-    }
-    link_folder( mgr, &nt_name, default_name );
-
-done:
-    RtlFreeUnicodeString( &nt_name );
-    heap_free( target );
-    CloseHandle( mgr );
-}
-
-/******************************************************************************
- * _SHCreateSymbolicLink  [Internal]
- *
- * Sets up a symbolic link for one of the special shell folders to point into
- * the users home directory.
- *
- * PARAMS
- *  nFolder [I] CSIDL identifying the folder.
- */
-static void _SHCreateSymbolicLink(int nFolder, const WCHAR *path)
-{
-    DWORD folder = nFolder & CSIDL_FOLDER_MASK;
-
-    switch (folder) {
-        case CSIDL_PERSONAL:
-            create_link( path, "XDG_DOCUMENTS_DIR", "$HOME/Documents" );
-            break;
-        case CSIDL_DESKTOPDIRECTORY:
-            create_link( path, "XDG_DESKTOP_DIR", "$HOME/Desktop" );
-            break;
-        case CSIDL_MYPICTURES:
-            create_link( path, "XDG_PICTURES_DIR", "$HOME/Pictures" );
-            break;
-        case CSIDL_MYVIDEO:
-            create_link( path, "XDG_VIDEOS_DIR", "$HOME/Movies" );
-            break;
-        case CSIDL_MYMUSIC:
-            create_link( path, "XDG_MUSIC_DIR", "$HOME/Music" );
-            break;
-        case CSIDL_DOWNLOADS:
-            create_link( path, "XDG_DOWNLOAD_DIR", "$HOME/Downloads" );
-            break;
-        case CSIDL_TEMPLATES:
-            create_link( path, "XDG_TEMPLATES_DIR", "$HOME/Templates" );
-            break;
-    }
-}
-
 /******************************************************************************
  * SHGetFolderPathW			[SHELL32.@]
  *
@@ -2862,7 +2688,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
     TRACE("%p,%#x,%p,%#lx,%s,%p\n", hwndOwner, nFolder, hToken, dwFlags, debugstr_a(pszSubPath), pszPath);
 
     if(pszPath) {
-        pszPathW = heap_alloc(MAX_PATH * sizeof(WCHAR));
+        pszPathW = malloc(MAX_PATH * sizeof(WCHAR));
         if(!pszPathW) {
             hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
             goto cleanup;
@@ -2876,7 +2702,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
      */
     if (pszSubPath && pszSubPath[0]) {
         length = MultiByteToWideChar(CP_ACP, 0, pszSubPath, -1, NULL, 0);
-        pszSubPathW = heap_alloc(length * sizeof(WCHAR));
+        pszSubPathW = malloc(length * sizeof(WCHAR));
         if(!pszSubPathW) {
             hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
             goto cleanup;
@@ -2890,8 +2716,8 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
         WideCharToMultiByte(CP_ACP, 0, pszPathW, -1, pszPath, MAX_PATH, NULL, NULL);
 
 cleanup:
-    heap_free(pszPathW);
-    heap_free(pszSubPathW);
+    free(pszPathW);
+    free(pszSubPathW);
     return hr;
 }
 
@@ -3001,10 +2827,6 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
         goto end;
     }
 
-    /* create symbolic links rather than directories for specific
-     * user shell folders */
-    _SHCreateSymbolicLink(folder, szBuildPath);
-
     /* create directory/directories */
     ret = SHCreateDirectoryExW(hwndOwner, szBuildPath, NULL);
     if (ret && ret != ERROR_ALREADY_EXISTS)
@@ -3059,6 +2881,8 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
  LPCWSTR szUserShellFolderPath, LPCWSTR szShellFolderPath, const UINT folders[],
  UINT foldersLen)
 {
+    static const WCHAR WineVistaPathsW[] = {'_','_','W','i','n','e','V','i','s','t','a','P','a','t','h','s',0};
+
     const WCHAR *szValueName;
     WCHAR buffer[40];
     UINT i;
@@ -3067,6 +2891,7 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
     HKEY hUserKey = NULL, hKey = NULL;
     DWORD dwType, dwPathLen;
     LONG ret;
+    DWORD already_vista_paths = 0;
 
     TRACE("%p,%p,%s,%p,%u\n", hRootKey, hToken,
      debugstr_w(szUserShellFolderPath), folders, foldersLen);
@@ -3080,6 +2905,12 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
         if (ret)
             hr = HRESULT_FROM_WIN32(ret);
     }
+
+    /* check if the registry has already been updated to the vista+ style paths */
+    dwPathLen = sizeof(already_vista_paths);
+    RegQueryValueExW(hUserKey, WineVistaPathsW, NULL, &dwType,
+            (LPBYTE)&already_vista_paths, &dwPathLen);
+
     for (i = 0; SUCCEEDED(hr) && i < foldersLen; i++)
     {
         dwPathLen = MAX_PATH * sizeof(WCHAR);
@@ -3092,9 +2923,10 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
             szValueName = &buffer[0];
         }
 
-        if (RegQueryValueExW(hUserKey, szValueName, NULL,
-         &dwType, (LPBYTE)path, &dwPathLen) || (dwType != REG_SZ &&
-         dwType != REG_EXPAND_SZ))
+        if (!already_vista_paths ||
+                RegQueryValueExW(hUserKey, szValueName, NULL, &dwType,
+                    (LPBYTE)path, &dwPathLen) ||
+                (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
         {
             *path = '\0';
             if (CSIDL_Data[folders[i]].type == CSIDL_Type_User)
@@ -3135,6 +2967,11 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
              hToken, SHGFP_TYPE_DEFAULT, path);
         }
     }
+
+    already_vista_paths = 1;
+    RegSetValueExW(hUserKey, WineVistaPathsW, 0, REG_DWORD,
+            (LPBYTE)&already_vista_paths, sizeof(already_vista_paths));
+
     if (hUserKey)
         RegCloseKey(hUserKey);
     if (hKey)
@@ -3275,6 +3112,23 @@ static HRESULT create_extra_folders(void)
         hr = SHGetFolderPathAndSubDirW(0, CSIDL_APPDATA | CSIDL_FLAG_CREATE, NULL,
                                        SHGFP_TYPE_DEFAULT, L"Microsoft\\Windows\\Themes", path);
     }
+
+
+    /* Proton HACK: In older Proton versions, duplicate Stuff directories were
+     * created at both %PROFILE%\Music and %PROFILE\Documents\Music. Due to
+     * some bugs when downgrading to those older Proton versions, create those
+     * missing Documents directories here, too. */
+    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
+                                   SHGFP_TYPE_DEFAULT, L"Downloads", path);
+    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
+                                   SHGFP_TYPE_DEFAULT, L"Music", path);
+    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
+                                   SHGFP_TYPE_DEFAULT, L"Pictures", path);
+    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
+                                   SHGFP_TYPE_DEFAULT, L"Templates", path);
+    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
+                                   SHGFP_TYPE_DEFAULT, L"Videos", path);
+
     return hr;
 }
 
@@ -3289,9 +3143,9 @@ static HRESULT set_folder_attributes(void)
     static const struct
     {
         const CLSID *clsid;
-        BOOL wfparsing : 1;
-        BOOL wfdisplay : 1;
-        BOOL hideasdel : 1;
+        unsigned int wfparsing : 1;
+        unsigned int wfdisplay : 1;
+        unsigned int hideasdel : 1;
         DWORD attr;
         DWORD call_for_attr;
     } folders[] =
@@ -3616,7 +3470,7 @@ static HRESULT get_known_folder_registry_path(
         lstrcpyW(sGuid, lpStringGuid);
 
     length = lstrlenW(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FolderDescriptions")+51;
-    *lpPath = heap_alloc(length*sizeof(WCHAR));
+    *lpPath = malloc(length * sizeof(WCHAR));
     if(!(*lpPath))
         hr = E_OUTOFMEMORY;
 
@@ -3697,7 +3551,7 @@ static HRESULT get_known_folder_redirection_place(
             hr = E_FAIL;
     }
 
-    heap_free(lpRegistryPath);
+    free(lpRegistryPath);
     return hr;
 }
 
@@ -3725,7 +3579,7 @@ static HRESULT redirect_known_folder(
     if(SUCCEEDED(hr))
         hr = get_known_folder_path_by_id(rfid, lpRegistryPath, 0, &lpSrcPath);
 
-    heap_free(lpRegistryPath);
+    free(lpRegistryPath);
 
     /* get path to redirection storage */
     if(SUCCEEDED(hr))
@@ -3821,8 +3675,8 @@ static ULONG WINAPI knownfolder_Release(
     if (!refs)
     {
         TRACE("destroying %p\n", knownfolder);
-        heap_free( knownfolder->registryPath );
-        heap_free( knownfolder );
+        free( knownfolder->registryPath );
+        free( knownfolder );
     }
     return refs;
 }
@@ -3880,7 +3734,7 @@ static HRESULT knownfolder_set_id(
     else
     {
         /* This known folder is not registered. To mark it, we set registryPath to NULL */
-        heap_free(knownfolder->registryPath);
+        free(knownfolder->registryPath);
         knownfolder->registryPath = NULL;
         hr = S_OK;
     }
@@ -3959,15 +3813,15 @@ static HRESULT get_known_folder_path(
 
         hr = get_known_folder_path(parentGuid, parentRegistryPath, &parentPath);
         if(FAILED(hr)) {
-            heap_free(parentRegistryPath);
+            free(parentRegistryPath);
             return hr;
         }
 
         lstrcatW(path, parentPath);
         lstrcatW(path, L"\\");
 
-        heap_free(parentRegistryPath);
-        heap_free(parentPath);
+        free(parentRegistryPath);
+        free(parentPath);
     }
 
     /* check, if folder was redirected */
@@ -4182,7 +4036,7 @@ static HRESULT knownfolder_create( struct knownfolder **knownfolder )
 {
     struct knownfolder *kf;
 
-    kf = heap_alloc( sizeof(*kf) );
+    kf = malloc( sizeof(*kf) );
     if (!kf) return E_OUTOFMEMORY;
 
     kf->IKnownFolder_iface.lpVtbl = &knownfolder_vtbl;
@@ -4224,8 +4078,8 @@ static ULONG WINAPI foldermanager_Release(
     if (!refs)
     {
         TRACE("destroying %p\n", foldermanager);
-        heap_free( foldermanager->ids );
-        heap_free( foldermanager );
+        free( foldermanager->ids );
+        free( foldermanager );
     }
     return refs;
 }
@@ -4317,7 +4171,7 @@ static BOOL is_knownfolder( struct foldermanager *fm, const KNOWNFOLDERID *id )
     if(SUCCEEDED(hr))
     {
         hr = HRESULT_FROM_WIN32(RegOpenKeyExW(HKEY_LOCAL_MACHINE, registryPath, 0, 0, &hKey));
-        heap_free(registryPath);
+        free(registryPath);
     }
 
     if(SUCCEEDED(hr))
@@ -4377,7 +4231,7 @@ static HRESULT WINAPI foldermanager_GetFolderByName(
         if (FAILED( hr )) return hr;
 
         hr = get_known_folder_wstr( path, L"Name", &name );
-        heap_free( path );
+        free( path );
         if (FAILED( hr )) return hr;
 
         found = !wcsicmp( pszCanonicalName, name );
@@ -4451,7 +4305,7 @@ static HRESULT register_folder(const KNOWNFOLDERID *rfid, const KNOWNFOLDER_DEFI
             SHDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath);
     }
 
-    heap_free(registryPath);
+    free(registryPath);
     return hr;
 }
 
@@ -4477,7 +4331,7 @@ static HRESULT WINAPI foldermanager_UnregisterFolder(
     if(SUCCEEDED(hr))
         hr = HRESULT_FROM_WIN32(SHDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath));
 
-    heap_free(registryPath);
+    free(registryPath);
     return hr;
 }
 
@@ -4535,7 +4389,7 @@ static HRESULT foldermanager_create( void **ppv )
     UINT i, j;
     struct foldermanager *fm;
 
-    fm = heap_alloc( sizeof(*fm) );
+    fm = malloc( sizeof(*fm) );
     if (!fm) return E_OUTOFMEMORY;
 
     fm->IKnownFolderManager_iface.lpVtbl = &foldermanager_vtbl;
@@ -4546,10 +4400,10 @@ static HRESULT foldermanager_create( void **ppv )
     {
         if (!IsEqualGUID( CSIDL_Data[i].id, &GUID_NULL )) fm->num_ids++;
     }
-    fm->ids = heap_alloc( fm->num_ids * sizeof(KNOWNFOLDERID) );
+    fm->ids = malloc( fm->num_ids * sizeof(KNOWNFOLDERID) );
     if (!fm->ids)
     {
-        heap_free( fm );
+        free( fm );
         return E_OUTOFMEMORY;
     }
     for (i = j = 0; i < ARRAY_SIZE(CSIDL_Data); i++)

@@ -339,8 +339,6 @@ typedef struct
 {
     DispatchEx dispex;
     IHTMLFiltersCollection IHTMLFiltersCollection_iface;
-
-    LONG ref;
 } HTMLFiltersCollection;
 
 static inline HTMLFiltersCollection *impl_from_IHTMLFiltersCollection(IHTMLFiltersCollection *iface)
@@ -348,7 +346,7 @@ static inline HTMLFiltersCollection *impl_from_IHTMLFiltersCollection(IHTMLFilte
     return CONTAINING_RECORD(iface, HTMLFiltersCollection, IHTMLFiltersCollection_iface);
 }
 
-static HRESULT create_filters_collection(compat_mode_t compat_mode, IHTMLFiltersCollection **ret);
+static HRESULT create_filters_collection(HTMLElement *elem, IHTMLFiltersCollection **ret);
 
 static inline HTMLElement *impl_from_IHTMLElement(IHTMLElement *iface)
 {
@@ -526,12 +524,56 @@ HRESULT create_element(HTMLDocumentNode *doc, const WCHAR *tag, HTMLElement **re
     return hres;
 }
 
+static HTMLDOMAttribute *find_attr_in_list(HTMLAttributeCollection *attrs, DISPID dispid, nsIDOMAttr *nsattr, LONG *pos)
+{
+    HTMLDOMAttribute *iter, *ret = NULL;
+    struct list *list = &attrs->attrs;
+    unsigned i = 0;
+
+    if(nsattr) {
+        LIST_FOR_EACH_ENTRY(iter, list, HTMLDOMAttribute, entry) {
+            if(iter->node.nsnode == (nsIDOMNode*)nsattr) {
+                ret = iter;
+                break;
+            }
+            i++;
+        }
+    }else {
+        LIST_FOR_EACH_ENTRY(iter, list, HTMLDOMAttribute, entry) {
+            if(iter->dispid == dispid) {
+                ret = iter;
+                break;
+            }
+            i++;
+        }
+    }
+    if(pos)
+        *pos = i;
+    return ret;
+}
+
+static DISPID get_dispid_for_nsattr(HTMLElement *elem, nsIDOMAttr *nsattr)
+{
+    DISPID dispid = 0;
+    nsAString nsstr;
+
+    nsAString_InitDepend(&nsstr, NULL);
+    if(SUCCEEDED(nsIDOMAttr_GetName(nsattr, &nsstr))) {
+        const PRUnichar *name;
+        nsAString_GetData(&nsstr, &name);
+
+        /* Supply a dummy non-builtin dispid so it can be checked for expando */
+        if(is_custom_attribute(&elem->node.event_target.dispex, name))
+            dispid = MSHTML_DISPID_CUSTOM_MIN;
+        nsAString_Finish(&nsstr);
+    }
+    return dispid;
+}
+
 typedef struct {
     DispatchEx dispex;
     IHTMLRect IHTMLRect_iface;
     IHTMLRect2 IHTMLRect2_iface;
-
-    LONG ref;
 
     nsIDOMClientRect *nsrect;
 } HTMLRect;
@@ -544,48 +586,19 @@ static inline HTMLRect *impl_from_IHTMLRect(IHTMLRect *iface)
 static HRESULT WINAPI HTMLRect_QueryInterface(IHTMLRect *iface, REFIID riid, void **ppv)
 {
     HTMLRect *This = impl_from_IHTMLRect(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLRect_iface;
-    }else if(IsEqualGUID(&IID_IHTMLRect, riid)) {
-        *ppv = &This->IHTMLRect_iface;
-    }else if (IsEqualGUID(&IID_IHTMLRect2, riid)) {
-        *ppv = &This->IHTMLRect2_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        FIXME("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        *ppv = NULL;
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLRect_AddRef(IHTMLRect *iface)
 {
     HTMLRect *This = impl_from_IHTMLRect(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLRect_Release(IHTMLRect *iface)
 {
     HTMLRect *This = impl_from_IHTMLRect(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLRect_GetTypeInfoCount(IHTMLRect *iface, UINT *pctinfo)
@@ -842,6 +855,25 @@ static inline HTMLRect *HTMLRect_from_DispatchEx(DispatchEx *iface)
     return CONTAINING_RECORD(iface, HTMLRect, dispex);
 }
 
+static void *HTMLRect_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLRect *This = HTMLRect_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLRect, riid))
+        return &This->IHTMLRect_iface;
+    if(IsEqualGUID(&IID_IHTMLRect2, riid))
+        return &This->IHTMLRect2_iface;
+
+    return NULL;
+}
+
+static void HTMLRect_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLRect *This = HTMLRect_from_DispatchEx(dispex);
+    if(This->nsrect)
+        note_cc_edge((nsISupports*)This->nsrect, "nsrect", cb);
+}
+
 static void HTMLRect_unlink(DispatchEx *dispex)
 {
     HTMLRect *This = HTMLRect_from_DispatchEx(dispex);
@@ -861,23 +893,27 @@ void HTMLRect_init_dispex_info(dispex_data_t *info, compat_mode_t mode)
 }
 
 static const dispex_static_data_vtbl_t HTMLRect_dispex_vtbl = {
-    HTMLRect_destructor,
-    HTMLRect_unlink
+    .query_interface  = HTMLRect_query_interface,
+    .destructor       = HTMLRect_destructor,
+    .traverse         = HTMLRect_traverse,
+    .unlink           = HTMLRect_unlink
 };
 
 static const tid_t HTMLRect_iface_tids[] = {
     IHTMLRect_tid,
     0
 };
-static dispex_static_data_t HTMLRect_dispex = {
-    L"ClientRect",
+dispex_static_data_t HTMLRect_dispex = {
+    "ClientRect",
     &HTMLRect_dispex_vtbl,
+    PROTO_ID_HTMLRect,
     IHTMLRect_tid,
     HTMLRect_iface_tids,
     HTMLRect_init_dispex_info
 };
 
-static HRESULT create_html_rect(nsIDOMClientRect *nsrect, compat_mode_t compat_mode, IHTMLRect **ret)
+static HRESULT create_html_rect(nsIDOMClientRect *nsrect, HTMLInnerWindow *window, compat_mode_t compat_mode,
+        IHTMLRect **ret)
 {
     HTMLRect *rect;
 
@@ -887,9 +923,8 @@ static HRESULT create_html_rect(nsIDOMClientRect *nsrect, compat_mode_t compat_m
 
     rect->IHTMLRect_iface.lpVtbl = &HTMLRectVtbl;
     rect->IHTMLRect2_iface.lpVtbl = &HTMLRect2Vtbl;
-    rect->ref = 1;
 
-    init_dispatch(&rect->dispex, (IUnknown*)&rect->IHTMLRect_iface, &HTMLRect_dispex, compat_mode);
+    init_dispatch(&rect->dispex, &HTMLRect_dispex, window, compat_mode);
 
     nsIDOMClientRect_AddRef(nsrect);
     rect->nsrect = nsrect;
@@ -902,8 +937,7 @@ typedef struct {
     DispatchEx dispex;
     IHTMLRectCollection IHTMLRectCollection_iface;
 
-    LONG ref;
-
+    HTMLInnerWindow *window;
     nsIDOMClientRectList *rect_list;
 } HTMLRectCollection;
 
@@ -1048,46 +1082,19 @@ static inline HTMLRectCollection *impl_from_IHTMLRectCollection(IHTMLRectCollect
 static HRESULT WINAPI HTMLRectCollection_QueryInterface(IHTMLRectCollection *iface, REFIID riid, void **ppv)
 {
     HTMLRectCollection *This = impl_from_IHTMLRectCollection(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLRectCollection_iface;
-    }else if(IsEqualGUID(&IID_IHTMLRectCollection, riid)) {
-        *ppv = &This->IHTMLRectCollection_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        FIXME("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        *ppv = NULL;
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLRectCollection_AddRef(IHTMLRectCollection *iface)
 {
     HTMLRectCollection *This = impl_from_IHTMLRectCollection(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLRectCollection_Release(IHTMLRectCollection *iface)
 {
     HTMLRectCollection *This = impl_from_IHTMLRectCollection(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLRectCollection_GetTypeInfoCount(IHTMLRectCollection *iface, UINT *pctinfo)
@@ -1180,7 +1187,7 @@ static HRESULT WINAPI HTMLRectCollection_item(IHTMLRectCollection *iface, VARIAN
         return S_OK;
     }
 
-    hres = create_html_rect(nsrect, dispex_compat_mode(&This->dispex), &rect);
+    hres = create_html_rect(nsrect, This->window, dispex_compat_mode(&This->dispex), &rect);
     nsIDOMClientRect_Release(nsrect);
     if(FAILED(hres))
         return hres;
@@ -1208,9 +1215,34 @@ static inline HTMLRectCollection *HTMLRectCollection_from_DispatchEx(DispatchEx 
     return CONTAINING_RECORD(iface, HTMLRectCollection, dispex);
 }
 
+static void *HTMLRectCollection_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLRectCollection *This = HTMLRectCollection_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLRectCollection, riid))
+        return &This->IHTMLRectCollection_iface;
+
+    return NULL;
+}
+
+static void HTMLRectCollection_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLRectCollection *This = HTMLRectCollection_from_DispatchEx(dispex);
+    if(This->window)
+        note_cc_edge((nsISupports*)&This->window->base.IHTMLWindow2_iface, "window", cb);
+    if(This->rect_list)
+        note_cc_edge((nsISupports*)This->rect_list, "rect_list", cb);
+}
+
 static void HTMLRectCollection_unlink(DispatchEx *dispex)
 {
     HTMLRectCollection *This = HTMLRectCollection_from_DispatchEx(dispex);
+
+    if(This->window) {
+        HTMLInnerWindow *window = This->window;
+        This->window = NULL;
+        IHTMLWindow2_Release(&window->base.IHTMLWindow2_iface);
+    }
     unlink_ref(&This->rect_list);
 }
 
@@ -1256,8 +1288,8 @@ static HRESULT HTMLRectCollection_get_name(DispatchEx *dispex, DISPID id, BSTR *
     return (*name = SysAllocStringLen(buf, len)) ? S_OK : E_OUTOFMEMORY;
 }
 
-static HRESULT HTMLRectCollection_invoke(DispatchEx *dispex, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
-        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+static HRESULT HTMLRectCollection_invoke(DispatchEx *dispex, IDispatch *this_obj, DISPID id, LCID lcid, WORD flags,
+        DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     HTMLRectCollection *This = HTMLRectCollection_from_DispatchEx(dispex);
 
@@ -1276,7 +1308,7 @@ static HRESULT HTMLRectCollection_invoke(DispatchEx *dispex, DISPID id, LCID lci
             return DISP_E_MEMBERNOTFOUND;
         }
 
-        hres = create_html_rect(rect, dispex_compat_mode(&This->dispex), &html_rect);
+        hres = create_html_rect(rect, This->window, dispex_compat_mode(&This->dispex), &html_rect);
         nsIDOMClientRect_Release(rect);
         if(FAILED(hres))
             return hres;
@@ -1295,21 +1327,22 @@ static HRESULT HTMLRectCollection_invoke(DispatchEx *dispex, DISPID id, LCID lci
 }
 
 static const dispex_static_data_vtbl_t HTMLRectCollection_dispex_vtbl = {
-    HTMLRectCollection_destructor,
-    HTMLRectCollection_unlink,
-    NULL,
-    HTMLRectCollection_get_dispid,
-    HTMLRectCollection_get_name,
-    HTMLRectCollection_invoke,
-    NULL
+    .query_interface  = HTMLRectCollection_query_interface,
+    .destructor       = HTMLRectCollection_destructor,
+    .traverse         = HTMLRectCollection_traverse,
+    .unlink           = HTMLRectCollection_unlink,
+    .get_dispid       = HTMLRectCollection_get_dispid,
+    .get_name         = HTMLRectCollection_get_name,
+    .invoke           = HTMLRectCollection_invoke,
 };
 static const tid_t HTMLRectCollection_iface_tids[] = {
     IHTMLRectCollection_tid,
     0
 };
-static dispex_static_data_t HTMLRectCollection_dispex = {
-    L"ClientRectList",
+dispex_static_data_t HTMLRectCollection_dispex = {
+    "ClientRectList",
     &HTMLRectCollection_dispex_vtbl,
+    PROTO_ID_HTMLRectCollection,
     IHTMLRectCollection_tid,
     HTMLRectCollection_iface_tids
 };
@@ -2669,7 +2702,7 @@ static HRESULT WINAPI HTMLElement_get_filters(IHTMLElement *iface, IHTMLFiltersC
     if(!p)
         return E_POINTER;
 
-    return create_filters_collection(dispex_compat_mode(&This->node.event_target.dispex), p);
+    return create_filters_collection(This, p);
 }
 
 static HRESULT WINAPI HTMLElement_put_ondragstart(IHTMLElement *iface, VARIANT v)
@@ -2701,8 +2734,8 @@ static HRESULT WINAPI HTMLElement_toString(IHTMLElement *iface, BSTR *String)
     if(!String)
         return E_INVALIDARG;
 
-    hres = IDispatchEx_InvokeEx(&This->node.event_target.dispex.IDispatchEx_iface, DISPID_VALUE,
-                                LOCALE_SYSTEM_DEFAULT, DISPATCH_PROPERTYGET, NULL, &var, NULL, NULL);
+    hres = dispex_invoke(&This->node.event_target.dispex, (IDispatch*)&This->node.event_target.dispex.IDispatchEx_iface,
+                         DISPID_VALUE, LOCALE_SYSTEM_DEFAULT, DISPATCH_PROPERTYGET, NULL, &var, NULL, NULL);
     if(SUCCEEDED(hres)) {
         assert(V_VT(&var) == VT_BSTR);
         *String = V_BSTR(&var);
@@ -2854,7 +2887,7 @@ static HRESULT WINAPI HTMLElement_get_children(IHTMLElement *iface, IDispatch **
         return E_FAIL;
     }
 
-    *p = (IDispatch*)create_collection_from_nodelist(nsnode_list, This->node.doc->document_mode);
+    *p = (IDispatch*)create_collection_from_nodelist(nsnode_list, This->node.doc);
 
     nsIDOMNodeList_Release(nsnode_list);
     return S_OK;
@@ -3327,10 +3360,11 @@ static HRESULT WINAPI HTMLElement2_getClientRects(IHTMLElement2 *iface, IHTMLRec
     }
 
     rects->IHTMLRectCollection_iface.lpVtbl = &HTMLRectCollectionVtbl;
-    rects->ref = 1;
     rects->rect_list = rect_list;
-    init_dispatch(&rects->dispex, (IUnknown*)&rects->IHTMLRectCollection_iface,
-                  &HTMLRectCollection_dispex, dispex_compat_mode(&This->node.event_target.dispex));
+    rects->window = get_inner_window(This->node.doc);
+    IHTMLWindow2_AddRef(&rects->window->base.IHTMLWindow2_iface);
+
+    init_dispatch(&rects->dispex, &HTMLRectCollection_dispex, rects->window, dispex_compat_mode(&This->node.event_target.dispex));
 
     *pRectCol = &rects->IHTMLRectCollection_iface;
     return S_OK;
@@ -3356,7 +3390,7 @@ static HRESULT WINAPI HTMLElement2_getBoundingClientRect(IHTMLElement2 *iface, I
         return E_FAIL;
     }
 
-    hres = create_html_rect(nsrect, dispex_compat_mode(&This->node.event_target.dispex), pRect);
+    hres = create_html_rect(nsrect, get_inner_window(This->node.doc), dispex_compat_mode(&This->node.event_target.dispex), pRect);
 
     nsIDOMClientRect_Release(nsrect);
     return hres;
@@ -4083,7 +4117,7 @@ static HRESULT WINAPI HTMLElement2_getElementsByTagName(IHTMLElement2 *iface, BS
     TRACE("(%p)->(%s %p)\n", This, debugstr_w(v), pelColl);
 
     if(!This->dom_element) {
-        *pelColl = create_collection_from_htmlcol(NULL, This->node.doc->document_mode);
+        *pelColl = create_collection_from_htmlcol(NULL, This->node.doc, dispex_compat_mode(&This->node.event_target.dispex));
         return S_OK;
     }
 
@@ -4095,7 +4129,7 @@ static HRESULT WINAPI HTMLElement2_getElementsByTagName(IHTMLElement2 *iface, BS
         return E_FAIL;
     }
 
-    *pelColl = create_collection_from_htmlcol(nscol, dispex_compat_mode(&This->node.event_target.dispex));
+    *pelColl = create_collection_from_htmlcol(nscol, This->node.doc, dispex_compat_mode(&This->node.event_target.dispex));
     nsIDOMHTMLCollection_Release(nscol);
     return S_OK;
 }
@@ -4772,7 +4806,8 @@ static HRESULT WINAPI HTMLElement4_setAttributeNode(IHTMLElement4 *iface, IHTMLD
         IHTMLDOMAttribute **ppretAttribute)
 {
     HTMLElement *This = impl_from_IHTMLElement4(iface);
-    HTMLDOMAttribute *attr, *iter, *replace = NULL;
+    nsIDOMAttr *nsattr, *oldnsattr = NULL;
+    HTMLDOMAttribute *attr, *replace;
     HTMLAttributeCollection *attrs;
     DISPID dispid;
     HRESULT hres;
@@ -4788,37 +4823,56 @@ static HRESULT WINAPI HTMLElement4_setAttributeNode(IHTMLElement4 *iface, IHTMLD
         return E_INVALIDARG;
     }
 
-    hres = IDispatchEx_GetDispID(&This->node.event_target.dispex.IDispatchEx_iface,
-            attr->name, fdexNameCaseInsensitive|fdexNameEnsure, &dispid);
-    if(FAILED(hres))
-        return hres;
-
     hres = HTMLElement_get_attr_col(&This->node, &attrs);
     if(FAILED(hres))
         return hres;
 
-    LIST_FOR_EACH_ENTRY(iter, &attrs->attrs, HTMLDOMAttribute, entry) {
-        if(iter->dispid == dispid) {
-            replace = iter;
-            break;
+    nsattr = (nsIDOMAttr*)attr->node.nsnode;
+    if(nsattr && !attrs->nsattrs) {
+        FIXME("Attribute has proper node but no NS collection for it.\n");
+        IHTMLAttributeCollection_Release(&attrs->IHTMLAttributeCollection_iface);
+        return E_NOTIMPL;
+    }
+
+    if(nsattr) {
+        if(NS_FAILED(nsIDOMMozNamedAttrMap_SetNamedItem(attrs->nsattrs, nsattr, &oldnsattr))) {
+            IHTMLAttributeCollection_Release(&attrs->IHTMLAttributeCollection_iface);
+            return E_FAIL;
         }
+        dispid = get_dispid_for_nsattr(This, nsattr);
+        replace = NULL;
+        if(oldnsattr) {
+            replace = find_attr_in_list(attrs, 0, oldnsattr, NULL);
+            nsIDOMAttr_Release(oldnsattr);
+        }
+    }else {
+        hres = IDispatchEx_GetDispID(&This->node.event_target.dispex.IDispatchEx_iface,
+                attr->name, fdexNameCaseInsensitive|fdexNameEnsure, &dispid);
+        if(FAILED(hres)) {
+            IHTMLAttributeCollection_Release(&attrs->IHTMLAttributeCollection_iface);
+            return hres;
+        }
+        replace = find_attr_in_list(attrs, dispid, NULL, NULL);
     }
 
     if(replace) {
-        hres = get_elem_attr_value_by_dispid(This, dispid, &replace->value);
-        if(FAILED(hres)) {
-            WARN("could not get attr value: %08lx\n", hres);
-            V_VT(&replace->value) = VT_EMPTY;
-        }
-        if(!replace->name) {
-            replace->name = attr->name;
-            attr->name = NULL;
+        if(!nsattr) {
+            hres = get_elem_attr_value_by_dispid(This, dispid, &replace->value);
+            if(FAILED(hres)) {
+                WARN("could not get attr value: %08lx\n", hres);
+                V_VT(&replace->value) = VT_EMPTY;
+            }
+            if(!replace->name) {
+                replace->name = attr->name;
+                attr->name = NULL;
+            }
         }
         list_add_head(&replace->entry, &attr->entry);
         list_remove(&replace->entry);
         replace->elem = NULL;
     }else {
         list_add_tail(&attrs->attrs, &attr->entry);
+        IHTMLDOMNode_AddRef(&This->node.IHTMLDOMNode_iface);
     }
 
     IHTMLDOMAttribute_AddRef(&attr->IHTMLDOMAttribute_iface);
@@ -4827,10 +4881,12 @@ static HRESULT WINAPI HTMLElement4_setAttributeNode(IHTMLElement4 *iface, IHTMLD
 
     IHTMLAttributeCollection_Release(&attrs->IHTMLAttributeCollection_iface);
 
-    hres = set_elem_attr_value_by_dispid(This, dispid, &attr->value);
-    if(FAILED(hres))
-        WARN("Could not set attribute value: %08lx\n", hres);
-    VariantClear(&attr->value);
+    if(!nsattr) {
+        hres = set_elem_attr_value_by_dispid(This, dispid, &attr->value);
+        if(FAILED(hres))
+            WARN("Could not set attribute value: %08lx\n", hres);
+        VariantClear(&attr->value);
+    }
 
     *ppretAttribute = replace ? &replace->IHTMLDOMAttribute_iface : NULL;
     return S_OK;
@@ -5248,7 +5304,7 @@ static HRESULT WINAPI HTMLElement6_getElementsByClassName(IHTMLElement6 *iface, 
         }
     }
 
-    *pel = create_collection_from_htmlcol(nscol, dispex_compat_mode(&This->node.event_target.dispex));
+    *pel = create_collection_from_htmlcol(nscol, This->node.doc, dispex_compat_mode(&This->node.event_target.dispex));
     nsIDOMHTMLCollection_Release(nscol);
     return S_OK;
 }
@@ -6502,7 +6558,7 @@ static HRESULT WINAPI ElementSelector_querySelector(IElementSelector *iface, BST
 static HRESULT WINAPI ElementSelector_querySelectorAll(IElementSelector *iface, BSTR v, IHTMLDOMChildrenCollection **pel)
 {
     HTMLElement *This = impl_from_IElementSelector(iface);
-    nsIDOMNodeList *node_list;
+    nsIDOMNodeList *node_list = NULL;
     nsAString nsstr;
     nsresult nsres;
     HRESULT hres;
@@ -6519,10 +6575,12 @@ static HRESULT WINAPI ElementSelector_querySelectorAll(IElementSelector *iface, 
     nsAString_Finish(&nsstr);
     if(NS_FAILED(nsres)) {
         WARN("QuerySelectorAll failed: %08lx\n", nsres);
+        if(node_list)
+            nsIDOMNodeList_Release(node_list);
         return map_nsresult(nsres);
     }
 
-    hres = create_child_collection(node_list, dispex_compat_mode(&This->node.event_target.dispex), pel);
+    hres = create_child_collection(node_list, This->node.doc, pel);
     nsIDOMNodeList_Release(node_list);
     return hres;
 }
@@ -6807,79 +6865,6 @@ static inline HTMLElement *impl_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLElement, node);
 }
 
-HRESULT HTMLElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
-{
-    HTMLElement *This = impl_from_HTMLDOMNode(iface);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement, riid)) {
-        *ppv = &This->IHTMLElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement2, riid)) {
-        *ppv = &This->IHTMLElement2_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement3, riid)) {
-        *ppv = &This->IHTMLElement3_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement4, riid)) {
-        *ppv = &This->IHTMLElement4_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement6, riid)) {
-        *ppv = &This->IHTMLElement6_iface;
-    }else if(IsEqualGUID(&IID_IHTMLElement7, riid)) {
-        *ppv = &This->IHTMLElement7_iface;
-    }else if(IsEqualGUID(&IID_IHTMLUniqueName, riid)) {
-        *ppv = &This->IHTMLUniqueName_iface;
-    }else if(IsEqualGUID(&IID_IElementSelector, riid)) {
-        *ppv = &This->IElementSelector_iface;
-    }else if(IsEqualGUID(&IID_IElementTraversal, riid)) {
-        *ppv = &This->IElementTraversal_iface;
-    }else if(IsEqualGUID(&IID_IConnectionPointContainer, riid)) {
-        *ppv = &This->cp_container.IConnectionPointContainer_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo, riid)) {
-        *ppv = &This->IProvideMultipleClassInfo_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo2, riid)) {
-        *ppv = &This->IProvideMultipleClassInfo_iface;
-    }else if(IsEqualGUID(&IID_IProvideMultipleClassInfo, riid)) {
-        *ppv = &This->IProvideMultipleClassInfo_iface;
-    }else if(IsEqualGUID(&IID_IWineHTMLElementPrivate, riid)) {
-        *ppv = &This->IWineHTMLElementPrivate_iface;
-    }else {
-        return HTMLDOMNode_QI(&This->node, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
-}
-
-void HTMLElement_destructor(HTMLDOMNode *iface)
-{
-    HTMLElement *This = impl_from_HTMLDOMNode(iface);
-
-    ConnectionPointContainer_Destroy(&This->cp_container);
-
-    if(This->style) {
-        This->style->elem = NULL;
-        IHTMLStyle_Release(&This->style->IHTMLStyle_iface);
-    }
-    if(This->runtime_style) {
-        This->runtime_style->elem = NULL;
-        IHTMLStyle_Release(&This->runtime_style->IHTMLStyle_iface);
-    }
-    if(This->attrs) {
-        HTMLDOMAttribute *attr;
-
-        LIST_FOR_EACH_ENTRY(attr, &This->attrs->attrs, HTMLDOMAttribute, entry)
-            attr->elem = NULL;
-
-        This->attrs->elem = NULL;
-        IHTMLAttributeCollection_Release(&This->attrs->IHTMLAttributeCollection_iface);
-    }
-
-    free(This->filter);
-
-    HTMLDOMNode_destructor(&This->node);
-}
-
 HRESULT HTMLElement_clone(HTMLDOMNode *iface, nsIDOMNode *nsnode, HTMLDOMNode **ret)
 {
     HTMLElement *This = impl_from_HTMLDOMNode(iface);
@@ -6902,43 +6887,6 @@ HRESULT HTMLElement_clone(HTMLDOMNode *iface, nsIDOMNode *nsnode, HTMLDOMNode **
     return S_OK;
 }
 
-HRESULT HTMLElement_handle_event(HTMLDOMNode *iface, DWORD eid, nsIDOMEvent *event, BOOL *prevent_default)
-{
-    HTMLElement *This = impl_from_HTMLDOMNode(iface);
-
-    switch(eid) {
-    case EVENTID_KEYDOWN: {
-        nsIDOMKeyEvent *key_event;
-        nsresult nsres;
-
-        nsres = nsIDOMEvent_QueryInterface(event, &IID_nsIDOMKeyEvent, (void**)&key_event);
-        if(NS_SUCCEEDED(nsres)) {
-            UINT32 code = 0;
-
-            nsIDOMKeyEvent_GetKeyCode(key_event, &code);
-
-            if(code == VK_F1 /* DOM_VK_F1 */) {
-                DOMEvent *help_event;
-                HRESULT hres;
-
-                TRACE("F1 pressed\n");
-
-                hres = create_document_event(This->node.doc, EVENTID_HELP, &help_event);
-                if(SUCCEEDED(hres)) {
-                    dispatch_event(&This->node.event_target, help_event);
-                    IDOMEvent_Release(&help_event->IDOMEvent_iface);
-                }
-                *prevent_default = TRUE;
-            }
-
-            nsIDOMKeyEvent_Release(key_event);
-        }
-    }
-    }
-
-    return S_OK;
-}
-
 cp_static_data_t HTMLElementEvents2_data = { HTMLElementEvents2_tid, NULL /* FIXME */, TRUE };
 
 const cpc_entry_t HTMLElement_cpc[] = {
@@ -6947,13 +6895,10 @@ const cpc_entry_t HTMLElement_cpc[] = {
 };
 
 static const NodeImplVtbl HTMLElementImplVtbl = {
-    &CLSID_HTMLUnknownElement,
-    HTMLElement_QI,
-    HTMLElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col
+    .clsid                 = &CLSID_HTMLUnknownElement,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .get_attr_col          = HTMLElement_get_attr_col
 };
 
 static inline HTMLElement *impl_from_DispatchEx(DispatchEx *iface)
@@ -6961,43 +6906,87 @@ static inline HTMLElement *impl_from_DispatchEx(DispatchEx *iface)
     return CONTAINING_RECORD(iface, HTMLElement, node.event_target.dispex);
 }
 
-static HRESULT HTMLElement_get_dispid(DispatchEx *dispex, BSTR name,
-        DWORD grfdex, DISPID *pid)
+void *HTMLElement_query_interface(DispatchEx *dispex, REFIID riid)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
 
-    if(This->node.vtbl->get_dispid)
-        return This->node.vtbl->get_dispid(&This->node, name, grfdex, pid);
+    if(IsEqualGUID(&IID_IHTMLElement, riid))
+        return &This->IHTMLElement_iface;
+    if(IsEqualGUID(&IID_IHTMLElement2, riid))
+        return &This->IHTMLElement2_iface;
+    if(IsEqualGUID(&IID_IHTMLElement3, riid))
+        return &This->IHTMLElement3_iface;
+    if(IsEqualGUID(&IID_IHTMLElement4, riid))
+        return &This->IHTMLElement4_iface;
+    if(IsEqualGUID(&IID_IHTMLElement6, riid))
+        return &This->IHTMLElement6_iface;
+    if(IsEqualGUID(&IID_IHTMLElement7, riid))
+        return &This->IHTMLElement7_iface;
+    if(IsEqualGUID(&IID_IHTMLUniqueName, riid))
+        return &This->IHTMLUniqueName_iface;
+    if(IsEqualGUID(&IID_IElementSelector, riid))
+        return &This->IElementSelector_iface;
+    if(IsEqualGUID(&IID_IElementTraversal, riid))
+        return &This->IElementTraversal_iface;
+    if(IsEqualGUID(&IID_IConnectionPointContainer, riid))
+        return &This->cp_container.IConnectionPointContainer_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo, riid))
+        return &This->IProvideMultipleClassInfo_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo2, riid))
+        return &This->IProvideMultipleClassInfo_iface;
+    if(IsEqualGUID(&IID_IProvideMultipleClassInfo, riid))
+        return &This->IProvideMultipleClassInfo_iface;
+    if(IsEqualGUID(&IID_IWineHTMLElementPrivate, riid))
+        return &This->IWineHTMLElementPrivate_iface;
 
-    return DISP_E_UNKNOWNNAME;
+    return HTMLDOMNode_query_interface(&This->node.event_target.dispex, riid);
 }
 
-static HRESULT HTMLElement_get_name(DispatchEx *dispex, DISPID id, BSTR *name)
+void HTMLElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(&This->node.event_target.dispex, cb);
+
+    if(This->style)
+        note_cc_edge((nsISupports*)&This->style->IHTMLStyle_iface, "style", cb);
+    if(This->runtime_style)
+        note_cc_edge((nsISupports*)&This->runtime_style->IHTMLStyle_iface, "runtime_style", cb);
+    if(This->attrs)
+        note_cc_edge((nsISupports*)&This->attrs->IHTMLAttributeCollection_iface, "attrs", cb);
+}
+
+void HTMLElement_unlink(DispatchEx *dispex)
+{
+    HTMLElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(&This->node.event_target.dispex);
+
+    if(This->style) {
+        HTMLStyle *style = This->style;
+        This->style = NULL;
+        IHTMLStyle_Release(&style->IHTMLStyle_iface);
+    }
+    if(This->runtime_style) {
+        HTMLStyle *runtime_style = This->runtime_style;
+        This->runtime_style = NULL;
+        IHTMLStyle_Release(&runtime_style->IHTMLStyle_iface);
+    }
+    if(This->attrs) {
+        HTMLAttributeCollection *attrs = This->attrs;
+        This->attrs = NULL;
+        IHTMLAttributeCollection_Release(&attrs->IHTMLAttributeCollection_iface);
+    }
+}
+
+void HTMLElement_destructor(DispatchEx *dispex)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
 
-    if(This->node.vtbl->get_name)
-        return This->node.vtbl->get_name(&This->node, id, name);
-
-    ERR("(%p): element has no get_name method\n", This);
-    return DISP_E_MEMBERNOTFOUND;
+    ConnectionPointContainer_Destroy(&This->cp_container);
+    free(This->filter);
+    HTMLDOMNode_destructor(&This->node.event_target.dispex);
 }
 
-static HRESULT HTMLElement_invoke(DispatchEx *dispex, DISPID id, LCID lcid,
-        WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei,
-        IServiceProvider *caller)
-{
-    HTMLElement *This = impl_from_DispatchEx(dispex);
-
-    if(This->node.vtbl->invoke)
-        return This->node.vtbl->invoke(&This->node, id, lcid, flags,
-                params, res, ei, caller);
-
-    ERR("(%p): element has no invoke method\n", This);
-    return E_NOTIMPL;
-}
-
-static HRESULT HTMLElement_populate_props(DispatchEx *dispex)
+HRESULT HTMLElement_populate_props(DispatchEx *dispex)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     nsIDOMMozNamedAttrMap *attrs;
@@ -7082,28 +7071,59 @@ static HRESULT HTMLElement_populate_props(DispatchEx *dispex)
     return S_OK;
 }
 
-static nsISupports *HTMLElement_get_gecko_target(DispatchEx *dispex)
+nsISupports *HTMLElement_get_gecko_target(DispatchEx *dispex)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     return (nsISupports*)This->node.nsnode;
 }
 
-static void HTMLElement_bind_event(DispatchEx *dispex, eventid_t eid)
+void HTMLElement_bind_event(DispatchEx *dispex, eventid_t eid)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     ensure_doc_nsevent_handler(This->node.doc, This->node.nsnode, eid);
 }
 
-static HRESULT HTMLElement_handle_event_default(DispatchEx *dispex, eventid_t eid, nsIDOMEvent *nsevent, BOOL *prevent_default)
+HRESULT HTMLElement_handle_event(DispatchEx *dispex, DOMEvent *event, BOOL *prevent_default)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
 
-    if(!This->node.vtbl->handle_event)
-        return S_OK;
-    return This->node.vtbl->handle_event(&This->node, eid, nsevent, prevent_default);
+    switch(event->event_id) {
+    case EVENTID_KEYDOWN: {
+        nsIDOMKeyEvent *key_event;
+        nsresult nsres;
+
+        nsres = nsIDOMEvent_QueryInterface(event->nsevent, &IID_nsIDOMKeyEvent, (void**)&key_event);
+        if(NS_SUCCEEDED(nsres)) {
+            UINT32 code = 0;
+
+            nsIDOMKeyEvent_GetKeyCode(key_event, &code);
+
+            if(code == VK_F1 /* DOM_VK_F1 */) {
+                DOMEvent *help_event;
+                HRESULT hres;
+
+                TRACE("F1 pressed\n");
+
+                hres = create_document_event(This->node.doc, EVENTID_HELP, &help_event);
+                if(SUCCEEDED(hres)) {
+                    dispatch_event(&This->node.event_target, help_event);
+                    IDOMEvent_Release(&help_event->IDOMEvent_iface);
+                }
+                *prevent_default = TRUE;
+            }
+
+            nsIDOMKeyEvent_Release(key_event);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    return S_OK;
 }
 
-static EventTarget *HTMLElement_get_parent_event_target(DispatchEx *dispex)
+EventTarget *HTMLElement_get_parent_event_target(DispatchEx *dispex)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     HTMLDOMNode *node;
@@ -7124,14 +7144,14 @@ static EventTarget *HTMLElement_get_parent_event_target(DispatchEx *dispex)
     return &node->event_target;
 }
 
-static ConnectionPointContainer *HTMLElement_get_cp_container(DispatchEx *dispex)
+ConnectionPointContainer *HTMLElement_get_cp_container(DispatchEx *dispex)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     IConnectionPointContainer_AddRef(&This->cp_container.IConnectionPointContainer_iface);
     return &This->cp_container;
 }
 
-static IHTMLEventObj *HTMLElement_set_current_event(DispatchEx *dispex, IHTMLEventObj *event)
+IHTMLEventObj *HTMLElement_set_current_event(DispatchEx *dispex, IHTMLEventObj *event)
 {
     HTMLElement *This = impl_from_DispatchEx(dispex);
     return default_set_current_event(This->node.doc->window, event);
@@ -7349,38 +7369,267 @@ void HTMLElement_init_dispex_info(dispex_data_t *info, compat_mode_t mode)
     }
 }
 
-static const tid_t HTMLElement_iface_tids[] = {
+const tid_t HTMLElement_iface_tids[] = {
     HTMLELEMENT_TIDS,
     0
 };
 
-const event_target_vtbl_t HTMLElement_event_target_vtbl = {
+static const event_target_vtbl_t HTMLElement_event_target_vtbl = {
     {
-        NULL,
-        NULL,
-        NULL,
-        HTMLElement_get_dispid,
-        HTMLElement_get_name,
-        HTMLElement_invoke,
-        NULL,
-        NULL,
-        NULL,
-        HTMLElement_populate_props
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface     = HTMLElement_query_interface,
+        .destructor          = HTMLElement_destructor,
+        .traverse            = HTMLElement_traverse,
+        .unlink              = HTMLElement_unlink,
     },
-    HTMLElement_get_gecko_target,
-    HTMLElement_bind_event,
-    HTMLElement_get_parent_event_target,
-    HTMLElement_handle_event_default,
-    HTMLElement_get_cp_container,
-    HTMLElement_set_current_event
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
+    .handle_event            = HTMLElement_handle_event
+};
+
+static void DOMElement_init_dispex_info(dispex_data_t *info, compat_mode_t mode)
+{
+    static const dispex_hook_t elem_hooks[] = {
+        {DISPID_IHTMLELEMENT_CLASSNAME},
+        {DISPID_IHTMLELEMENT_ID},
+        {DISPID_IHTMLELEMENT_PARENTELEMENT},
+        {DISPID_IHTMLELEMENT_STYLE},
+        {DISPID_IHTMLELEMENT_ONHELP},
+        {DISPID_IHTMLELEMENT_ONCLICK},
+        {DISPID_IHTMLELEMENT_ONDBLCLICK},
+        {DISPID_IHTMLELEMENT_ONKEYDOWN},
+        {DISPID_IHTMLELEMENT_ONKEYUP},
+        {DISPID_IHTMLELEMENT_ONKEYPRESS},
+        {DISPID_IHTMLELEMENT_ONMOUSEOUT},
+        {DISPID_IHTMLELEMENT_ONMOUSEOVER},
+        {DISPID_IHTMLELEMENT_ONMOUSEMOVE},
+        {DISPID_IHTMLELEMENT_ONMOUSEDOWN},
+        {DISPID_IHTMLELEMENT_ONMOUSEUP},
+        {DISPID_IHTMLELEMENT_DOCUMENT},
+        {DISPID_IHTMLELEMENT_TITLE},
+        {DISPID_IHTMLELEMENT_LANGUAGE},
+        {DISPID_IHTMLELEMENT_ONSELECTSTART},
+        {DISPID_IHTMLELEMENT_SCROLLINTOVIEW},
+        {DISPID_IHTMLELEMENT_CONTAINS},
+        {DISPID_IHTMLELEMENT_SOURCEINDEX},
+        {DISPID_IHTMLELEMENT_RECORDNUMBER},
+        {DISPID_IHTMLELEMENT_LANG},
+        {DISPID_IHTMLELEMENT_OFFSETLEFT},
+        {DISPID_IHTMLELEMENT_OFFSETTOP},
+        {DISPID_IHTMLELEMENT_OFFSETWIDTH},
+        {DISPID_IHTMLELEMENT_OFFSETHEIGHT},
+        {DISPID_IHTMLELEMENT_OFFSETPARENT},
+        {DISPID_IHTMLELEMENT_INNERHTML},
+        {DISPID_IHTMLELEMENT_INNERTEXT},
+        {DISPID_IHTMLELEMENT_OUTERHTML},
+        {DISPID_IHTMLELEMENT_OUTERTEXT},
+        {DISPID_IHTMLELEMENT_INSERTADJACENTHTML},
+        {DISPID_IHTMLELEMENT_INSERTADJACENTTEXT},
+        {DISPID_IHTMLELEMENT_PARENTTEXTEDIT},
+        {DISPID_IHTMLELEMENT_ISTEXTEDIT},
+        {DISPID_IHTMLELEMENT_CLICK},
+        {DISPID_IHTMLELEMENT_FILTERS},
+        {DISPID_IHTMLELEMENT_ONDRAGSTART},
+        {DISPID_IHTMLELEMENT_TOSTRING},
+        {DISPID_IHTMLELEMENT_ONBEFOREUPDATE},
+        {DISPID_IHTMLELEMENT_ONAFTERUPDATE},
+        {DISPID_IHTMLELEMENT_ONERRORUPDATE},
+        {DISPID_IHTMLELEMENT_ONROWEXIT},
+        {DISPID_IHTMLELEMENT_ONROWENTER},
+        {DISPID_IHTMLELEMENT_ONDATASETCHANGED},
+        {DISPID_IHTMLELEMENT_ONDATAAVAILABLE},
+        {DISPID_IHTMLELEMENT_ONDATASETCOMPLETE},
+        {DISPID_IHTMLELEMENT_ONFILTERCHANGE},
+        {DISPID_IHTMLELEMENT_CHILDREN},
+        {DISPID_IHTMLELEMENT_ALL},
+        {DISPID_UNKNOWN}
+    };
+    static const dispex_hook_t elem2_hooks[] = {
+        {DISPID_IHTMLELEMENT2_SCOPENAME},
+        {DISPID_IHTMLELEMENT2_SETCAPTURE},
+        {DISPID_IHTMLELEMENT2_RELEASECAPTURE},
+        {DISPID_IHTMLELEMENT2_ONLOSECAPTURE},
+        {DISPID_IHTMLELEMENT2_COMPONENTFROMPOINT},
+        {DISPID_IHTMLELEMENT2_DOSCROLL},
+        {DISPID_IHTMLELEMENT2_ONSCROLL},
+        {DISPID_IHTMLELEMENT2_ONDRAG},
+        {DISPID_IHTMLELEMENT2_ONDRAGEND},
+        {DISPID_IHTMLELEMENT2_ONDRAGENTER},
+        {DISPID_IHTMLELEMENT2_ONDRAGOVER},
+        {DISPID_IHTMLELEMENT2_ONDRAGLEAVE},
+        {DISPID_IHTMLELEMENT2_ONDROP},
+        {DISPID_IHTMLELEMENT2_ONBEFORECUT},
+        {DISPID_IHTMLELEMENT2_ONCUT},
+        {DISPID_IHTMLELEMENT2_ONBEFORECOPY},
+        {DISPID_IHTMLELEMENT2_ONCOPY},
+        {DISPID_IHTMLELEMENT2_ONBEFOREPASTE},
+        {DISPID_IHTMLELEMENT2_ONPASTE},
+        {DISPID_IHTMLELEMENT2_CURRENTSTYLE},
+        {DISPID_IHTMLELEMENT2_ONPROPERTYCHANGE},
+        {DISPID_IHTMLELEMENT2_SETEXPRESSION},
+        {DISPID_IHTMLELEMENT2_GETEXPRESSION},
+        {DISPID_IHTMLELEMENT2_REMOVEEXPRESSION},
+        {DISPID_IHTMLELEMENT2_TABINDEX},
+        {DISPID_IHTMLELEMENT2_FOCUS},
+        {DISPID_IHTMLELEMENT2_ACCESSKEY},
+        {DISPID_IHTMLELEMENT2_ONBLUR},
+        {DISPID_IHTMLELEMENT2_ONFOCUS},
+        {DISPID_IHTMLELEMENT2_ONRESIZE},
+        {DISPID_IHTMLELEMENT2_BLUR},
+        {DISPID_IHTMLELEMENT2_ADDFILTER},
+        {DISPID_IHTMLELEMENT2_REMOVEFILTER},
+        {DISPID_IHTMLELEMENT2_ATTACHEVENT},
+        {DISPID_IHTMLELEMENT2_DETACHEVENT},
+        {DISPID_IHTMLELEMENT2_READYSTATE},
+        {DISPID_IHTMLELEMENT2_ONREADYSTATECHANGE},
+        {DISPID_IHTMLELEMENT2_ONROWSDELETE},
+        {DISPID_IHTMLELEMENT2_ONROWSINSERTED},
+        {DISPID_IHTMLELEMENT2_ONCELLCHANGE},
+        {DISPID_IHTMLELEMENT2_DIR},
+        {DISPID_IHTMLELEMENT2_CREATECONTROLRANGE},
+        {DISPID_IHTMLELEMENT2_CLEARATTRIBUTES},
+        {DISPID_IHTMLELEMENT2_MERGEATTRIBUTES},
+        {DISPID_IHTMLELEMENT2_ONCONTEXTMENU},
+        {DISPID_IHTMLELEMENT2_INSERTADJACENTELEMENT},
+        {DISPID_IHTMLELEMENT2_APPLYELEMENT},
+        {DISPID_IHTMLELEMENT2_GETADJACENTTEXT},
+        {DISPID_IHTMLELEMENT2_REPLACEADJACENTTEXT},
+        {DISPID_IHTMLELEMENT2_CANHAVECHILDREN},
+        {DISPID_IHTMLELEMENT2_ADDBEHAVIOR},
+        {DISPID_IHTMLELEMENT2_REMOVEBEHAVIOR},
+        {DISPID_IHTMLELEMENT2_RUNTIMESTYLE},
+        {DISPID_IHTMLELEMENT2_BEHAVIORURNS},
+        {DISPID_IHTMLELEMENT2_TAGURN},
+        {DISPID_IHTMLELEMENT2_ONBEFOREEDITFOCUS},
+        {DISPID_IHTMLELEMENT2_READYSTATEVALUE},
+        {DISPID_UNKNOWN}
+    };
+    static const dispex_hook_t elem3_hooks[] = {
+        {DISPID_IHTMLELEMENT3_MERGEATTRIBUTES},
+        {DISPID_IHTMLELEMENT3_ISMULTILINE},
+        {DISPID_IHTMLELEMENT3_CANHAVEHTML},
+        {DISPID_IHTMLELEMENT3_ONLAYOUTCOMPLETE},
+        {DISPID_IHTMLELEMENT3_ONPAGE},
+        {DISPID_IHTMLELEMENT3_INFLATEBLOCK},
+        {DISPID_IHTMLELEMENT3_ONBEFOREDEACTIVATE},
+        {DISPID_IHTMLELEMENT3_SETACTIVE},
+        {DISPID_IHTMLELEMENT3_CONTENTEDITABLE},
+        {DISPID_IHTMLELEMENT3_ISCONTENTEDITABLE},
+        {DISPID_IHTMLELEMENT3_HIDEFOCUS},
+        {DISPID_IHTMLELEMENT3_DISABLED},
+        {DISPID_IHTMLELEMENT3_ISDISABLED},
+        {DISPID_IHTMLELEMENT3_ONMOVE},
+        {DISPID_IHTMLELEMENT3_ONCONTROLSELECT},
+        {DISPID_IHTMLELEMENT3_FIREEVENT},
+        {DISPID_IHTMLELEMENT3_ONRESIZESTART},
+        {DISPID_IHTMLELEMENT3_ONRESIZEEND},
+        {DISPID_IHTMLELEMENT3_ONMOVESTART},
+        {DISPID_IHTMLELEMENT3_ONMOVEEND},
+        {DISPID_IHTMLELEMENT3_ONMOUSEENTER},
+        {DISPID_IHTMLELEMENT3_ONMOUSELEAVE},
+        {DISPID_IHTMLELEMENT3_ONACTIVATE},
+        {DISPID_IHTMLELEMENT3_ONDEACTIVATE},
+        {DISPID_IHTMLELEMENT3_DRAGDROP},
+        {DISPID_IHTMLELEMENT3_GLYPHMODE},
+        {DISPID_UNKNOWN}
+    };
+    static const dispex_hook_t elem4_hooks[] = {
+        {DISPID_IHTMLELEMENT4_ONMOUSEWHEEL},
+        {DISPID_IHTMLELEMENT4_NORMALIZE},
+        {DISPID_IHTMLELEMENT4_ONBEFOREACTIVATE},
+        {DISPID_IHTMLELEMENT4_ONFOCUSIN},
+        {DISPID_IHTMLELEMENT4_ONFOCUSOUT},
+        {DISPID_UNKNOWN}
+    };
+    static const dispex_hook_t elem6_ie10_hooks[] = {
+        {DISPID_IHTMLELEMENT6_HASATTRIBUTENS, IHTMLElement6_hasAttributeNS_hook},
+        {DISPID_IHTMLELEMENT6_GETATTRIBUTENS, IHTMLElement6_getAttributeNS_hook},
+        {DISPID_IHTMLELEMENT6_REMOVEATTRIBUTENS, IHTMLElement6_removeAttributeNS_hook},
+        {DISPID_IHTMLELEMENT6_IE9_SETATTRIBUTE, IHTMLElement6_setAttribute_hook},
+
+        /* common for all supported modes */
+        {DISPID_IHTMLELEMENT6_SETATTRIBUTENS, IHTMLElement6_setAttributeNS_hook},
+
+        {DISPID_IHTMLELEMENT6_IE9_NODENAME},
+        {DISPID_IHTMLELEMENT6_GETELEMENTSBYCLASSNAME},
+        {DISPID_IHTMLELEMENT6_ONABORT},
+        {DISPID_IHTMLELEMENT6_ONCANPLAY},
+        {DISPID_IHTMLELEMENT6_ONCANPLAYTHROUGH},
+        {DISPID_IHTMLELEMENT6_ONCHANGE},
+        {DISPID_IHTMLELEMENT6_ONDURATIONCHANGE},
+        {DISPID_IHTMLELEMENT6_ONEMPTIED},
+        {DISPID_IHTMLELEMENT6_ONENDED},
+        {DISPID_IHTMLELEMENT6_ONERROR},
+        {DISPID_IHTMLELEMENT6_ONINPUT},
+        {DISPID_IHTMLELEMENT6_ONLOAD},
+        {DISPID_IHTMLELEMENT6_ONLOADEDDATA},
+        {DISPID_IHTMLELEMENT6_ONLOADEDMETADATA},
+        {DISPID_IHTMLELEMENT6_ONLOADSTART},
+        {DISPID_IHTMLELEMENT6_ONPAUSE},
+        {DISPID_IHTMLELEMENT6_ONPLAY},
+        {DISPID_IHTMLELEMENT6_ONPLAYING},
+        {DISPID_IHTMLELEMENT6_ONPROGRESS},
+        {DISPID_IHTMLELEMENT6_ONRATECHANGE},
+        {DISPID_IHTMLELEMENT6_ONRESET},
+        {DISPID_IHTMLELEMENT6_ONSEEKED},
+        {DISPID_IHTMLELEMENT6_ONSEEKING},
+        {DISPID_IHTMLELEMENT6_ONSELECT},
+        {DISPID_IHTMLELEMENT6_ONSTALLED},
+        {DISPID_IHTMLELEMENT6_ONSUBMIT},
+        {DISPID_IHTMLELEMENT6_ONSUSPEND},
+        {DISPID_IHTMLELEMENT6_ONTIMEUPDATE},
+        {DISPID_IHTMLELEMENT6_ONVOLUMECHANGE},
+        {DISPID_IHTMLELEMENT6_ONWAITING},
+        {DISPID_IHTMLELEMENT6_IE9_HASATTRIBUTES},
+        {DISPID_UNKNOWN}
+    };
+    const dispex_hook_t *const elem6_hooks = elem6_ie10_hooks + 4;
+    static const dispex_hook_t elem7_hooks[] = {
+        {DISPID_IHTMLELEMENT7_ONMSPOINTERHOVER},
+        {DISPID_IHTMLELEMENT7_ONMSTRANSITIONSTART},
+        {DISPID_IHTMLELEMENT7_ONMSTRANSITIONEND},
+        {DISPID_IHTMLELEMENT7_ONMSANIMATIONSTART},
+        {DISPID_IHTMLELEMENT7_ONMSANIMATIONEND},
+        {DISPID_IHTMLELEMENT7_ONMSANIMATIONITERATION},
+        {DISPID_IHTMLELEMENT7_ONINVALID},
+        {DISPID_IHTMLELEMENT7_XMSACCELERATORKEY},
+        {DISPID_IHTMLELEMENT7_SPELLCHECK},
+        {DISPID_IHTMLELEMENT7_ONMSMANIPULATIONSTATECHANGED},
+        {DISPID_IHTMLELEMENT7_ONCUECHANGE},
+        {DISPID_UNKNOWN}
+    };
+    static const tid_t hookless_tids[] = {
+        IHTMLDOMNode_tid,
+        IHTMLDOMNode2_tid,
+        IElementSelector_tid,
+        IElementTraversal_tid,
+        0
+    };
+    unsigned i;
+
+    dispex_info_add_interface(info, IHTMLElement2_tid, elem2_hooks);
+    dispex_info_add_interface(info, IHTMLElement6_tid, mode >= COMPAT_MODE_IE10 ? elem6_ie10_hooks : elem6_hooks);
+    if(mode >= COMPAT_MODE_IE10)
+        dispex_info_add_interface(info, IHTMLElement7_tid, elem7_hooks);
+    dispex_info_add_interface(info, IHTMLElement_tid, elem_hooks);
+    dispex_info_add_interface(info, IHTMLElement3_tid, elem3_hooks);
+    dispex_info_add_interface(info, IHTMLElement4_tid, elem4_hooks);
+    for(i = 0; i < ARRAY_SIZE(hookless_tids); i++)
+        dispex_info_add_interface(info, hookless_tids[i], NULL);
+}
+
+dispex_static_data_t DOMElement_dispex = {
+    "Element",
+    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_DOMElement,
+    NULL_tid,
+    no_iface_tids,
+    DOMElement_init_dispex_info
 };
 
 struct token_list {
     DispatchEx dispex;
     IWineDOMTokenList IWineDOMTokenList_iface;
     IHTMLElement *element;
-
-    LONG ref;
 };
 
 static inline struct token_list *impl_from_IWineDOMTokenList(IWineDOMTokenList *iface)
@@ -7391,46 +7640,19 @@ static inline struct token_list *impl_from_IWineDOMTokenList(IWineDOMTokenList *
 static HRESULT WINAPI token_list_QueryInterface(IWineDOMTokenList *iface, REFIID riid, void **ppv)
 {
     struct token_list *token_list = impl_from_IWineDOMTokenList(iface);
-
-    TRACE("(%p)->(%s %p)\n", token_list, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &token_list->IWineDOMTokenList_iface;
-    }else if(IsEqualGUID(&IID_IWineDOMTokenList, riid)) {
-        *ppv = &token_list->IWineDOMTokenList_iface;
-    }else if(dispex_query_interface(&token_list->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        WARN("(%p)->(%s %p)\n", token_list, debugstr_mshtml_guid(riid), ppv);
-        *ppv = NULL;
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&token_list->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI token_list_AddRef(IWineDOMTokenList *iface)
 {
     struct token_list *token_list = impl_from_IWineDOMTokenList(iface);
-    LONG ref = InterlockedIncrement(&token_list->ref);
-
-    TRACE("(%p) ref=%ld\n", token_list, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&token_list->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI token_list_Release(IWineDOMTokenList *iface)
 {
     struct token_list *token_list = impl_from_IWineDOMTokenList(iface);
-    LONG ref = InterlockedDecrement(&token_list->ref);
-
-    TRACE("(%p) ref=%ld\n", token_list, ref);
-
-    if(!ref)
-        release_dispex(&token_list->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&token_list->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI token_list_GetTypeInfoCount(IWineDOMTokenList *iface, UINT *pctinfo)
@@ -7747,6 +7969,23 @@ static inline struct token_list *token_list_from_DispatchEx(DispatchEx *iface)
     return CONTAINING_RECORD(iface, struct token_list, dispex);
 }
 
+static void *token_list_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    struct token_list *token_list = token_list_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IWineDOMTokenList, riid))
+        return &token_list->IWineDOMTokenList_iface;
+
+    return NULL;
+}
+
+static void token_list_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    struct token_list *token_list = token_list_from_DispatchEx(dispex);
+    if(token_list->element)
+        note_cc_edge((nsISupports*)token_list->element, "element", cb);
+}
+
 static void token_list_unlink(DispatchEx *dispex)
 {
     struct token_list *token_list = token_list_from_DispatchEx(dispex);
@@ -7808,8 +8047,8 @@ static HRESULT token_list_get_name(DispatchEx *dispex, DISPID id, BSTR *name)
     return (*name = SysAllocStringLen(buf, len)) ? S_OK : E_OUTOFMEMORY;
 }
 
-static HRESULT token_list_invoke(DispatchEx *dispex, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
-        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+static HRESULT token_list_invoke(DispatchEx *dispex, IDispatch *this_obj, DISPID id, LCID lcid, WORD flags,
+        DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     struct token_list *token_list = token_list_from_DispatchEx(dispex);
 
@@ -7834,26 +8073,29 @@ static HRESULT token_list_invoke(DispatchEx *dispex, DISPID id, LCID lcid, WORD 
 }
 
 static const dispex_static_data_vtbl_t token_list_dispex_vtbl = {
-    token_list_destructor,
-    token_list_unlink,
-    token_list_value,
-    token_list_get_dispid,
-    token_list_get_name,
-    token_list_invoke
+    .query_interface  = token_list_query_interface,
+    .destructor       = token_list_destructor,
+    .traverse         = token_list_traverse,
+    .unlink           = token_list_unlink,
+    .value            = token_list_value,
+    .get_dispid       = token_list_get_dispid,
+    .get_name         = token_list_get_name,
+    .invoke           = token_list_invoke
 };
 
 static const tid_t token_list_iface_tids[] = {
     IWineDOMTokenList_tid,
     0
 };
-static dispex_static_data_t token_list_dispex = {
-    L"DOMTokenList",
+dispex_static_data_t token_list_dispex = {
+    "DOMTokenList",
     &token_list_dispex_vtbl,
+    PROTO_ID_DOMTokenList,
     IWineDOMTokenList_tid,
     token_list_iface_tids
 };
 
-static HRESULT create_token_list(compat_mode_t compat_mode, IHTMLElement *element, IWineDOMTokenList **ret)
+static HRESULT create_token_list(compat_mode_t compat_mode, HTMLElement *element, IWineDOMTokenList **ret)
 {
     struct token_list *obj;
 
@@ -7865,10 +8107,10 @@ static HRESULT create_token_list(compat_mode_t compat_mode, IHTMLElement *elemen
     }
 
     obj->IWineDOMTokenList_iface.lpVtbl = &WineDOMTokenListVtbl;
-    obj->ref = 1;
-    init_dispatch(&obj->dispex, (IUnknown*)&obj->IWineDOMTokenList_iface, &token_list_dispex, compat_mode);
-    IHTMLElement_AddRef(element);
-    obj->element = element;
+
+    init_dispatch(&obj->dispex, &token_list_dispex, get_inner_window(element->node.doc), compat_mode);
+    IHTMLElement_AddRef(&element->IHTMLElement_iface);
+    obj->element = &element->IHTMLElement_iface;
 
     *ret = &obj->IWineDOMTokenList_iface;
     return S_OK;
@@ -7942,7 +8184,7 @@ static HRESULT WINAPI htmlelement_private_get_classList(IWineHTMLElementPrivate 
 
     TRACE("iface %p, class_list %p.\n", iface, class_list);
 
-    return create_token_list(dispex_compat_mode(&This->node.event_target.dispex), &This->IHTMLElement_iface,
+    return create_token_list(dispex_compat_mode(&This->node.event_target.dispex), This,
             (IWineDOMTokenList **)class_list);
 }
 
@@ -7957,17 +8199,19 @@ static const IWineHTMLElementPrivateVtbl WineHTMLElementPrivateVtbl = {
     htmlelement_private_get_classList,
 };
 
-static dispex_static_data_t HTMLElement_dispex = {
-    L"HTMLElement",
+dispex_static_data_t HTMLElement_dispex = {
+    "HTMLElement",
     &HTMLElement_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_HTMLElement,
     DispHTMLUnknownElement_tid,
     HTMLElement_iface_tids,
     HTMLElement_init_dispex_info
 };
 
-static dispex_static_data_t HTMLUnknownElement_dispex = {
-    L"HTMLUnknownElement",
+dispex_static_data_t HTMLUnknownElement_dispex = {
+    "HTMLUnknownElement",
     &HTMLElement_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_HTMLUnknownElement,
     DispHTMLUnknownElement_tid,
     HTMLElement_iface_tids,
     HTMLElement_init_dispex_info
@@ -7991,7 +8235,7 @@ void HTMLElement_Init(HTMLElement *This, HTMLDocumentNode *doc, nsIDOMElement *n
         nsIDOMHTMLElement *html_element;
         nsresult nsres;
 
-        HTMLDOMNode_Init(doc, &This->node, (nsIDOMNode*)nselem, dispex_data ? dispex_data : &HTMLUnknownElement_dispex);
+        HTMLDOMNode_Init(doc, &This->node, (nsIDOMNode*)nselem, dispex_data);
 
         /* No AddRef, share reference with HTMLDOMNode */
         assert((nsIDOMNode*)nselem == This->node.nsnode);
@@ -8011,6 +8255,8 @@ void HTMLElement_Init(HTMLElement *This, HTMLDocumentNode *doc, nsIDOMElement *n
 
 HRESULT HTMLElement_Create(HTMLDocumentNode *doc, nsIDOMNode *nsnode, BOOL use_generic, HTMLElement **ret)
 {
+    nsIDOMHTMLElement *nshtmlelem;
+    nsIDOMSVGElement *svg_element;
     nsIDOMElement *nselem;
     nsAString tag_name_str;
     const PRUnichar *tag_name;
@@ -8030,17 +8276,32 @@ HRESULT HTMLElement_Create(HTMLDocumentNode *doc, nsIDOMNode *nsnode, BOOL use_g
 
     nsAString_GetData(&tag_name_str, &tag_name);
 
+    /* Check this first, as Gecko treats svg elements as non-HTML */
+    nsres = nsIDOMElement_QueryInterface(nselem, &IID_nsIDOMSVGElement, (void**)&svg_element);
+    if(NS_SUCCEEDED(nsres)) {
+        hres = create_svg_element(doc, svg_element, tag_name, &elem);
+        nsIDOMSVGElement_Release(svg_element);
+        goto done;
+    }
+
+    nsres = nsIDOMElement_QueryInterface(nselem, &IID_nsIDOMHTMLElement, (void**)&nshtmlelem);
+    if(NS_FAILED(nsres)) {
+        if(!(elem = calloc(1, sizeof(HTMLElement))))
+            hres = E_OUTOFMEMORY;
+        else {
+            elem->node.vtbl = &HTMLElementImplVtbl;
+            HTMLElement_Init(elem, doc, nselem, &DOMElement_dispex);
+            hres = S_OK;
+        }
+        goto done;
+    }
+    nsIDOMHTMLElement_Release(nshtmlelem);
+
     tag = get_tag_desc(tag_name);
     if(tag) {
         hres = tag->constructor(doc, nselem, &elem);
     }else {
-        nsIDOMSVGElement *svg_element;
-
-        nsres = nsIDOMElement_QueryInterface(nselem, &IID_nsIDOMSVGElement, (void**)&svg_element);
-        if(NS_SUCCEEDED(nsres)) {
-            hres = create_svg_element(doc, svg_element, tag_name, &elem);
-            nsIDOMSVGElement_Release(svg_element);
-        }else if(use_generic) {
+        if(use_generic || doc->document_mode >= COMPAT_MODE_IE9) {
             hres = HTMLGenericElement_Create(doc, nselem, &elem);
         }else {
             elem = calloc(1, sizeof(HTMLElement));
@@ -8054,6 +8315,7 @@ HRESULT HTMLElement_Create(HTMLDocumentNode *doc, nsIDOMNode *nsnode, BOOL use_g
         }
     }
 
+done:
     TRACE("%s ret %p\n", debugstr_w(tag_name), elem);
 
     nsIDOMElement_Release(nselem);
@@ -8097,47 +8359,19 @@ HRESULT get_element(nsIDOMElement *nselem, HTMLElement **ret)
 static HRESULT WINAPI HTMLFiltersCollection_QueryInterface(IHTMLFiltersCollection *iface, REFIID riid, void **ppv)
 {
     HTMLFiltersCollection *This = impl_from_IHTMLFiltersCollection(iface);
-
-    TRACE("%p %s %p\n", This, debugstr_mshtml_guid(riid), ppv );
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLFiltersCollection_iface;
-    }else if(IsEqualGUID(&IID_IHTMLFiltersCollection, riid)) {
-        TRACE("(%p)->(IID_IHTMLFiltersCollection %p)\n", This, ppv);
-        *ppv = &This->IHTMLFiltersCollection_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        *ppv = NULL;
-        FIXME("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLFiltersCollection_AddRef(IHTMLFiltersCollection *iface)
 {
     HTMLFiltersCollection *This = impl_from_IHTMLFiltersCollection(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLFiltersCollection_Release(IHTMLFiltersCollection *iface)
 {
     HTMLFiltersCollection *This = impl_from_IHTMLFiltersCollection(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLFiltersCollection_GetTypeInfoCount(IHTMLFiltersCollection *iface, UINT *pctinfo)
@@ -8216,6 +8450,16 @@ static inline HTMLFiltersCollection *HTMLFiltersCollection_from_DispatchEx(Dispa
     return CONTAINING_RECORD(iface, HTMLFiltersCollection, dispex);
 }
 
+static void *HTMLFiltersCollection_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLFiltersCollection *This = HTMLFiltersCollection_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLFiltersCollection, riid))
+        return &This->IHTMLFiltersCollection_iface;
+
+    return NULL;
+}
+
 static void HTMLFiltersCollection_destructor(DispatchEx *dispex)
 {
     HTMLFiltersCollection *This = HTMLFiltersCollection_from_DispatchEx(dispex);
@@ -8247,8 +8491,8 @@ static HRESULT HTMLFiltersCollection_get_name(DispatchEx *dispex, DISPID id, BST
     return (*name = SysAllocStringLen(buf, len)) ? S_OK : E_OUTOFMEMORY;
 }
 
-static HRESULT HTMLFiltersCollection_invoke(DispatchEx *dispex, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
-        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+static HRESULT HTMLFiltersCollection_invoke(DispatchEx *dispex, IDispatch *this_obj, DISPID id, LCID lcid, WORD flags,
+        DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     TRACE("(%p)->(%lx %lx %x %p %p %p)\n", dispex, id, lcid, flags, params, res, ei);
 
@@ -8261,13 +8505,11 @@ static HRESULT HTMLFiltersCollection_invoke(DispatchEx *dispex, DISPID id, LCID 
 }
 
 static const dispex_static_data_vtbl_t HTMLFiltersCollection_dispex_vtbl = {
-    HTMLFiltersCollection_destructor,
-    NULL,
-    NULL,
-    HTMLFiltersCollection_get_dispid,
-    HTMLFiltersCollection_get_name,
-    HTMLFiltersCollection_invoke,
-    NULL
+    .query_interface  = HTMLFiltersCollection_query_interface,
+    .destructor       = HTMLFiltersCollection_destructor,
+    .get_dispid       = HTMLFiltersCollection_get_dispid,
+    .get_name         = HTMLFiltersCollection_get_name,
+    .invoke           = HTMLFiltersCollection_invoke,
 };
 
 static const tid_t HTMLFiltersCollection_iface_tids[] = {
@@ -8275,35 +8517,53 @@ static const tid_t HTMLFiltersCollection_iface_tids[] = {
     0
 };
 static dispex_static_data_t HTMLFiltersCollection_dispex = {
-    L"FiltersCollection",
+    "FiltersCollection",
     &HTMLFiltersCollection_dispex_vtbl,
+    PROTO_ID_NULL,
     IHTMLFiltersCollection_tid,
     HTMLFiltersCollection_iface_tids
 };
 
-static HRESULT create_filters_collection(compat_mode_t compat_mode, IHTMLFiltersCollection **ret)
+static HRESULT create_filters_collection(HTMLElement *elem, IHTMLFiltersCollection **ret)
 {
+    compat_mode_t compat_mode = dispex_compat_mode(&elem->node.event_target.dispex);
     HTMLFiltersCollection *collection;
 
     if(!(collection = malloc(sizeof(HTMLFiltersCollection))))
         return E_OUTOFMEMORY;
 
     collection->IHTMLFiltersCollection_iface.lpVtbl = &HTMLFiltersCollectionVtbl;
-    collection->ref = 1;
 
-    init_dispatch(&collection->dispex, (IUnknown*)&collection->IHTMLFiltersCollection_iface,
-                  &HTMLFiltersCollection_dispex, min(compat_mode, COMPAT_MODE_IE8));
+    init_dispatch(&collection->dispex, &HTMLFiltersCollection_dispex, get_inner_window(elem->node.doc),
+                  min(compat_mode, COMPAT_MODE_IE8));
 
     *ret = &collection->IHTMLFiltersCollection_iface;
     return S_OK;
 }
 
-static HRESULT get_attr_dispid_by_relative_idx(HTMLAttributeCollection *This, LONG *idx, DISPID start, DISPID *dispid)
+static HRESULT get_attr_dispid_by_relative_idx(HTMLAttributeCollection *This, LONG *idx, DISPID start,
+        DISPID *dispid, nsIDOMAttr **nsattr)
 {
     IDispatchEx *dispex = &This->elem->node.event_target.dispex.IDispatchEx_iface;
     DISPID id = start;
+    UINT32 length;
     LONG len = -1;
     HRESULT hres;
+
+    if(This->nsattrs) {
+        id++;
+        if(dispid) {
+            *dispid = id + *idx;
+            if(!nsattr)
+                return S_OK;
+            if(NS_FAILED(nsIDOMMozNamedAttrMap_Item(This->nsattrs, *dispid, nsattr)))
+                return E_FAIL;
+            return *nsattr ? S_OK : DISP_E_UNKNOWNNAME;
+        }
+        nsIDOMMozNamedAttrMap_GetLength(This->nsattrs, &length);
+        *idx = (length > id) ? length - id : 0;
+        return S_OK;
+    }
 
     FIXME("filter non-enumerable attributes out\n");
 
@@ -8328,13 +8588,15 @@ static HRESULT get_attr_dispid_by_relative_idx(HTMLAttributeCollection *This, LO
     return S_OK;
 }
 
-static HRESULT get_attr_dispid_by_idx(HTMLAttributeCollection *This, LONG *idx, DISPID *dispid)
+static HRESULT get_attr_dispid_by_idx(HTMLAttributeCollection *This, LONG *idx, DISPID *dispid, nsIDOMAttr **nsattr)
 {
-    return get_attr_dispid_by_relative_idx(This, idx, DISPID_STARTENUM, dispid);
+    return get_attr_dispid_by_relative_idx(This, idx, DISPID_STARTENUM, dispid, nsattr);
 }
 
-static inline HRESULT get_attr_dispid_by_name(HTMLAttributeCollection *This, BSTR name, DISPID *id)
+static inline HRESULT get_attr_dispid_by_name(HTMLAttributeCollection *This, BSTR name, DISPID *id, nsIDOMAttr **nsattr)
 {
+    nsAString nsstr;
+    nsresult nsres;
     HRESULT hres;
 
     if(name[0]>='0' && name[0]<='9') {
@@ -8343,51 +8605,44 @@ static inline HRESULT get_attr_dispid_by_name(HTMLAttributeCollection *This, BST
 
         idx = wcstoul(name, &end_ptr, 10);
         if(!*end_ptr) {
-            hres = get_attr_dispid_by_idx(This, &idx, id);
+            hres = get_attr_dispid_by_idx(This, &idx, id, nsattr);
             if(SUCCEEDED(hres))
                 return hres;
         }
     }
 
-    if(!This->elem) {
-        WARN("NULL elem\n");
-        return E_UNEXPECTED;
+    if(This->nsattrs) {
+        nsAString_InitDepend(&nsstr, name);
+        *nsattr = NULL;
+        nsres = nsIDOMMozNamedAttrMap_GetNamedItem(This->nsattrs, &nsstr, nsattr);
+        nsAString_Finish(&nsstr);
+        if(NS_FAILED(nsres))
+            return E_FAIL;
+        return *nsattr ? S_OK : DISP_E_UNKNOWNNAME;
     }
 
     hres = IDispatchEx_GetDispID(&This->elem->node.event_target.dispex.IDispatchEx_iface,
             name, fdexNameCaseInsensitive, id);
-    return hres;
+    if(FAILED(hres))
+        return hres;
+    return dispex_is_builtin_method(&This->elem->node.event_target.dispex, *id) ? DISP_E_UNKNOWNNAME : S_OK;
 }
 
-static inline HRESULT get_domattr(HTMLAttributeCollection *This, DISPID id, LONG *list_pos, HTMLDOMAttribute **attr)
+static inline HRESULT get_domattr(HTMLAttributeCollection *This, DISPID id, nsIDOMAttr *nsattr,
+        LONG *list_pos, HTMLDOMAttribute **attr)
 {
-    HTMLDOMAttribute *iter;
-    LONG pos = 0;
     HRESULT hres;
 
-    *attr = NULL;
-    LIST_FOR_EACH_ENTRY(iter, &This->attrs, HTMLDOMAttribute, entry) {
-        if(iter->dispid == id) {
-            *attr = iter;
-            break;
-        }
-        pos++;
-    }
-
-    if(!*attr) {
-        if(!This->elem) {
-            WARN("NULL elem\n");
-            return E_UNEXPECTED;
-        }
-
-        hres = HTMLDOMAttribute_Create(NULL, This->elem, id, dispex_compat_mode(&This->elem->node.event_target.dispex), attr);
+    if(!(*attr = find_attr_in_list(This, id, nsattr, list_pos))) {
+        if(nsattr)
+            id = get_dispid_for_nsattr(This->elem, nsattr);
+        hres = HTMLDOMAttribute_Create(NULL, This->elem->node.doc, This->elem, id, nsattr,
+                                       dispex_compat_mode(&This->elem->node.event_target.dispex), attr);
         if(FAILED(hres))
             return hres;
     }
 
     IHTMLDOMAttribute_AddRef(&(*attr)->IHTMLDOMAttribute_iface);
-    if(list_pos)
-        *list_pos = pos;
     return S_OK;
 }
 
@@ -8456,6 +8711,7 @@ static HRESULT WINAPI HTMLAttributeCollectionEnum_Next(IEnumVARIANT *iface, ULON
     HTMLAttributeCollectionEnum *This = HTMLAttributeCollectionEnum_from_IEnumVARIANT(iface);
     DISPID tmp, dispid = This->iter_dispid;
     HTMLDOMAttribute *attr;
+    nsIDOMAttr *nsattr;
     LONG rel_index = 0;
     HRESULT hres;
     ULONG i;
@@ -8463,10 +8719,13 @@ static HRESULT WINAPI HTMLAttributeCollectionEnum_Next(IEnumVARIANT *iface, ULON
     TRACE("(%p)->(%lu %p %p)\n", This, celt, rgVar, pCeltFetched);
 
     for(i = 0; i < celt; i++) {
-        hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, dispid, &tmp);
+        nsattr = NULL;
+        hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, dispid, &tmp, &nsattr);
         if(SUCCEEDED(hres)) {
             dispid = tmp;
-            hres = get_domattr(This->col, dispid, NULL, &attr);
+            hres = get_domattr(This->col, dispid, nsattr, NULL, &attr);
+            if(nsattr)
+                nsIDOMAttr_Release(nsattr);
         }
         else if(hres == DISP_E_UNKNOWNNAME)
             break;
@@ -8501,14 +8760,14 @@ static HRESULT WINAPI HTMLAttributeCollectionEnum_Skip(IEnumVARIANT *iface, ULON
         return S_OK;
 
     rel_index = -1;
-    hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, This->iter_dispid, NULL);
+    hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, This->iter_dispid, NULL, NULL);
     if(FAILED(hres))
         return hres;
     remaining = min(celt, rel_index);
 
     if(remaining) {
         rel_index = remaining - 1;
-        hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, This->iter_dispid, &dispid);
+        hres = get_attr_dispid_by_relative_idx(This->col, &rel_index, This->iter_dispid, &dispid, NULL);
         if(FAILED(hres))
             return hres;
         This->iter += remaining;
@@ -8554,50 +8813,19 @@ static inline HTMLAttributeCollection *impl_from_IHTMLAttributeCollection(IHTMLA
 static HRESULT WINAPI HTMLAttributeCollection_QueryInterface(IHTMLAttributeCollection *iface, REFIID riid, void **ppv)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLAttributeCollection_iface;
-    }else if(IsEqualGUID(&IID_IHTMLAttributeCollection, riid)) {
-        *ppv = &This->IHTMLAttributeCollection_iface;
-    }else if(IsEqualGUID(&IID_IHTMLAttributeCollection2, riid)) {
-        *ppv = &This->IHTMLAttributeCollection2_iface;
-    }else if(IsEqualGUID(&IID_IHTMLAttributeCollection3, riid)) {
-        *ppv = &This->IHTMLAttributeCollection3_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        *ppv = NULL;
-        WARN("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLAttributeCollection_AddRef(IHTMLAttributeCollection *iface)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLAttributeCollection_Release(IHTMLAttributeCollection *iface)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLAttributeCollection_GetTypeInfoCount(IHTMLAttributeCollection *iface, UINT *pctinfo)
@@ -8638,7 +8866,7 @@ static HRESULT WINAPI HTMLAttributeCollection_get_length(IHTMLAttributeCollectio
     TRACE("(%p)->(%p)\n", This, p);
 
     *p = -1;
-    hres = get_attr_dispid_by_idx(This, p, NULL);
+    hres = get_attr_dispid_by_idx(This, p, NULL, NULL);
     return hres;
 }
 
@@ -8668,6 +8896,7 @@ static HRESULT WINAPI HTMLAttributeCollection__newEnum(IHTMLAttributeCollection 
 static HRESULT WINAPI HTMLAttributeCollection_item(IHTMLAttributeCollection *iface, VARIANT *name, IDispatch **ppItem)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection(iface);
+    nsIDOMAttr *nsattr = NULL;
     HTMLDOMAttribute *attr;
     DISPID id;
     HRESULT hres;
@@ -8676,10 +8905,10 @@ static HRESULT WINAPI HTMLAttributeCollection_item(IHTMLAttributeCollection *ifa
 
     switch(V_VT(name)) {
     case VT_I4:
-        hres = get_attr_dispid_by_idx(This, &V_I4(name), &id);
+        hres = get_attr_dispid_by_idx(This, &V_I4(name), &id, &nsattr);
         break;
     case VT_BSTR:
-        hres = get_attr_dispid_by_name(This, V_BSTR(name), &id);
+        hres = get_attr_dispid_by_name(This, V_BSTR(name), &id, &nsattr);
         break;
     default:
         FIXME("unsupported name %s\n", debugstr_variant(name));
@@ -8690,7 +8919,9 @@ static HRESULT WINAPI HTMLAttributeCollection_item(IHTMLAttributeCollection *ifa
     if(FAILED(hres))
         return hres;
 
-    hres = get_domattr(This, id, NULL, &attr);
+    hres = get_domattr(This, id, nsattr, NULL, &attr);
+    if(nsattr)
+        nsIDOMAttr_Release(nsattr);
     if(FAILED(hres))
         return hres;
 
@@ -8768,13 +8999,14 @@ static HRESULT WINAPI HTMLAttributeCollection2_getNamedItem(IHTMLAttributeCollec
         IHTMLDOMAttribute **newretNode)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection2(iface);
+    nsIDOMAttr *nsattr = NULL;
     HTMLDOMAttribute *attr;
     DISPID id;
     HRESULT hres;
 
     TRACE("(%p)->(%s %p)\n", This, debugstr_w(bstrName), newretNode);
 
-    hres = get_attr_dispid_by_name(This, bstrName, &id);
+    hres = get_attr_dispid_by_name(This, bstrName, &id, &nsattr);
     if(hres == DISP_E_UNKNOWNNAME) {
         *newretNode = NULL;
         return S_OK;
@@ -8782,7 +9014,9 @@ static HRESULT WINAPI HTMLAttributeCollection2_getNamedItem(IHTMLAttributeCollec
         return hres;
     }
 
-    hres = get_domattr(This, id, NULL, &attr);
+    hres = get_domattr(This, id, nsattr, NULL, &attr);
+    if(nsattr)
+        nsIDOMAttr_Release(nsattr);
     if(FAILED(hres))
         return hres;
 
@@ -8898,19 +9132,22 @@ static HRESULT WINAPI HTMLAttributeCollection3_removeNamedItem(IHTMLAttributeCol
 static HRESULT WINAPI HTMLAttributeCollection3_item(IHTMLAttributeCollection3 *iface, LONG index, IHTMLDOMAttribute **ppNodeOut)
 {
     HTMLAttributeCollection *This = impl_from_IHTMLAttributeCollection3(iface);
+    nsIDOMAttr *nsattr = NULL;
     HTMLDOMAttribute *attr;
     DISPID id;
     HRESULT hres;
 
     TRACE("(%p)->(%ld %p)\n", This, index, ppNodeOut);
 
-    hres = get_attr_dispid_by_idx(This, &index, &id);
+    hres = get_attr_dispid_by_idx(This, &index, &id, &nsattr);
     if(hres == DISP_E_UNKNOWNNAME)
         return E_INVALIDARG;
     if(FAILED(hres))
         return hres;
 
-    hres = get_domattr(This, id, NULL, &attr);
+    hres = get_domattr(This, id, nsattr, NULL, &attr);
+    if(nsattr)
+        nsIDOMAttr_Release(nsattr);
     if(FAILED(hres))
         return hres;
 
@@ -8944,6 +9181,33 @@ static inline HTMLAttributeCollection *HTMLAttributeCollection_from_DispatchEx(D
     return CONTAINING_RECORD(iface, HTMLAttributeCollection, dispex);
 }
 
+static void *HTMLAttributeCollection_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLAttributeCollection *This = HTMLAttributeCollection_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLAttributeCollection, riid))
+        return &This->IHTMLAttributeCollection_iface;
+    if(IsEqualGUID(&IID_IHTMLAttributeCollection2, riid))
+        return &This->IHTMLAttributeCollection2_iface;
+    if(IsEqualGUID(&IID_IHTMLAttributeCollection3, riid))
+        return &This->IHTMLAttributeCollection3_iface;
+
+    return NULL;
+}
+
+static void HTMLAttributeCollection_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLAttributeCollection *This = HTMLAttributeCollection_from_DispatchEx(dispex);
+    HTMLDOMAttribute *attr;
+
+    LIST_FOR_EACH_ENTRY(attr, &This->attrs, HTMLDOMAttribute, entry)
+        note_cc_edge((nsISupports*)&attr->IHTMLDOMAttribute_iface, "attr", cb);
+    if(This->elem)
+        note_cc_edge((nsISupports*)&This->elem->node.IHTMLDOMNode_iface, "elem", cb);
+    if(This->nsattrs)
+        note_cc_edge((nsISupports*)This->nsattrs, "nsattrs", cb);
+}
+
 static void HTMLAttributeCollection_unlink(DispatchEx *dispex)
 {
     HTMLAttributeCollection *This = HTMLAttributeCollection_from_DispatchEx(dispex);
@@ -8951,9 +9215,14 @@ static void HTMLAttributeCollection_unlink(DispatchEx *dispex)
         HTMLDOMAttribute *attr = LIST_ENTRY(list_head(&This->attrs), HTMLDOMAttribute, entry);
 
         list_remove(&attr->entry);
-        attr->elem = NULL;
         IHTMLDOMAttribute_Release(&attr->IHTMLDOMAttribute_iface);
     }
+    if(This->elem) {
+        HTMLElement *elem = This->elem;
+        This->elem = NULL;
+        IHTMLDOMNode_Release(&elem->node.IHTMLDOMNode_iface);
+    }
+    unlink_ref(&This->nsattrs);
 }
 
 static void HTMLAttributeCollection_destructor(DispatchEx *dispex)
@@ -8965,17 +9234,20 @@ static void HTMLAttributeCollection_destructor(DispatchEx *dispex)
 static HRESULT HTMLAttributeCollection_get_dispid(DispatchEx *dispex, BSTR name, DWORD flags, DISPID *dispid)
 {
     HTMLAttributeCollection *This = HTMLAttributeCollection_from_DispatchEx(dispex);
+    nsIDOMAttr *nsattr = NULL;
     HTMLDOMAttribute *attr;
     LONG pos;
     HRESULT hres;
 
     TRACE("(%p)->(%s %lx %p)\n", This, debugstr_w(name), flags, dispid);
 
-    hres = get_attr_dispid_by_name(This, name, dispid);
+    hres = get_attr_dispid_by_name(This, name, dispid, &nsattr);
     if(FAILED(hres))
         return hres;
 
-    hres = get_domattr(This, *dispid, &pos, &attr);
+    hres = get_domattr(This, *dispid, nsattr, &pos, &attr);
+    if(nsattr)
+        nsIDOMAttr_Release(nsattr);
     if(FAILED(hres))
         return hres;
     IHTMLDOMAttribute_Release(&attr->IHTMLDOMAttribute_iface);
@@ -8993,7 +9265,7 @@ static HRESULT HTMLAttributeCollection_get_name(DispatchEx *dispex, DISPID id, B
     return E_NOTIMPL;
 }
 
-static HRESULT HTMLAttributeCollection_invoke(DispatchEx *dispex, DISPID id, LCID lcid,
+static HRESULT HTMLAttributeCollection_invoke(DispatchEx *dispex, IDispatch *this_obj, DISPID id, LCID lcid,
         WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     HTMLAttributeCollection *This = HTMLAttributeCollection_from_DispatchEx(dispex);
@@ -9028,13 +9300,13 @@ static HRESULT HTMLAttributeCollection_invoke(DispatchEx *dispex, DISPID id, LCI
 }
 
 static const dispex_static_data_vtbl_t HTMLAttributeCollection_dispex_vtbl = {
-    HTMLAttributeCollection_destructor,
-    HTMLAttributeCollection_unlink,
-    NULL,
-    HTMLAttributeCollection_get_dispid,
-    HTMLAttributeCollection_get_name,
-    HTMLAttributeCollection_invoke,
-    NULL
+    .query_interface  = HTMLAttributeCollection_query_interface,
+    .destructor       = HTMLAttributeCollection_destructor,
+    .traverse         = HTMLAttributeCollection_traverse,
+    .unlink           = HTMLAttributeCollection_unlink,
+    .get_dispid       = HTMLAttributeCollection_get_dispid,
+    .get_name         = HTMLAttributeCollection_get_name,
+    .invoke           = HTMLAttributeCollection_invoke,
 };
 
 static const tid_t HTMLAttributeCollection_iface_tids[] = {
@@ -9044,9 +9316,10 @@ static const tid_t HTMLAttributeCollection_iface_tids[] = {
     0
 };
 
-static dispex_static_data_t HTMLAttributeCollection_dispex = {
-    L"NamedNodeMap",
+dispex_static_data_t HTMLAttributeCollection_dispex = {
+    "NamedNodeMap",
     &HTMLAttributeCollection_dispex_vtbl,
+    PROTO_ID_HTMLAttributeCollection,
     DispHTMLAttributeCollection_tid,
     HTMLAttributeCollection_iface_tids
 };
@@ -9054,6 +9327,7 @@ static dispex_static_data_t HTMLAttributeCollection_dispex = {
 HRESULT HTMLElement_get_attr_col(HTMLDOMNode *iface, HTMLAttributeCollection **ac)
 {
     HTMLElement *This = impl_from_HTMLDOMNode(iface);
+    compat_mode_t compat_mode = dispex_compat_mode(&iface->event_target.dispex);
 
     if(This->attrs) {
         IHTMLAttributeCollection_AddRef(&This->attrs->IHTMLAttributeCollection_iface);
@@ -9068,13 +9342,16 @@ HRESULT HTMLElement_get_attr_col(HTMLDOMNode *iface, HTMLAttributeCollection **a
     This->attrs->IHTMLAttributeCollection_iface.lpVtbl = &HTMLAttributeCollectionVtbl;
     This->attrs->IHTMLAttributeCollection2_iface.lpVtbl = &HTMLAttributeCollection2Vtbl;
     This->attrs->IHTMLAttributeCollection3_iface.lpVtbl = &HTMLAttributeCollection3Vtbl;
-    This->attrs->ref = 2;
 
+    IHTMLDOMNode_AddRef(&This->node.IHTMLDOMNode_iface);
     This->attrs->elem = This;
     list_init(&This->attrs->attrs);
-    init_dispatch(&This->attrs->dispex, (IUnknown*)&This->attrs->IHTMLAttributeCollection_iface,
-                  &HTMLAttributeCollection_dispex, dispex_compat_mode(&iface->event_target.dispex));
+    init_dispatch(&This->attrs->dispex, &HTMLAttributeCollection_dispex, get_inner_window(This->node.doc), compat_mode);
+
+    if(compat_mode >= COMPAT_MODE_IE9 && This->dom_element)
+        nsIDOMElement_GetAttributes(This->dom_element, &This->attrs->nsattrs);
 
     *ac = This->attrs;
+    IHTMLAttributeCollection_AddRef(&This->attrs->IHTMLAttributeCollection_iface);
     return S_OK;
 }

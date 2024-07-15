@@ -29,6 +29,7 @@
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "winternl.h"
+#include "ddk/ntddk.h"
 #include "ddk/wdm.h"
 #include "ntdll_misc.h"
 #include "wine/exception.h"
@@ -595,12 +596,12 @@ static const xmlstr_t empty_xmlstr;
 
 #ifdef __i386__
 static const WCHAR current_archW[] = L"x86";
+#elif defined __aarch64__ || defined __arm64ec__
+static const WCHAR current_archW[] = L"arm64";
 #elif defined __x86_64__
 static const WCHAR current_archW[] = L"amd64";
 #elif defined __arm__
 static const WCHAR current_archW[] = L"arm";
-#elif defined __aarch64__
-static const WCHAR current_archW[] = L"arm64";
 #else
 static const WCHAR current_archW[] = L"none";
 #endif
@@ -2564,6 +2565,15 @@ static void parse_application_elem( xmlbuf_t *xmlbuf, struct assembly *assembly,
                                     struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+    struct xml_attr attr;
+    BOOL end = FALSE;
+
+    while (next_xml_attr(xmlbuf, &attr, &end))
+    {
+        if (!is_xmlns_attr( &attr )) WARN( "unknown attr %s\n", debugstr_xml_attr(&attr) );
+    }
+
+    if (end) return;
 
     while (next_xml_elem( xmlbuf, &elem, parent ))
     {
@@ -2708,11 +2718,14 @@ static void parse_assembly_elem( xmlbuf_t *xmlbuf, struct assembly* assembly,
         }
     }
 
-    if (end || !version)
+    if (!version)
     {
         set_error( xmlbuf );
         return;
     }
+
+    if (end)
+        return;
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -3163,6 +3176,10 @@ static WCHAR *lookup_manifest_file( HANDLE dir, struct assembly_identity *ai )
               ai->version.major, ai->version.minor, lang );
     RtlInitUnicodeString( &lookup_us, lookup );
 
+#ifdef __arm64ec__
+    if (!wcsncmp( lookup, L"amd64_", 6 )) memcpy( lookup, L"a??", 3 * sizeof(WCHAR) );
+#endif
+
     if (!NtQueryDirectoryFile( dir, 0, NULL, NULL, &io, buffer, sizeof(buffer),
                                FileBothDirectoryInformation, FALSE, &lookup_us, TRUE ))
     {
@@ -3453,7 +3470,8 @@ static NTSTATUS build_dllredirect_section(ACTIVATION_CONTEXT* actctx, struct str
 {
     unsigned int i, j, total_len = 0, dll_count = 0;
     struct strsection_header *header;
-    struct dllredirect_data *data;
+    ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *data;
+    ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_SEGMENT *path;
     struct string_index *index;
     ULONG name_offset;
 
@@ -3468,12 +3486,12 @@ static NTSTATUS build_dllredirect_section(ACTIVATION_CONTEXT* actctx, struct str
             /* each entry needs index, data and string data */
             total_len += sizeof(*index);
             total_len += aligned_string_len((wcslen(dll->name)+1)*sizeof(WCHAR));
+            total_len += sizeof(*data);
             if (dll->load_from)
             {
-                total_len += offsetof( struct dllredirect_data, paths[1] );
+                total_len += sizeof(*path);
                 total_len += aligned_string_len( wcslen(dll->load_from) * sizeof(WCHAR) );
             }
-            else total_len += offsetof( struct dllredirect_data, paths[0] );
         }
 
         dll_count += assembly->num_dlls;
@@ -3511,7 +3529,7 @@ static NTSTATUS build_dllredirect_section(ACTIVATION_CONTEXT* actctx, struct str
             index->name_offset = name_offset;
             index->name_len = str.Length;
             index->data_offset = index->name_offset + aligned_string_len(str.MaximumLength);
-            index->data_len = offsetof( struct dllredirect_data, paths[0] );
+            index->data_len = sizeof(*data);
             index->rosterindex = i + 1;
 
             /* dll name */
@@ -3521,30 +3539,32 @@ static NTSTATUS build_dllredirect_section(ACTIVATION_CONTEXT* actctx, struct str
             name_offset += aligned_string_len(str.MaximumLength);
 
             /* setup data */
-            data = (struct dllredirect_data*)((BYTE*)header + index->data_offset);
+            data = (ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *)((BYTE *)header + index->data_offset);
             if (dll->load_from)
             {
                 ULONG len = wcslen(dll->load_from) * sizeof(WCHAR);
-                data->size = offsetof( struct dllredirect_data, paths[1] );
-                data->flags = 0;
-                data->total_len = aligned_string_len( len );
-                data->paths_count = 1;
-                data->paths_offset = index->data_offset + offsetof( struct dllredirect_data, paths[0] );
-                data->paths[0].offset = index->data_offset + data->size;
-                data->paths[0].len = len;
-                ptrW = (WCHAR *)((BYTE *)header + data->paths[0].offset);
+                data->Size = sizeof(*data) + sizeof(*path);
+                data->Flags = 0;
+                data->TotalPathLength = aligned_string_len( len );
+                data->PathSegmentCount = 1;
+                data->PathSegmentOffset = index->data_offset + sizeof(*data);
+                path = (ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_SEGMENT *)(data + 1);
+                path->Offset = index->data_offset + data->Size;
+                path->Length = len;
+                ptrW = (WCHAR *)((BYTE *)header + path->Offset);
                 memcpy( ptrW, dll->load_from, len );
-                if (wcschr( dll->load_from, '%' )) data->flags |= DLL_REDIRECT_PATH_EXPAND;
+                if (wcschr( dll->load_from, '%' ))
+                    data->Flags |= ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_EXPAND;
             }
             else
             {
-                data->size = offsetof( struct dllredirect_data, paths[0] );
-                data->flags = DLL_REDIRECT_PATH_OMITS_ASSEMBLY_ROOT;
-                data->total_len = 0;
-                data->paths_count = 0;
-                data->paths_offset = 0;
+                data->Size = sizeof(*data);
+                data->Flags = ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_OMITS_ASSEMBLY_ROOT;
+                data->TotalPathLength = 0;
+                data->PathSegmentCount = 0;
+                data->PathSegmentOffset = 0;
             }
-            name_offset += data->size + data->total_len;
+            name_offset += data->Size + data->TotalPathLength;
 
             index++;
         }
@@ -3604,15 +3624,15 @@ static struct guid_index *find_guid_index(const struct guidsection_header *secti
     return index;
 }
 
-static inline struct dllredirect_data *get_dllredirect_data(ACTIVATION_CONTEXT *ctxt, struct string_index *index)
+static inline ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *get_dllredirect_data(ACTIVATION_CONTEXT *ctxt, struct string_index *index)
 {
-    return (struct dllredirect_data*)((BYTE*)ctxt->dllredirect_section + index->data_offset);
+    return (ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *)((BYTE *)ctxt->dllredirect_section + index->data_offset);
 }
 
 static NTSTATUS find_dll_redirection(ACTIVATION_CONTEXT* actctx, const UNICODE_STRING *name,
                                      PACTCTX_SECTION_KEYED_DATA data)
 {
-    struct dllredirect_data *dll;
+    ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *dll;
     struct string_index *index;
 
     if (!(actctx->sections & DLLREDIRECT_SECTION)) return STATUS_SXS_KEY_NOT_FOUND;
@@ -3637,7 +3657,7 @@ static NTSTATUS find_dll_redirection(ACTIVATION_CONTEXT* actctx, const UNICODE_S
 
         data->ulDataFormatVersion = 1;
         data->lpData = dll;
-        data->ulLength = dll->size;
+        data->ulLength = dll->Size;
         data->lpSectionGlobalData = NULL;
         data->ulSectionGlobalDataLength = 0;
         data->lpSectionBase = actctx->dllredirect_section;
@@ -5248,9 +5268,17 @@ NTSTATUS WINAPI RtlCreateActivationContext( HANDLE *handle, const void *ptr )
 
     TRACE("%p %08lx\n", pActCtx, pActCtx ? pActCtx->dwFlags : 0);
 
-    if (!pActCtx || pActCtx->cbSize < sizeof(*pActCtx) ||
-        (pActCtx->dwFlags & ~ACTCTX_FLAGS_ALL))
+#define CHECK_LIMIT( field ) (pActCtx->cbSize >= RTL_SIZEOF_THROUGH_FIELD( ACTCTXW, field ))
+    if (!pActCtx || (pActCtx->dwFlags & ~ACTCTX_FLAGS_ALL) ||
+        !CHECK_LIMIT( lpSource ) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_PROCESSOR_ARCHITECTURE_VALID) && !CHECK_LIMIT( wProcessorArchitecture )) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_LANGID_VALID) && !CHECK_LIMIT( wLangId )) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID) && !CHECK_LIMIT( lpAssemblyDirectory )) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_RESOURCE_NAME_VALID) && !CHECK_LIMIT( lpResourceName )) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_APPLICATION_NAME_VALID) && !CHECK_LIMIT( lpApplicationName )) ||
+        ((pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID) && !CHECK_LIMIT( hModule )))
         return STATUS_INVALID_PARAMETER;
+#undef CHECK_LIMIT
 
     if ((pActCtx->dwFlags & ACTCTX_FLAG_RESOURCE_NAME_VALID) && !pActCtx->lpResourceName)
         return STATUS_INVALID_PARAMETER;

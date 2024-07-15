@@ -53,6 +53,7 @@ DEFINE_GUID(IID_IProxyManager,0x00000008,0x0000,0x0000,0xc0,0x00,0x00,0x00,0x00,
 DEFINE_OLEGUID(CGID_DocHostCmdPriv, 0x000214D4L, 0, 0);
 DEFINE_GUID(SID_SContainerDispatch,0xb722be00,0x4e68,0x101b,0xa2,0xbc,0x00,0xaa,0x00,0x40,0x47,0x70);
 DEFINE_GUID(outer_test_iid,0xabcabc00,0,0,0,0,0,0,0,0,0,0x66);
+extern const IID IID_IActiveScriptSite;
 
 #define DEFINE_EXPECT(func) \
     static BOOL expect_ ## func = FALSE, called_ ## func = FALSE
@@ -226,6 +227,7 @@ static BOOL support_wbapp, allow_new_window, no_travellog;
 static BOOL report_mime;
 static BOOL testing_submit;
 static BOOL resetting_document;
+static BOOL is_error_url;
 static BOOL is_mhtml;
 static int stream_read, protocol_read;
 static IStream *history_stream;
@@ -835,6 +837,7 @@ static HRESULT WINAPI Protocol_Start(IInternetProtocol *iface, LPCWSTR szUrl,
     hres = IInternetProtocolSink_ReportResult(pOIProtSink, S_OK, 0, NULL);
     ok(hres == S_OK, "ReportResult failed: %08lx\n", hres);
 
+    ReleaseBindInfo(&bindinfo);
     return S_OK;
 }
 
@@ -1202,6 +1205,7 @@ static HRESULT WINAPI PropertyNotifySink_OnChanged(IPropertyNotifySink *iface, D
     case 3000031:
     case 3000032:
     case 3000033:
+    case 3000034:
         /* TODO */
         return S_OK;
     }
@@ -3698,7 +3702,8 @@ static HRESULT  WINAPI DocObjectService_FireBeforeNavigate2(IDocObjectService *i
     if(!testing_submit) {
         ok(!pPostData, "pPostData = %p\n", pPostData);
         ok(!cbPostData, "cbPostData = %ld\n", cbPostData);
-        ok(!lpszHeaders || !lstrcmpW(lpszHeaders, L"Referer: http://test.winehq.org/tests/winehq_snapshot/\r\n"),
+        ok(!lpszHeaders || !lstrcmpW(lpszHeaders, L"Referer: http://test.winehq.org/tests/winehq_snapshot/\r\n") ||
+           !lstrcmpW(lpszHeaders, L"Referer: http://test.winehq.org/tests/hello.html\r\n"),
            "lpszHeaders = %s\n", wine_dbgstr_w(lpszHeaders));
     }else {
         ok(cbPostData == 9, "cbPostData = %ld\n", cbPostData);
@@ -3800,7 +3805,7 @@ static HRESULT  WINAPI DocObjectService_IsErrorUrl(
         BOOL *pfIsError)
 {
     CHECK_EXPECT2(IsErrorUrl);
-    *pfIsError = FALSE;
+    *pfIsError = is_error_url;
     return S_OK;
 }
 
@@ -6485,6 +6490,204 @@ static void test_reload(IHTMLDocument2 *doc)
     test_download(DWL_VERBDONE|DWL_HTTP|DWL_ONREADY_LOADING|DWL_REFRESH|DWL_EX_GETHOSTINFO);
 }
 
+static void test_super_navigate(IHTMLDocument2 *doc)
+{
+    IHTMLElementCollection *elem_col;
+    IHTMLPrivateWindow *priv_window;
+    IHTMLDocument2 *doc2;
+    IHTMLDocument3 *doc3;
+    IHTMLWindow2 *window;
+    HRESULT hres;
+    VARIANT var;
+    BSTR str;
+
+    trace("SuperNavigate...\n");
+
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLPrivateWindow, (void**)&priv_window);
+    ok(hres == S_OK, "QueryInterface(IID_IHTMLPrivateWindow) failed: %08lx\n", hres);
+
+    prev_url = nav_url;
+    nav_serv_url = nav_url = L"http://test.winehq.org/tests/hello.html";
+
+    readystate_set_loading = TRUE;
+    SET_EXPECT(TranslateUrl);
+    SET_EXPECT(FireBeforeNavigate2);
+    SET_EXPECT(Exec_ShellDocView_67);
+    SET_EXPECT(Invoke_AMBIENT_SILENT);
+    SET_EXPECT(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    SET_EXPECT(Exec_ShellDocView_63);
+    SET_EXPECT(Exec_ShellDocView_84);
+
+    str = SysAllocString(L"http://test.winehq.org/tests/hello.html");
+    V_VT(&var) = VT_EMPTY;
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, str, NULL, NULL, NULL, &var, &var, 1);
+    ok(hres == S_OK, "SuperNavigate failed: %08lx\n", hres);
+    SysFreeString(str);
+
+    CHECK_CALLED(TranslateUrl);
+    todo_wine CHECK_CALLED(FireBeforeNavigate2);
+    CLEAR_CALLED(Exec_ShellDocView_67); /* Not called by IE11 */
+    CHECK_CALLED(Invoke_AMBIENT_SILENT);
+    CHECK_CALLED(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    CHECK_CALLED(Exec_ShellDocView_63);
+    CHECK_CALLED_BROKEN(Exec_ShellDocView_84);
+
+    test_download(DWL_VERBDONE | DWL_ONREADY_LOADING | DWL_EXPECT_HISTUPDATE | DWL_EX_GETHOSTINFO);
+
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &str);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(str, L"http://test.winehq.org/tests/hello.html"), "unexpected address bar url: %s\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+
+    prev_url = nav_url;
+    nav_serv_url = nav_url = L"about:blank";
+
+    readystate_set_loading = TRUE;
+    SET_EXPECT(TranslateUrl);
+    SET_EXPECT(Exec_ShellDocView_67);
+    SET_EXPECT(Invoke_AMBIENT_SILENT);
+    SET_EXPECT(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    SET_EXPECT(Exec_ShellDocView_63);
+    SET_EXPECT(Exec_ShellDocView_84);
+
+    str = SysAllocString(L"about:blank");
+    V_VT(&var) = VT_EMPTY;
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, str, NULL, NULL, NULL, &var, &var, 4);
+    ok(hres == S_OK, "SuperNavigate failed: %08lx\n", hres);
+    SysFreeString(str);
+
+    CHECK_CALLED(TranslateUrl);
+    CLEAR_CALLED(Exec_ShellDocView_67); /* Not called by IE11 */
+    CHECK_CALLED(Invoke_AMBIENT_SILENT);
+    CHECK_CALLED(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    CHECK_CALLED(Exec_ShellDocView_63);
+    CHECK_CALLED_BROKEN(Exec_ShellDocView_84);
+
+    test_download(DWL_VERBDONE | DWL_ONREADY_LOADING | DWL_EXPECT_HISTUPDATE | DWL_EX_GETHOSTINFO);
+
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &str);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(str, L"about:blank"), "unexpected address bar url: %s\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+
+    prev_url = nav_url;
+    nav_serv_url = nav_url = L"http://test.winehq.org/tests/hello.html";
+
+    readystate_set_loading = TRUE;
+    SET_EXPECT(TranslateUrl);
+    SET_EXPECT(FireBeforeNavigate2);
+    SET_EXPECT(Exec_ShellDocView_67);
+    SET_EXPECT(Invoke_AMBIENT_SILENT);
+    SET_EXPECT(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    SET_EXPECT(Exec_ShellDocView_63);
+    SET_EXPECT(Exec_ShellDocView_84);
+
+    str = SysAllocString(L"http://test.winehq.org/tests/hello.html");
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, str, NULL, NULL, NULL, &var, &var, 2 | 1);
+    ok(hres == S_OK, "SuperNavigate failed: %08lx\n", hres);
+    SysFreeString(str);
+
+    CHECK_CALLED(TranslateUrl);
+    todo_wine CHECK_CALLED(FireBeforeNavigate2);
+    CLEAR_CALLED(Exec_ShellDocView_67); /* Not called by IE11 */
+    CHECK_CALLED(Invoke_AMBIENT_SILENT);
+    CHECK_CALLED(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    CHECK_CALLED(Exec_ShellDocView_63);
+    CHECK_CALLED_BROKEN(Exec_ShellDocView_84);
+
+    test_download(DWL_VERBDONE | DWL_ONREADY_LOADING | DWL_EX_GETHOSTINFO);
+
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &str);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(str, L"http://test.winehq.org/tests/hello.html"), "unexpected address bar url: %s\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+
+    hres = IHTMLWindow2_get_document(window, &doc2);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+
+    hres = IHTMLDocument2_QueryInterface(doc2, &IID_IHTMLDocument3, (void**)&doc3);
+    ok(hres == S_OK, "QueryInterface(IID_IHTMLDocument3) failed: %08lx\n", hres);
+    IHTMLDocument2_Release(doc2);
+
+    str = SysAllocString(L"H1");
+    hres = IHTMLDocument3_getElementsByTagName(doc3, str, &elem_col);
+    ok(hres == S_OK, "getElementsByTagName failed: %08lx\n", hres);
+    ok(elem_col != NULL, "elem_col = NULL\n");
+    IHTMLElementCollection_Release(elem_col);
+    IHTMLDocument3_Release(doc3);
+    SysFreeString(str);
+
+    prev_url = nav_url;
+    nav_serv_url = nav_url = L"about:blank";
+
+    readystate_set_loading = TRUE;
+    SET_EXPECT(TranslateUrl);
+    SET_EXPECT(Exec_ShellDocView_67);
+    SET_EXPECT(Invoke_AMBIENT_SILENT);
+    SET_EXPECT(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    SET_EXPECT(Exec_ShellDocView_63);
+    SET_EXPECT(Exec_ShellDocView_84);
+
+    str = SysAllocString(L"about:blank");
+    V_VT(&var) = VT_EMPTY;
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, str, NULL, NULL, NULL, &var, &var, 2 | 4);
+    ok(hres == S_OK, "SuperNavigate failed: %08lx\n", hres);
+    SysFreeString(str);
+
+    CHECK_CALLED(TranslateUrl);
+    CLEAR_CALLED(Exec_ShellDocView_67); /* Not called by IE11 */
+    CHECK_CALLED(Invoke_AMBIENT_SILENT);
+    CHECK_CALLED(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    CHECK_CALLED(Exec_ShellDocView_63);
+    CHECK_CALLED_BROKEN(Exec_ShellDocView_84);
+
+    test_download(DWL_VERBDONE | DWL_ONREADY_LOADING | DWL_EX_GETHOSTINFO);
+
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &str);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(str, L"about:blank"), "unexpected address bar url: %s\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+
+    prev_url = nav_url;
+    nav_serv_url = nav_url = L"http://test.winehq.org/tests/hello.html";
+    is_error_url = TRUE;
+
+    readystate_set_loading = TRUE;
+    SET_EXPECT(TranslateUrl);
+    SET_EXPECT(Exec_ShellDocView_67);
+    SET_EXPECT(Invoke_AMBIENT_SILENT);
+    SET_EXPECT(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    SET_EXPECT(Exec_ShellDocView_63);
+    SET_EXPECT(Exec_ShellDocView_84);
+
+    str = SysAllocString(L"http://test.winehq.org/tests/hello.html");
+    V_VT(&var) = VT_EMPTY;
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, str, NULL, NULL, NULL, &var, &var, 2);
+    ok(hres == S_OK, "SuperNavigate failed: %08lx\n", hres);
+    SysFreeString(str);
+
+    CHECK_CALLED(TranslateUrl);
+    CLEAR_CALLED(Exec_ShellDocView_67); /* Not called by IE11 */
+    CHECK_CALLED(Invoke_AMBIENT_SILENT);
+    CHECK_CALLED(Invoke_AMBIENT_OFFLINEIFNOTCONNECTED);
+    CHECK_CALLED(Exec_ShellDocView_63);
+    CHECK_CALLED_BROKEN(Exec_ShellDocView_84);
+
+    test_download(DWL_VERBDONE | DWL_ONREADY_LOADING | DWL_EX_GETHOSTINFO);
+
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &str);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(str, L"http://test.winehq.org/tests/hello.html"), "unexpected address bar url: %s\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+    is_error_url = FALSE;
+
+    IHTMLPrivateWindow_Release(priv_window);
+    IHTMLWindow2_Release(window);
+}
+
 static void test_open_window(IHTMLDocument2 *doc, BOOL do_block)
 {
     IHTMLWindow2 *window, *new_window;
@@ -8260,10 +8463,12 @@ static void test_doc_domain(IHTMLDocument2 *doc)
 
 static void test_HTMLDocument_http(BOOL with_wbapp)
 {
+    IHTMLDocument2 *doc, *doc_node;
+    IHTMLWindow2 *window;
     IMoniker *http_mon;
-    IHTMLDocument2 *doc;
-    ULONG ref;
     HRESULT hres;
+    ULONG ref;
+    BSTR bstr;
 
     trace("Testing HTMLDocument (http%s)...\n", with_wbapp ? " with IWebBrowserApp" : "");
 
@@ -8318,6 +8523,7 @@ static void test_HTMLDocument_http(BOOL with_wbapp)
     if(!support_wbapp) /* FIXME */
         test_open_window(doc, FALSE);
     if(support_wbapp) {
+        test_super_navigate(doc);
         test_put_href(doc, FALSE, NULL, L"http://test.winehq.org/tests/file.winetest", FALSE, FALSE, DWL_EXTERNAL);
         test_window_close(doc);
     }
@@ -8327,11 +8533,41 @@ static void test_HTMLDocument_http(BOOL with_wbapp)
     test_IsDirty(doc, S_FALSE);
     test_GetCurMoniker((IUnknown*)doc, NULL, prev_url, support_wbapp);
 
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_document(window, &doc_node);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+
+    hres = IHTMLDocument2_get_readyState(doc_node, &bstr);
+    ok(hres == S_OK, "get_readyState failed: %08lx\n", hres);
+    todo_wine_if(support_wbapp)
+    ok(!wcscmp(bstr, support_wbapp ? L"interactive" : L"complete"), "readyState = %s\n", wine_dbgstr_w(bstr));
+    SysFreeString(bstr);
+
     if(view)
         IOleDocumentView_Release(view);
     view = NULL;
 
     release_document(doc);
+
+    hres = IHTMLWindow2_get_document(window, &doc);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+    ok(doc != doc_node, "doc == doc_node\n");
+
+    hres = IHTMLDocument2_get_readyState(doc_node, &bstr);
+    ok(hres == S_OK, "get_readyState failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"uninitialized"), "readyState = %s\n", wine_dbgstr_w(bstr));
+    SysFreeString(bstr);
+
+    hres = IHTMLDocument2_get_readyState(doc, &bstr);
+    ok(hres == S_OK, "get_readyState failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"uninitialized"), "readyState = %s\n", wine_dbgstr_w(bstr));
+    SysFreeString(bstr);
+
+    IHTMLDocument2_Release(doc_node);
+    IHTMLDocument2_Release(doc);
+    IHTMLWindow2_Release(window);
 
     ref = IMoniker_Release(http_mon);
     ok(!ref, "ref=%ld, expected 0\n", ref);
@@ -8495,8 +8731,11 @@ static void test_submit(void)
 static void test_QueryService(IHTMLDocument2 *doc, BOOL success)
 {
     IHTMLWindow2 *window, *sp_window;
+    IOleCommandTarget *cmdtarget;
+    IHTMLDocument2 *doc_node;
     IServiceProvider *sp;
     IHlinkFrame *hf;
+    IUnknown *unk;
     HRESULT hres;
 
     hres = IHTMLDocument2_QueryInterface(doc, &IID_IServiceProvider, (void**)&sp);
@@ -8512,6 +8751,9 @@ static void test_QueryService(IHTMLDocument2 *doc, BOOL success)
     ok(hres == S_OK, "QueryService(IID_IHlinkFrame) failed: %08lx\n", hres);
     ok(hf == &HlinkFrame, "hf != HlinkFrame\n");
     IHlinkFrame_Release(hf);
+
+    hres = IServiceProvider_QueryService(sp, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == E_NOINTERFACE, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) returned: %08lx\n", hres);
 
     IServiceProvider_Release(sp);
 
@@ -8531,8 +8773,28 @@ static void test_QueryService(IHTMLDocument2 *doc, BOOL success)
     ok(hf == &HlinkFrame, "hf != HlinkFrame\n");
     IHlinkFrame_Release(hf);
 
+    hres = IServiceProvider_QueryService(sp, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == E_NOINTERFACE, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) returned: %08lx\n", hres);
+
     IServiceProvider_Release(sp);
+
+    hres = IHTMLWindow2_get_document(window, &doc_node);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
     IHTMLWindow2_Release(window);
+
+    hres = IHTMLDocument2_QueryInterface(doc_node, &IID_IServiceProvider, (void**)&sp);
+    ok(hres == S_OK, "Could not get IServiceProvider iface: %08lx\n", hres);
+    IHTMLDocument2_Release(doc_node);
+
+    hres = IServiceProvider_QueryService(sp, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == S_OK, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) failed: %08lx\n", hres);
+    ok(cmdtarget != NULL, "cmdtarget == NULL\n");
+    hres = IOleCommandTarget_QueryInterface(cmdtarget, &IID_IActiveScriptSite, (void**)&unk);
+    ok(hres == S_OK, "Command Target QI for IActiveScriptSite failed: %08lx\n", hres);
+    IUnknown_Release(unk);
+
+    IOleCommandTarget_Release(cmdtarget);
+    IServiceProvider_Release(sp);
 }
 
 static void test_HTMLDocument_StreamLoad(void)
@@ -9046,8 +9308,10 @@ static BOOL check_ie(void)
 static void test_ServiceProvider(void)
 {
     IHTMLDocument3 *doc3, *doc3_2;
+    IOleCommandTarget *cmdtarget;
     IServiceProvider *provider;
     IHTMLDocument2 *doc, *doc2;
+    IHTMLWindow2 *window;
     IUnknown *unk;
     HRESULT hres;
 
@@ -9083,6 +9347,29 @@ static void test_ServiceProvider(void)
     ok(hres == S_OK, "QueryService(HTMLEditServices) failed: %08lx\n", hres);
     IUnknown_Release(unk);
 
+    hres = IServiceProvider_QueryService(provider, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == E_NOINTERFACE, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) returned: %08lx\n", hres);
+    IServiceProvider_Release(provider);
+
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_document(window, &doc2);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+    IHTMLWindow2_Release(window);
+
+    hres = IHTMLDocument2_QueryInterface(doc2, &IID_IServiceProvider, (void**)&provider);
+    ok(hres == S_OK, "Could not get IServiceProvider iface: %08lx\n", hres);
+    IHTMLDocument2_Release(doc2);
+
+    hres = IServiceProvider_QueryService(provider, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == S_OK, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) failed: %08lx\n", hres);
+    ok(cmdtarget != NULL, "cmdtarget == NULL\n");
+    hres = IOleCommandTarget_QueryInterface(cmdtarget, &IID_IActiveScriptSite, (void**)&unk);
+    ok(hres == S_OK, "Command Target QI for IActiveScriptSite failed: %08lx\n", hres);
+    IUnknown_Release(unk);
+
+    IOleCommandTarget_Release(cmdtarget);
     IServiceProvider_Release(provider);
     release_document(doc);
 }

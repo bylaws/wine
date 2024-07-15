@@ -34,7 +34,6 @@
 #include "ddk/d3dkmthk.h"
 #include "setupapi.h"
 #include "ntddvdeo.h"
-#include "wine/heap.h"
 #include <stdio.h>
 
 DEFINE_DEVPROPKEY(DEVPROPKEY_MONITOR_GPU_LUID, 0xca085853, 0x16ce, 0x48aa, 0xb1, 0x14, 0xde, 0x9c, 0x72, 0x33, 0x42, 0x23, 1);
@@ -496,7 +495,7 @@ static void test_ChangeDisplaySettingsEx(void)
     /* Save the original mode for all devices so that they can be restored at the end of tests */
     device_count = 0;
     device_size = 2;
-    devices = heap_calloc(device_size, sizeof(*devices));
+    devices = calloc(device_size, sizeof(*devices));
     ok(devices != NULL, "Failed to allocate memory.\n");
 
     primary = 0;
@@ -519,7 +518,7 @@ static void test_ChangeDisplaySettingsEx(void)
         if (device_count >= device_size)
         {
             device_size *= 2;
-            devices = heap_realloc(devices, device_size * sizeof(*devices));
+            devices = realloc(devices, device_size * sizeof(*devices));
             ok(devices != NULL, "Failed to reallocate memory.\n");
         }
 
@@ -1165,7 +1164,7 @@ static void test_ChangeDisplaySettingsEx(void)
     for (device = 0; device < device_count; ++device)
         expect_dm(&devices[device].original_mode, devices[device].name, 0);
 
-    heap_free(devices);
+    free(devices);
 }
 
 static void test_monitors(void)
@@ -1792,7 +1791,7 @@ static void test_QueryDisplayConfig_result(UINT32 flags,
         /* Check corresponding modes */
         if (pi[i].sourceInfo.modeInfoIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID)
         {
-            skip("Path doesn't contain source modeInfoIdx");
+            skip("Path doesn't contain source modeInfoIdx\n");
             continue;
         }
         ok(pi[i].sourceInfo.modeInfoIdx < modes, "Expected index <%d, got %d\n", modes, pi[i].sourceInfo.modeInfoIdx);
@@ -1815,7 +1814,7 @@ static void test_QueryDisplayConfig_result(UINT32 flags,
 
         if (pi[i].targetInfo.modeInfoIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID)
         {
-            skip("Path doesn't contain target modeInfoIdx");
+            skip("Path doesn't contain target modeInfoIdx\n");
             continue;
         }
         ok(pi[i].targetInfo.modeInfoIdx < modes, "Expected index <%d, got %d\n", modes, pi[i].targetInfo.modeInfoIdx);
@@ -2228,6 +2227,9 @@ static void test_handles(void)
 #define check_display_dc(a, b, c) _check_display_dc(__LINE__, a, b, c)
 static void _check_display_dc(INT line, HDC hdc, const DEVMODEA *dm, BOOL allow_todo)
 {
+    unsigned char buffer[FIELD_OFFSET(BITMAPINFO, bmiColors[256])] = {0};
+    BITMAPINFO *bmi = (BITMAPINFO *)buffer;
+    DIBSECTION dib;
     BITMAP bitmap;
     HBITMAP hbmp;
     INT value;
@@ -2266,6 +2268,17 @@ static void _check_display_dc(INT line, HDC hdc, const DEVMODEA *dm, BOOL allow_
 
     hbmp = GetCurrentObject(hdc, OBJ_BITMAP);
     ok_(__FILE__, line)(!!hbmp, "GetCurrentObject failed, error %#lx.\n", GetLastError());
+
+    /* Expect hbmp to be a bitmap, not a DIB when GetObjectA() succeeds */
+    value = GetObjectA(hbmp, sizeof(dib), &dib);
+    ok(!value || value == sizeof(BITMAP), "GetObjectA failed, value %d.\n", value);
+
+    /* Expect GetDIBits() to succeed */
+    bmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    value = GetDIBits(hdc, hbmp, 0, 0, NULL, (LPBITMAPINFO)bmi, DIB_RGB_COLORS);
+    ok(value, "GetDIBits failed, error %#lx.\n", GetLastError());
+    ok(bmi->bmiHeader.biCompression == BI_BITFIELDS, "Got unexpected biCompression %lu.\n", bmi->bmiHeader.biCompression);
+
     ret = GetObjectA(hbmp, sizeof(bitmap), &bitmap);
     /* GetObjectA fails on Win7 and older */
     if (ret)
@@ -2277,7 +2290,6 @@ static void _check_display_dc(INT line, HDC hdc, const DEVMODEA *dm, BOOL allow_
         todo_wine
         ok_(__FILE__, line)(bitmap.bmHeight == GetSystemMetrics(SM_CYVIRTUALSCREEN),
                 "Expected bmHeight %d, got %d.\n", GetSystemMetrics(SM_CYVIRTUALSCREEN), bitmap.bmHeight);
-        todo_wine
         ok_(__FILE__, line)(bitmap.bmBitsPixel == 32, "Expected bmBitsPixel %d, got %d.\n", 32,
                 bitmap.bmBitsPixel);
         ok_(__FILE__, line)(bitmap.bmWidthBytes == get_bitmap_stride(bitmap.bmWidth, bitmap.bmBitsPixel),

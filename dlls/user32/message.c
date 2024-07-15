@@ -183,9 +183,9 @@ BOOL map_wparam_AtoW( UINT message, WPARAM *wparam, enum wm_char_mapping mapping
  */
 static void map_wparam_WtoA( MSG *msg, BOOL remove )
 {
-    BYTE ch[4];
+    BYTE ch[4] = { 0 };
     WCHAR wch[2];
-    DWORD len;
+    DWORD i, len;
     DWORD cp;
 
     switch(msg->message)
@@ -195,7 +195,6 @@ static void map_wparam_WtoA( MSG *msg, BOOL remove )
         {
             cp = get_input_codepage();
             wch[0] = LOWORD(msg->wParam);
-            ch[0] = ch[1] = 0;
             len = WideCharToMultiByte( cp, 0, wch, 1, (LPSTR)ch, 2, NULL, NULL );
             if (len == 2)  /* DBCS char */
             {
@@ -224,14 +223,12 @@ static void map_wparam_WtoA( MSG *msg, BOOL remove )
         cp = get_input_codepage();
         wch[0] = LOWORD(msg->wParam);
         wch[1] = HIWORD(msg->wParam);
-        ch[0] = ch[1] = 0;
-        WideCharToMultiByte( cp, 0, wch, 2, (LPSTR)ch, 4, NULL, NULL );
-        msg->wParam = MAKEWPARAM( ch[0] | (ch[1] << 8), 0 );
+        len = WideCharToMultiByte( cp, 0, wch, 2, (LPSTR)ch, 4, NULL, NULL );
+        for (msg->wParam = i = 0; i < len; i++) msg->wParam |= ch[i] << (8 * i);
         break;
     case WM_IME_CHAR:
         cp = get_input_codepage();
         wch[0] = LOWORD(msg->wParam);
-        ch[0] = ch[1] = 0;
         len = WideCharToMultiByte( cp, 0, wch, 1, (LPSTR)ch, 2, NULL, NULL );
         if (len == 2)
             msg->wParam = MAKEWPARAM( (ch[0] << 8) | ch[1], HIWORD(msg->wParam) );
@@ -336,7 +333,7 @@ static HGLOBAL dde_get_pair(HGLOBAL shm)
  *
  * Post a DDE message
  */
-BOOL post_dde_message( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, DWORD dest_tid, DWORD type )
+NTSTATUS post_dde_message( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, DWORD dest_tid, DWORD type )
 {
     void*       ptr = NULL;
     int         size = 0;
@@ -347,7 +344,7 @@ BOOL post_dde_message( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, DWORD 
     ULONGLONG   hpack;
 
     if (!UnpackDDElParam( msg, lparam, &uiLo, &uiHi ))
-        return FALSE;
+        return STATUS_INVALID_PARAMETER;
 
     lp = lparam;
     switch (msg)
@@ -389,9 +386,9 @@ BOOL post_dde_message( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, DWORD 
             if ((msg == WM_DDE_ADVISE && size < sizeof(DDEADVISE)) ||
                 (msg == WM_DDE_DATA   && size < FIELD_OFFSET(DDEDATA, Value)) ||
                 (msg == WM_DDE_POKE   && size < FIELD_OFFSET(DDEPOKE, Value)))
-                return FALSE;
+                return STATUS_INVALID_PARAMETER;
         }
-        else if (msg != WM_DDE_DATA) return FALSE;
+        else if (msg != WM_DDE_DATA) return STATUS_INVALID_PARAMETER;
 
         lp = uiHi;
         if (uiLo)
@@ -431,21 +428,12 @@ BOOL post_dde_message( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, DWORD 
         req->lparam  = lp;
         req->timeout = TIMEOUT_INFINITE;
         if (size) wine_server_add_data( req, ptr, size );
-        if ((res = wine_server_call( req )))
-        {
-            if (res == STATUS_INVALID_PARAMETER)
-                /* FIXME: find a STATUS_ value for this one */
-                SetLastError( ERROR_INVALID_THREAD_ID );
-            else
-                SetLastError( RtlNtStatusToDosError(res) );
-        }
-        else
-            FreeDDElParam( msg, lparam );
+        if (!(res = wine_server_call( req ))) FreeDDElParam( msg, lparam );
     }
     SERVER_END_REQ;
     if (hunlock) GlobalUnlock(hunlock);
 
-    return !res;
+    return res;
 }
 
 /***********************************************************************
@@ -807,6 +795,14 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetMessageA( MSG *msg, HWND hwnd, UINT first, UINT
     return (msg->message != WM_QUIT);
 }
 
+static BOOL is_cjk(void)
+{
+    int lang_id = PRIMARYLANGID(GetUserDefaultLangID());
+
+    if (lang_id == LANG_CHINESE || lang_id == LANG_JAPANESE || lang_id == LANG_KOREAN)
+        return TRUE;
+    return FALSE;
+}
 
 /***********************************************************************
  *		IsDialogMessageA (USER32.@)
@@ -814,8 +810,12 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetMessageA( MSG *msg, HWND hwnd, UINT first, UINT
  */
 BOOL WINAPI IsDialogMessageA( HWND hwndDlg, LPMSG pmsg )
 {
+    enum wm_char_mapping mapping;
     MSG msg = *pmsg;
-    map_wparam_AtoW( msg.message, &msg.wParam, WMCHAR_MAP_NOMAPPING );
+
+    mapping = is_cjk() ? WMCHAR_MAP_ISDIALOGMESSAGE : WMCHAR_MAP_NOMAPPING;
+    if (!map_wparam_AtoW( msg.message, &msg.wParam, mapping ))
+        return TRUE;
     return IsDialogMessageW( hwndDlg, &msg );
 }
 

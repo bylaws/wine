@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <errno.h>
+#include <assert.h>
 #include <sys/time.h>
 #include <time.h>
 #include <dirent.h>
@@ -57,8 +58,7 @@
 #ifdef __APPLE__
 # include <CoreFoundation/CoreFoundation.h>
 # include <IOKit/IOKitLib.h>
-# include <IOKit/pwr_mgt/IOPM.h>
-# include <IOKit/pwr_mgt/IOPMLib.h>
+# include <IOKit/ps/IOPSKeys.h>
 # include <IOKit/ps/IOPowerSources.h>
 # include <mach/mach.h>
 # include <mach/machine.h>
@@ -159,6 +159,37 @@ struct smbios_chassis
     BYTE contained_element_rec_length;
 };
 
+struct smbios_processor
+{
+    struct smbios_header hdr;
+    BYTE socket;
+    BYTE type;
+    BYTE family;
+    BYTE vendor;
+    ULONGLONG id;
+    BYTE version;
+    BYTE voltage;
+    WORD clock;
+    WORD max_speed;
+    WORD cur_speed;
+    BYTE status;
+    BYTE upgrade;
+    WORD l1cache;
+    WORD l2cache;
+    WORD l3cache;
+    BYTE serial;
+    BYTE asset_tag;
+    BYTE part_number;
+    BYTE core_count;
+    BYTE core_enabled;
+    BYTE thread_count;
+    WORD characteristics;
+    WORD family2;
+    WORD core_count2;
+    WORD core_enabled2;
+    WORD thread_count2;
+};
+
 struct smbios_boot_info
 {
     struct smbios_header hdr;
@@ -168,59 +199,19 @@ struct smbios_boot_info
 
 #include "poppack.h"
 
-struct smbios_bios_args
+enum smbios_type
 {
-    const char *vendor;
-    size_t vendor_len;
-    const char *version;
-    size_t version_len;
-    const char *date;
-    size_t date_len;
+    SMBIOS_TYPE_BIOS = 0,
+    SMBIOS_TYPE_SYSTEM = 1,
+    SMBIOS_TYPE_BASEBOARD = 2,
+    SMBIOS_TYPE_CHASSIS = 3,
+    SMBIOS_TYPE_PROCESSOR = 4,
+    SMBIOS_TYPE_BOOTINFO = 32,
+    SMBIOS_TYPE_END = 127
 };
 
-struct smbios_system_args
-{
-    const char *vendor;
-    size_t vendor_len;
-    const char *product;
-    size_t product_len;
-    const char *version;
-    size_t version_len;
-    const char *serial;
-    size_t serial_len;
-    GUID uuid;
-    const char *sku;
-    size_t sku_len;
-    const char *family;
-    size_t family_len;
-};
-
-struct smbios_board_args
-{
-    const char *vendor;
-    size_t vendor_len;
-    const char *product;
-    size_t product_len;
-    const char *version;
-    size_t version_len;
-    const char *serial;
-    size_t serial_len;
-    const char *asset_tag;
-    size_t asset_tag_len;
-};
-
-struct smbios_chassis_args
-{
-    const char *vendor;
-    size_t vendor_len;
-    BYTE type;
-    const char *version;
-    size_t version_len;
-    const char *serial;
-    size_t serial_len;
-    const char *asset_tag;
-    size_t asset_tag_len;
-};
+#define SMBIOS_MAJOR_VERSION 3
+#define SMBIOS_MINOR_VERSION 0
 
 /* Firmware table providers */
 #define ACPI 0x41435049
@@ -230,6 +221,8 @@ struct smbios_chassis_args
 SYSTEM_CPU_INFORMATION cpu_info = { 0 };
 static SYSTEM_PROCESSOR_FEATURES_INFORMATION cpu_features;
 static char cpu_name[49];
+static char cpu_vendor[13];
+static ULONGLONG cpu_id;
 static ULONG *performance_cores;
 static unsigned int performance_cores_capacity = 0;
 static SYSTEM_LOGICAL_PROCESSOR_INFORMATION *logical_proc_info;
@@ -238,6 +231,13 @@ static SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *logical_proc_info_ex;
 static unsigned int logical_proc_info_ex_size, logical_proc_info_ex_alloc_size;
 
 static pthread_mutex_t timezone_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static struct
+{
+    struct cpu_topology_override mapping;
+    ULONG_PTR siblings_mask[MAXIMUM_PROCESSORS];
+}
+cpu_override;
 
 /*******************************************************************************
  * Architecture specific feature detection for CPUs
@@ -248,16 +248,66 @@ static pthread_mutex_t timezone_mutex = PTHREAD_MUTEX_INITIALIZER;
 #if defined(__i386__) || defined(__x86_64__)
 
 BOOL xstate_compaction_enabled = FALSE;
+UINT64 xstate_supported_features_mask;
+UINT64 xstate_features_size;
 
-#define AUTH	0x68747541	/* "Auth" */
-#define ENTI	0x69746e65	/* "enti" */
-#define CAMD	0x444d4163	/* "cAMD" */
+static int xstate_feature_offset[64];
+static int xstate_feature_size[64];
+static UINT64 xstate_aligned_features;
 
-#define GENU	0x756e6547	/* "Genu" */
-#define INEI	0x49656e69	/* "ineI" */
-#define NTEL	0x6c65746e	/* "ntel" */
+static int next_xstate_offset( int off, UINT64 compaction_mask, int feature_idx )
+{
+    const UINT64 feature_mask = (UINT64)1 << feature_idx;
 
-extern void do_cpuid( unsigned int ax, unsigned int cx, unsigned int *p ) DECLSPEC_HIDDEN;
+    if (!compaction_mask) return xstate_feature_offset[feature_idx + 1] - sizeof(XSAVE_FORMAT);
+
+    if (compaction_mask & feature_mask) off += xstate_feature_size[feature_idx];
+    if (xstate_aligned_features & (feature_mask << 1))
+        off = (off + 63) & ~63;
+    return off;
+}
+
+unsigned int xstate_get_size( UINT64 compaction_mask, UINT64 mask )
+{
+    unsigned int i;
+    int off;
+
+    mask >>= 2;
+    off = sizeof(XSAVE_AREA_HEADER);
+    i = 2;
+    while (mask)
+    {
+        if (mask == 1) return off + xstate_feature_size[i];
+        off = next_xstate_offset( off, compaction_mask, i );
+        mask >>= 1;
+        ++i;
+    }
+    return off;
+}
+
+void copy_xstate( XSAVE_AREA_HEADER *dst, XSAVE_AREA_HEADER *src, UINT64 mask )
+{
+    unsigned int i;
+    int src_off, dst_off;
+
+    mask &= xstate_extended_features() & src->Mask;
+    if (src->CompactionMask) mask &= src->CompactionMask;
+    if (dst->CompactionMask) mask &= dst->CompactionMask;
+    dst->Mask = (dst->Mask & ~xstate_extended_features()) | mask;
+    mask >>= 2;
+    src_off = dst_off = sizeof(XSAVE_AREA_HEADER);
+    i = 2;
+    while (1)
+    {
+        if (mask & 1) memcpy( (char *)dst + dst_off, (char *)src + src_off, xstate_feature_size[i] );
+        if (!(mask >>= 1)) break;
+        src_off = next_xstate_offset( src_off, src->CompactionMask, i );
+        dst_off = next_xstate_offset( dst_off, dst->CompactionMask, i );
+        ++i;
+    }
+}
+
+extern void do_cpuid( unsigned int ax, unsigned int cx, unsigned int *p );
 #ifdef __i386__
 __ASM_GLOBAL_FUNC( do_cpuid,
                    "pushl %esi\n\t"
@@ -288,8 +338,23 @@ __ASM_GLOBAL_FUNC( do_cpuid,
                    "ret" )
 #endif
 
+extern UINT64 do_xgetbv( unsigned int cx);
 #ifdef __i386__
-extern int have_cpuid(void) DECLSPEC_HIDDEN;
+__ASM_GLOBAL_FUNC( do_xgetbv,
+                   "movl 4(%esp),%ecx\n\t"
+                   "xgetbv\n\t"
+                   "ret" )
+#else
+__ASM_GLOBAL_FUNC( do_xgetbv,
+                   "movl %edi,%ecx\n\t"
+                   "xgetbv\n\t"
+                   "shlq $32,%rdx\n\t"
+                   "orq %rdx,%rax\n\t"
+                   "ret" )
+#endif
+
+#ifdef __i386__
+extern int have_cpuid(void);
 __ASM_GLOBAL_FUNC( have_cpuid,
                    "pushfl\n\t"
                    "pushfl\n\t"
@@ -346,8 +411,11 @@ static void get_cpuid_name( char *buffer )
 
 static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
 {
+    static const ULONG64 wine_xstate_supported_features = 0xff; /* XSTATE_AVX, XSTATE_MPX_BNDREGS, XSTATE_MPX_BNDCSR,
+                                                                 * XSTATE_AVX512_KMASK, XSTATE_AVX512_ZMM_H, XSTATE_AVX512_ZMM */
     unsigned int regs[4], regs2[4], regs3[4];
     ULONGLONG features;
+    unsigned int i;
 
 #if defined(__i386__)
     info->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
@@ -362,6 +430,9 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
     if (!have_cpuid()) return;
 
     do_cpuid( 0x00000000, 0, regs );  /* get standard cpuid level and vendor name */
+    memcpy( cpu_vendor, &regs[1], sizeof(unsigned int) );
+    memcpy( cpu_vendor + 4, &regs[3], sizeof(unsigned int) );
+    memcpy( cpu_vendor + 8, &regs[2], sizeof(unsigned int) );
     if (regs[0]>=0x00000001)   /* Check for supported cpuid version */
     {
         do_cpuid( 0x00000001, 0, regs2 ); /* get cpu features */
@@ -387,6 +458,7 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
         if((regs2[3] & (1 << 26)) && (regs2[3] & (1 << 24)) && have_sse_daz_mode()) /* has SSE2 and FXSAVE/FXRSTOR */
             features |= CPU_FEATURE_DAZ;
 
+        cpu_id = regs2[0] | ((ULONGLONG)regs2[3] << 32);
         if (regs[0] >= 0x00000007)
         {
             do_cpuid( 0x00000007, 0, regs3 ); /* get extended features */
@@ -397,9 +469,28 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
         {
             do_cpuid( 0x0000000d, 1, regs3 ); /* get XSAVE details */
             if (regs3[0] & 2) xstate_compaction_enabled = TRUE;
+
+            do_cpuid( 0x0000000d, 0, regs3 ); /* get user xstate features */
+            xstate_supported_features_mask = ((ULONG64)regs3[3] << 32) | regs3[0];
+            xstate_supported_features_mask &= do_xgetbv( 0 ) & wine_xstate_supported_features;
+            TRACE("xstate_supported_features_mask %#llx.\n", (long long)xstate_supported_features_mask);
+            for (i = 2; i < 64; ++i)
+            {
+                if (!(xstate_supported_features_mask & ((ULONG64)1 << i))) continue;
+                do_cpuid( 0x0000000d, i, regs3 ); /* get user xstate features */
+                xstate_feature_offset[i] = regs3[1];
+                xstate_feature_size[i] = regs3[0];
+                if (regs3[2] & 2) xstate_aligned_features |= (ULONG64)1 << i;
+                TRACE("xstate[%d] offset %d, size %d, aligned %d.\n", i, xstate_feature_offset[i], xstate_feature_size[i], !!(regs3[2] & 2));
+            }
+            xstate_features_size = xstate_get_size( xstate_compaction_enabled ? 0x8000000000000000
+                                   | xstate_supported_features_mask : 0, xstate_supported_features_mask )
+                                   - sizeof(XSAVE_AREA_HEADER);
+            xstate_features_size = (xstate_features_size + 15) & ~15;
+            TRACE("xstate_features_size %lld.\n", (long long)xstate_features_size);
         }
 
-        if (regs[1] == AUTH && regs[3] == ENTI && regs[2] == CAMD)
+        if (!strcmp( cpu_vendor, "AuthenticAMD" ))
         {
             info->ProcessorLevel = (regs2[0] >> 8) & 0xf; /* family */
             if (info->ProcessorLevel == 0xf)  /* AMD says to add the extended family to the family if family is 0xf */
@@ -421,7 +512,7 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
             }
             if (regs[0] >= 0x80000004) get_cpuid_name( cpu_name );
         }
-        else if (regs[1] == GENU && regs[3] == INEI && regs[2] == NTEL)
+        else if (!strcmp( cpu_vendor, "GenuineIntel" ))
         {
             info->ProcessorLevel = ((regs2[0] >> 8) & 0xf) + ((regs2[0] >> 20) & 0xff); /* family + extended family */
             if(info->ProcessorLevel == 15) info->ProcessorLevel = 6;
@@ -455,69 +546,12 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
     info->ProcessorFeatureBits = cpu_features.ProcessorFeatureBits = features;
 }
 
-#elif defined(__arm__)
-
-static inline void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
-{
-#ifdef linux
-    char line[512];
-    char *s, *value;
-    FILE *f = fopen("/proc/cpuinfo", "r");
-    if (f)
-    {
-        while (fgets( line, sizeof(line), f ))
-        {
-            /* NOTE: the ':' is the only character we can rely on */
-            if (!(value = strchr(line,':'))) continue;
-            /* terminate the valuename */
-            s = value - 1;
-            while ((s >= line) && (*s == ' ' || *s == '\t')) s--;
-            s[1] = 0;
-            /* and strip leading spaces from value */
-            value += 1;
-            while (*value == ' ' || *value == '\t') value++;
-            if ((s = strchr( value,'\n' ))) *s = 0;
-            if (!strcmp( line, "CPU architecture" ))
-            {
-                info->ProcessorLevel = atoi(value);
-                continue;
-            }
-            if (!strcmp( line, "CPU revision" ))
-            {
-                info->ProcessorRevision = atoi(value);
-                continue;
-            }
-            if (!strcmp( line, "Features" ))
-            {
-                if (strstr(value, "crc32")) info->ProcessorFeatureBits |= CPU_FEATURE_ARM_V8_CRC32;
-                if (strstr(value, "aes"))   info->ProcessorFeatureBits |= CPU_FEATURE_ARM_V8_CRYPTO;
-                continue;
-            }
-        }
-        fclose( f );
-    }
-#elif defined(__FreeBSD__)
-    size_t valsize;
-    char buf[8];
-    int value;
-
-    valsize = sizeof(buf);
-    if (!sysctlbyname("hw.machine_arch", &buf, &valsize, NULL, 0) && sscanf(buf, "armv%i", &value) == 1)
-        info->ProcessorLevel = value;
-
-    valsize = sizeof(value);
-    if (!sysctlbyname("hw.floatingpoint", &value, &valsize, NULL, 0))
-        info->ProcessorFeatureBits |= CPU_FEATURE_ARM_VFP_32;
-#else
-    FIXME("CPU Feature detection not implemented.\n");
-#endif
-    info->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_ARM;
-}
-
-#elif defined(__aarch64__)
+#elif defined(__arm__) || defined(__aarch64__)
 
 static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
 {
+    ULONGLONG features = 0;
+    unsigned int implementer = 0x41, part = 0, variant = 0, revision = 0;
 #ifdef linux
     char line[512];
     char *s, *value;
@@ -536,20 +570,23 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
             value += 1;
             while (*value == ' ' || *value == '\t') value++;
             if ((s = strchr( value,'\n' ))) *s = 0;
-            if (!strcmp( line, "CPU architecture" ))
+            if (!strcmp( line, "CPU implementer" )) implementer = strtoul( value, NULL, 0);
+            else if (!strcmp( line, "CPU part" )) part = strtoul( value, NULL, 0);
+            else if (!strcmp( line, "CPU variant" )) variant = strtoul( value, NULL, 0);
+            else if (!strcmp( line, "CPU revision" )) revision = strtoul( value, NULL, 0);
+            else if (!strcmp( line, "Features" ))
             {
-                info->ProcessorLevel = atoi(value);
-                continue;
-            }
-            if (!strcmp( line, "CPU revision" ))
-            {
-                info->ProcessorRevision = atoi(value);
-                continue;
-            }
-            if (!strcmp( line, "Features" ))
-            {
-                if (strstr(value, "crc32")) info->ProcessorFeatureBits |= CPU_FEATURE_ARM_V8_CRC32;
-                if (strstr(value, "aes"))   info->ProcessorFeatureBits |= CPU_FEATURE_ARM_V8_CRYPTO;
+#ifdef __arm__
+                if (strstr(value, "vfpv3"))   features |= CPU_FEATURE_ARM_VFP_32;
+                if (strstr(value, "neon"))    features |= CPU_FEATURE_ARM_NEON;
+#else
+                if (strstr(value, "crc32"))   features |= CPU_FEATURE_ARM_V8_CRC32;
+                if (strstr(value, "aes"))     features |= CPU_FEATURE_ARM_V8_CRYPTO;
+                if (strstr(value, "atomics")) features |= CPU_FEATURE_ARM_V81_ATOMIC;
+                if (strstr(value, "asimddp")) features |= CPU_FEATURE_ARM_V82_DP;
+                if (strstr(value, "jscvt"))   features |= CPU_FEATURE_ARM_V83_JSCVT;
+                if (strstr(value, "lrcpc"))   features |= CPU_FEATURE_ARM_V83_LRCPC;
+#endif
                 continue;
             }
         }
@@ -558,11 +595,176 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
 #else
     FIXME("CPU Feature detection not implemented.\n");
 #endif
-    info->ProcessorLevel = max(info->ProcessorLevel, 8);
+#ifdef __arm__
+    info->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_ARM;
+#else
     info->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_ARM64;
+#endif
+    info->ProcessorFeatureBits = cpu_features.ProcessorFeatureBits = features;
+    info->ProcessorLevel = part;
+    info->ProcessorRevision = (variant << 8) | revision;
+    cpu_id = (implementer << 24) | (variant << 20) | (0x0f << 16) | (part << 4) | revision;
+    switch (implementer)
+    {
+    case 0x41: strcpy( cpu_vendor, "ARM" ); break;
+    case 0x42: strcpy( cpu_vendor, "Broadcom" ); break;
+    case 0x43: strcpy( cpu_vendor, "Cavium" ); break;
+    case 0x44: strcpy( cpu_vendor, "DEC" ); break;
+    case 0x4e: strcpy( cpu_vendor, "Nvidia" ); break;
+    case 0x50: strcpy( cpu_vendor, "APM" ); break;
+    case 0x51: strcpy( cpu_vendor, "Qualcomm" ); break;
+    case 0x53: strcpy( cpu_vendor, "Samsung" ); break;
+    case 0x56: strcpy( cpu_vendor, "Marvell" ); break;
+    case 0x66: strcpy( cpu_vendor, "Faraday" ); break;
+    case 0x69: strcpy( cpu_vendor, "Intel" ); break;
+    }
 }
 
 #endif /* End architecture specific feature detection for CPUs */
+
+static void fill_performance_core_info(void);
+static BOOL sysfs_parse_bitmap(const char *filename, ULONG_PTR *mask);
+
+static void fill_cpu_override(unsigned int host_cpu_count)
+{
+    const char *env_override = getenv("WINE_CPU_TOPOLOGY");
+    BOOL smt = FALSE;
+    unsigned int i;
+    char *s;
+
+    if (!env_override)
+        return;
+
+    cpu_override.mapping.cpu_count = strtol(env_override, &s, 10);
+    if (s == env_override)
+        goto error;
+
+    if (!cpu_override.mapping.cpu_count || cpu_override.mapping.cpu_count > MAXIMUM_PROCESSORS)
+    {
+        ERR("Invalid logical CPU count %u, limit %u.\n", cpu_override.mapping.cpu_count, MAXIMUM_PROCESSORS);
+        goto error;
+    }
+
+    if (!*s)
+    {
+        /* Auto assign given number of logical CPUs. */
+        static const char core_info[] = "/sys/devices/system/cpu/cpu%u/topology/%s";
+        char name[MAX_PATH];
+        unsigned int attempt, count, j;
+        ULONG_PTR masks[MAXIMUM_PROCESSORS];
+
+        if (cpu_override.mapping.cpu_count >= host_cpu_count)
+        {
+            TRACE( "Override cpu count %u >= host cpu count %u.\n", cpu_override.mapping.cpu_count, host_cpu_count );
+            cpu_override.mapping.cpu_count = 0;
+            return;
+        }
+
+        fill_performance_core_info();
+
+        for (i = 0; i < host_cpu_count; ++i)
+        {
+            snprintf(name, sizeof(name), core_info, i, "thread_siblings");
+            masks[i] = 0;
+            sysfs_parse_bitmap(name, &masks[i]);
+        }
+        for (attempt = 0; attempt < 3; ++attempt)
+        {
+            count = 0;
+            for (i = 0; i < host_cpu_count && count < cpu_override.mapping.cpu_count; ++i)
+            {
+                if (attempt < 2 && performance_cores_capacity)
+                {
+                    if (i / 32 >= performance_cores_capacity) break;
+                    if (!(performance_cores[i / 32] & (1 << (i % 32)))) goto skip_cpu;
+                }
+                cpu_override.mapping.host_cpu_id[count] = i;
+                cpu_override.siblings_mask[count] = (ULONG_PTR)1 << count;
+                for (j = 0; j < count; ++j)
+                {
+                    if (!(masks[cpu_override.mapping.host_cpu_id[j]] & masks[i])) continue;
+                    if (attempt < 1) goto skip_cpu;
+                    cpu_override.siblings_mask[j] |= (ULONG_PTR)1 << count;
+                    cpu_override.siblings_mask[count] |= (ULONG_PTR)1 << j;
+                }
+                ++count;
+skip_cpu:
+                ;
+            }
+            if (count == cpu_override.mapping.cpu_count) break;
+        }
+        assert( count == cpu_override.mapping.cpu_count );
+        goto done;
+    }
+
+    if (tolower(*s) == 's')
+    {
+        cpu_override.mapping.cpu_count *= 2;
+        if (cpu_override.mapping.cpu_count > MAXIMUM_PROCESSORS)
+        {
+            ERR("Logical CPU count exceeds limit %u.\n", MAXIMUM_PROCESSORS);
+            goto error;
+        }
+        smt = TRUE;
+        ++s;
+    }
+    if (*s != ':')
+        goto error;
+    ++s;
+    for (i = 0; i < cpu_override.mapping.cpu_count; ++i)
+    {
+        char *next;
+
+        if (i)
+        {
+            if (*s != ',')
+            {
+                if (!*s)
+                    ERR("Incomplete host CPU mapping string, %u CPUs mapping required.\n",
+                            cpu_override.mapping.cpu_count);
+                goto error;
+            }
+            ++s;
+        }
+
+        cpu_override.mapping.host_cpu_id[i] = strtol(s, &next, 10);
+        if (smt) cpu_override.siblings_mask[i] = (ULONG_PTR)3 << (i & ~1);
+        else     cpu_override.siblings_mask[i] = (ULONG_PTR)1 << i;
+        if (next == s)
+            goto error;
+        if (cpu_override.mapping.host_cpu_id[i] >= host_cpu_count)
+        {
+            ERR("Invalid host CPU index %u (host_cpu_count %u).\n",
+                    cpu_override.mapping.host_cpu_id[i], host_cpu_count);
+            goto error;
+        }
+        s = next;
+    }
+    if (*s)
+        goto error;
+
+done:
+    if (ERR_ON(ntdll))
+    {
+        MESSAGE("wine: overriding CPU configuration, %u logical CPUs, host CPUs ", cpu_override.mapping.cpu_count);
+        for (i = 0; i < cpu_override.mapping.cpu_count; ++i)
+        {
+            if (i)
+                MESSAGE(",");
+            MESSAGE("%u", cpu_override.mapping.host_cpu_id[i]);
+        }
+        MESSAGE(".\n");
+    }
+    return;
+error:
+    cpu_override.mapping.cpu_count = 0;
+    ERR("Invalid WINE_CPU_TOPOLOGY string %s (%s).\n", debugstr_a(env_override), debugstr_a(s));
+}
+
+struct cpu_topology_override *get_cpu_topology_override(void)
+{
+    return cpu_override.mapping.cpu_count ? &cpu_override.mapping : NULL;
+}
 
 static BOOL grow_logical_proc_buf(void)
 {
@@ -615,6 +817,7 @@ static DWORD count_bits( ULONG_PTR mask )
 static BOOL logical_proc_info_ex_add_by_id( LOGICAL_PROCESSOR_RELATIONSHIP rel, DWORD id, ULONG_PTR mask )
 {
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *dataex;
+    unsigned int phys_cpu_id;
     unsigned int ofs = 0;
 
     while (ofs < logical_proc_info_ex_size)
@@ -644,8 +847,10 @@ static BOOL logical_proc_info_ex_add_by_id( LOGICAL_PROCESSOR_RELATIONSHIP rel, 
         dataex->Processor.Flags = count_bits( mask ) > 1 ? LTP_PC_SMT : 0;
     else
         dataex->Processor.Flags = 0;
-    if (rel == RelationProcessorCore && id / 32 < performance_cores_capacity)
-        dataex->Processor.EfficiencyClass = (performance_cores[id / 32] >> (id % 32)) & 1;
+
+    phys_cpu_id = cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[id] : id;
+    if (rel == RelationProcessorCore && phys_cpu_id / 32 < performance_cores_capacity)
+        dataex->Processor.EfficiencyClass = (performance_cores[phys_cpu_id / 32] >> (phys_cpu_id % 32)) & 1;
     else
         dataex->Processor.EfficiencyClass = 0;
     dataex->Processor.GroupCount = 1;
@@ -857,6 +1062,8 @@ static void fill_performance_core_info(void)
     char op = ',';
     ULONG *p;
 
+    if (performance_cores_capacity) return;
+
     fpcore_list = fopen("/sys/devices/cpu_core/cpus", "r");
     if (!fpcore_list) return;
 
@@ -872,7 +1079,7 @@ static void fill_performance_core_info(void)
 
         for(i = beg; i <= end; i++)
         {
-            if (i / 32 > performance_cores_capacity)
+            if (i / 32 >= performance_cores_capacity)
             {
                 p = realloc(performance_cores, performance_cores_capacity * 2 * sizeof(ULONG));
                 if (!p) goto done;
@@ -893,11 +1100,13 @@ static NTSTATUS create_logical_proc_info(void)
     static const char core_info[] = "/sys/devices/system/cpu/cpu%u/topology/%s";
     static const char cache_info[] = "/sys/devices/system/cpu/cpu%u/cache/index%u/%s";
     static const char numa_info[] = "/sys/devices/system/node/node%u/cpumap";
-
+    const char *env_fake_logical_cores = getenv("WINE_LOGICAL_CPUS_AS_CORES");
+    BOOL fake_logical_cpus_as_cores = env_fake_logical_cores && atoi(env_fake_logical_cores);
     FILE *fcpu_list, *fnuma_list, *f;
     unsigned int beg, end, i, j, r, num_cpus = 0, max_cpus = 0;
     char op, name[MAX_PATH];
     ULONG_PTR all_cpus_mask = 0;
+    unsigned int cpu_id;
 
     /* On systems with a large number of CPU cores (32 or 64 depending on 32-bit or 64-bit),
      * we have issues parsing processor information:
@@ -924,6 +1133,12 @@ static NTSTATUS create_logical_proc_info(void)
         if (op == '-') fscanf(fcpu_list, "%u%c ", &end, &op);
         else end = beg;
 
+        if (cpu_override.mapping.cpu_count)
+        {
+            beg = 0;
+            end = cpu_override.mapping.cpu_count - 1;
+        }
+
         for(i = beg; i <= end; i++)
         {
             unsigned int phys_core = 0;
@@ -935,7 +1150,7 @@ static NTSTATUS create_logical_proc_info(void)
                 continue;
             }
 
-            sprintf(name, core_info, i, "physical_package_id");
+            snprintf(name, sizeof(name), core_info, cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[i] : i, "physical_package_id");
             f = fopen(name, "r");
             if (f)
             {
@@ -961,20 +1176,35 @@ static NTSTATUS create_logical_proc_info(void)
              */
 
             /* Mask of logical threads sharing same physical core in kernel core numbering. */
-            sprintf(name, core_info, i, "thread_siblings");
-            if(!sysfs_parse_bitmap(name, &thread_mask)) thread_mask = 1<<i;
-
+            snprintf(name, sizeof(name), core_info, i, "thread_siblings");
+            if (cpu_override.mapping.cpu_count)
+            {
+                thread_mask = cpu_override.siblings_mask[i];
+            }
+            else
+            {
+                if(fake_logical_cpus_as_cores || !sysfs_parse_bitmap(name, &thread_mask)) thread_mask = (ULONG_PTR)1<<i;
+            }
             /* Needed later for NumaNode and Group. */
             all_cpus_mask |= thread_mask;
 
-            sprintf(name, core_info, i, "thread_siblings_list");
-            f = fopen(name, "r");
-            if (f)
+            if (cpu_override.mapping.cpu_count)
             {
-                fscanf(f, "%d%c", &phys_core, &op);
-                fclose(f);
+                assert( thread_mask );
+                for (phys_core = 0; ; ++phys_core)
+                    if (thread_mask & ((ULONG_PTR)1 << phys_core)) break;
             }
-            else phys_core = i;
+            else
+            {
+                snprintf(name, sizeof(name), core_info, i, "thread_siblings_list");
+                f = fake_logical_cpus_as_cores ? NULL : fopen(name, "r");
+                if (f)
+                {
+                    fscanf(f, "%d%c", &phys_core, &op);
+                    fclose(f);
+                }
+                else phys_core = i;
+            }
 
             if (!logical_proc_info_add_by_id( RelationProcessorCore, phys_core, thread_mask ))
             {
@@ -982,36 +1212,38 @@ static NTSTATUS create_logical_proc_info(void)
                 return STATUS_NO_MEMORY;
             }
 
-            for (j = 0; j < 4; j++)
+            cpu_id = cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[i] : i;
+
+            for(j = 0; j < 4; j++)
             {
                 CACHE_DESCRIPTOR cache;
                 ULONG_PTR mask = 0;
 
-                sprintf(name, cache_info, i, j, "shared_cpu_map");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "shared_cpu_map");
                 if(!sysfs_parse_bitmap(name, &mask)) continue;
 
-                sprintf(name, cache_info, i, j, "level");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "level");
                 f = fopen(name, "r");
                 if(!f) continue;
                 fscanf(f, "%u", &r);
                 fclose(f);
                 cache.Level = r;
 
-                sprintf(name, cache_info, i, j, "ways_of_associativity");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "ways_of_associativity");
                 f = fopen(name, "r");
                 if(!f) continue;
                 fscanf(f, "%u", &r);
                 fclose(f);
                 cache.Associativity = r;
 
-                sprintf(name, cache_info, i, j, "coherency_line_size");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "coherency_line_size");
                 f = fopen(name, "r");
                 if(!f) continue;
                 fscanf(f, "%u", &r);
                 fclose(f);
                 cache.LineSize = r;
 
-                sprintf(name, cache_info, i, j, "size");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "size");
                 f = fopen(name, "r");
                 if(!f) continue;
                 fscanf(f, "%u%c", &r, &op);
@@ -1020,7 +1252,7 @@ static NTSTATUS create_logical_proc_info(void)
                     WARN("unknown cache size %u%c\n", r, op);
                 cache.Size = (op=='K' ? r*1024 : r);
 
-                sprintf(name, cache_info, i, j, "type");
+                snprintf(name, sizeof(name), cache_info, cpu_id, j, "type");
                 f = fopen(name, "r");
                 if(!f) continue;
                 fscanf(f, "%s", name);
@@ -1032,6 +1264,19 @@ static NTSTATUS create_logical_proc_info(void)
                 else
                     cache.Type = CacheUnified;
 
+                if (cpu_override.mapping.cpu_count)
+                {
+                    ULONG_PTR host_mask = mask;
+                    unsigned int id;
+
+                    mask = 0;
+                    for (id = 0; id < cpu_override.mapping.cpu_count; ++id)
+                        if (host_mask & ((ULONG_PTR)1 << cpu_override.mapping.host_cpu_id[id]))
+                            mask |= (ULONG_PTR)1 << id;
+
+                    assert(mask);
+                }
+
                 if (!logical_proc_info_add_cache( mask, &cache ))
                 {
                     fclose(fcpu_list);
@@ -1039,6 +1284,9 @@ static NTSTATUS create_logical_proc_info(void)
                 }
             }
         }
+
+        if (cpu_override.mapping.cpu_count)
+            break;
     }
     fclose(fcpu_list);
 
@@ -1063,7 +1311,7 @@ static NTSTATUS create_logical_proc_info(void)
             {
                 ULONG_PTR mask = 0;
 
-                sprintf(name, numa_info, i);
+                snprintf(name, sizeof(name), numa_info, i);
                 if (!sysfs_parse_bitmap( name, &mask )) continue;
 
                 if (!logical_proc_info_add_numa_node( mask, i ))
@@ -1262,7 +1510,10 @@ void init_cpu_info(void)
     num = 1;
     FIXME("Detecting the number of processors is not supported.\n");
 #endif
-    peb->NumberOfProcessors = num;
+    fill_cpu_override(num);
+
+    peb->NumberOfProcessors = cpu_info.MaximumProcessors = cpu_override.mapping.cpu_count
+            ? cpu_override.mapping.cpu_count : num;
     get_cpuinfo( &cpu_info );
     TRACE( "<- CPU arch %d, level %d, rev %d, features 0x%x\n",
            (int)cpu_info.ProcessorArchitecture, (int)cpu_info.ProcessorLevel,
@@ -1367,216 +1618,250 @@ static NTSTATUS create_cpuset_info(SYSTEM_CPU_SET_INFORMATION *info)
     return STATUS_SUCCESS;
 }
 
-#if defined(linux) || defined(__APPLE__)
-
-static void copy_smbios_string( char **buffer, const char *s, size_t len )
+struct smbios_buffer
 {
-    if (!len) return;
-    memcpy(*buffer, s, len + 1);
-    *buffer += len + 1;
+    struct smbios_prologue *prologue;  /* prologue followed by data */
+    unsigned int            size;      /* allocated size past prologue */
+    WORD                    handle;    /* handle count */
+};
+
+static WORD append_smbios( struct smbios_buffer *buf, struct smbios_header *hdr,
+                           const char *strings[], unsigned int strings_count )
+{
+    struct smbios_prologue *prologue = buf->prologue;
+    unsigned int i, len = hdr->length;
+    char *pos;
+
+    for (i = 0; i < strings_count; i++) len += strlen( strings[i] ) + 1;
+    len += 1 + !strings_count;
+
+    if (!prologue)
+    {
+        unsigned int size = max( 1024, len );
+
+        if (!(prologue = malloc( sizeof(*prologue) + size ))) return 0;
+        prologue->calling_method = 0;
+        prologue->major_version  = SMBIOS_MAJOR_VERSION;
+        prologue->minor_version  = SMBIOS_MINOR_VERSION;
+        prologue->revision       = 0;
+        prologue->length         = 0;
+
+        buf->prologue = prologue;
+        buf->size     = size;
+        buf->handle   = 0;
+    }
+    else if (prologue->length + len > buf->size)
+    {
+        unsigned int size = max( prologue->length + len, buf->size * 2 );
+        if (!(prologue = realloc( buf->prologue, sizeof(*prologue) + size ))) return 0;
+        buf->prologue = prologue;
+        buf->size     = size;
+    }
+
+    pos = (char *)(prologue + 1) + prologue->length;
+    hdr->handle = buf->handle++;
+    memcpy( pos, hdr, hdr->length );
+    pos += hdr->length;
+    for (i = 0; i < strings_count; i++)
+    {
+        strcpy( pos, strings[i] );
+        pos += strlen( strings[i] ) + 1;
+    }
+    if (!strings_count) *pos++ = 0;
+    *pos = 0;
+    prologue->length += len;
+    return hdr->handle;
 }
 
-static NTSTATUS create_smbios_tables( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
-                                      ULONG *required_len,
-                                      const struct smbios_bios_args *bios_args,
-                                      const struct smbios_system_args *system_args,
-                                      const struct smbios_board_args *board_args,
-                                      const struct smbios_chassis_args *chassis_args )
+#define ADD_STR(str) (*(str) ? (strings[string_count] = (str), ++string_count) : 0)
+
+static WORD append_smbios_bios( struct smbios_buffer *buf, const char *vendor, const char *version,
+                                const char *date )
 {
-    char *buffer = (char*)sfti->TableBuffer;
-    BYTE string_count;
-    BYTE handle_count = 0;
-    struct smbios_prologue *prologue;
-    struct smbios_bios *bios;
-    struct smbios_system *system;
-    struct smbios_board *board;
-    struct smbios_chassis *chassis;
-    struct smbios_boot_info *boot_info;
-    struct smbios_header *end_of_table;
+    const char *strings[3];
+    unsigned int string_count = 0;
+    struct smbios_bios bios = { .hdr.type = SMBIOS_TYPE_BIOS, .hdr.length = sizeof(bios) };
 
-    *required_len = sizeof(struct smbios_prologue);
-
-#define L(l) (l + (l ? 1 : 0))
-    *required_len += sizeof(struct smbios_bios);
-    *required_len += max(L(bios_args->vendor_len) + L(bios_args->version_len) + L(bios_args->date_len) + 1, 2);
-
-    *required_len += sizeof(struct smbios_system);
-    *required_len += max(L(system_args->vendor_len) + L(system_args->product_len) + L(system_args->version_len) +
-                         L(system_args->serial_len) + L(system_args->sku_len) + L(system_args->family_len) + 1, 2);
-
-    *required_len += sizeof(struct smbios_board);
-    *required_len += max(L(board_args->vendor_len) + L(board_args->product_len) + L(board_args->version_len) +
-                         L(board_args->serial_len) + L(board_args->asset_tag_len) + 1, 2);
-
-    *required_len += sizeof(struct smbios_chassis);
-    *required_len += max(L(chassis_args->vendor_len) + L(chassis_args->version_len) + L(chassis_args->serial_len) +
-                         L(chassis_args->asset_tag_len) + 1, 2);
-
-    *required_len += sizeof(struct smbios_boot_info);
-    *required_len += 2;
-
-    *required_len += sizeof(struct smbios_header);
-    *required_len += 2;
-#undef L
-
-    sfti->TableBufferLength = *required_len;
-
-    *required_len += FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer);
-
-    if (available_len < *required_len)
-        return STATUS_BUFFER_TOO_SMALL;
-
-    prologue = (struct smbios_prologue*)buffer;
-    prologue->calling_method = 0;
-    prologue->major_version = 2;
-    prologue->minor_version = 4;
-    prologue->revision = 0;
-    prologue->length = sfti->TableBufferLength - sizeof(struct smbios_prologue);
-    buffer += sizeof(struct smbios_prologue);
-
-    string_count = 0;
-    bios = (struct smbios_bios*)buffer;
-    bios->hdr.type = 0;
-    bios->hdr.length = sizeof(struct smbios_bios);
-    bios->hdr.handle = handle_count++;
-    bios->vendor = bios_args->vendor_len ? ++string_count : 0;
-    bios->version = bios_args->version_len ? ++string_count : 0;
-    bios->start = 0;
-    bios->date = bios_args->date_len ? ++string_count : 0;
-    bios->size = 0;
-    bios->characteristics = 0x4; /* not supported */
-    bios->characteristics_ext[0] = 0;
-    bios->characteristics_ext[1] = 0;
-    bios->system_bios_major_release = 0xFF; /* not supported */
-    bios->system_bios_minor_release = 0xFF; /* not supported */
-    bios->ec_firmware_major_release = 0xFF; /* not supported */
-    bios->ec_firmware_minor_release = 0xFF; /* not supported */
-    buffer += sizeof(struct smbios_bios);
-
-    copy_smbios_string(&buffer, bios_args->vendor, bios_args->vendor_len);
-    copy_smbios_string(&buffer, bios_args->version, bios_args->version_len);
-    copy_smbios_string(&buffer, bios_args->date, bios_args->date_len);
-    if (!string_count) *buffer++ = 0;
-    *buffer++ = 0;
-
-    string_count = 0;
-    system = (struct smbios_system*)buffer;
-    system->hdr.type = 1;
-    system->hdr.length = sizeof(struct smbios_system);
-    system->hdr.handle = handle_count++;
-    system->vendor = system_args->vendor_len ? ++string_count : 0;
-    system->product = system_args->product_len ? ++string_count : 0;
-    system->version = system_args->version_len ? ++string_count : 0;
-    system->serial = system_args->serial_len ? ++string_count : 0;
-    memcpy( system->uuid, &system_args->uuid, sizeof(GUID) );
-    system->wake_up_type = 0x02; /* unknown */
-    system->sku_number = system_args->sku_len ? ++string_count : 0;
-    system->family = system_args->family_len ? ++string_count : 0;
-    buffer += sizeof(struct smbios_system);
-
-    copy_smbios_string(&buffer, system_args->vendor, system_args->vendor_len);
-    copy_smbios_string(&buffer, system_args->product, system_args->product_len);
-    copy_smbios_string(&buffer, system_args->version, system_args->version_len);
-    copy_smbios_string(&buffer, system_args->serial, system_args->serial_len);
-    copy_smbios_string(&buffer, system_args->sku, system_args->sku_len);
-    copy_smbios_string(&buffer, system_args->family, system_args->family_len);
-    if (!string_count) *buffer++ = 0;
-    *buffer++ = 0;
-
-    string_count = 0;
-    chassis = (struct smbios_chassis*)buffer;
-    chassis->hdr.type = 3;
-    chassis->hdr.length = sizeof(struct smbios_chassis);
-    chassis->hdr.handle = handle_count++;
-    chassis->vendor = chassis_args->vendor_len ? ++string_count : 0;
-    chassis->type = chassis_args->type;
-    chassis->version = chassis_args->version_len ? ++string_count : 0;
-    chassis->serial = chassis_args->serial_len ? ++string_count : 0;
-    chassis->asset_tag = chassis_args->asset_tag_len ? ++string_count : 0;
-    chassis->boot_state = 0x02; /* unknown */
-    chassis->power_supply_state = 0x02; /* unknown */
-    chassis->thermal_state = 0x02; /* unknown */
-    chassis->security_status = 0x02; /* unknown */
-    chassis->oem_defined = 0;
-    chassis->height = 0; /* undefined */
-    chassis->num_power_cords = 0; /* unspecified */
-    chassis->num_contained_elements = 0;
-    chassis->contained_element_rec_length = 3;
-    buffer += sizeof(struct smbios_chassis);
-
-    copy_smbios_string(&buffer, chassis_args->vendor, chassis_args->vendor_len);
-    copy_smbios_string(&buffer, chassis_args->version, chassis_args->version_len);
-    copy_smbios_string(&buffer, chassis_args->serial, chassis_args->serial_len);
-    copy_smbios_string(&buffer, chassis_args->asset_tag, chassis_args->asset_tag_len);
-    if (!string_count) *buffer++ = 0;
-    *buffer++ = 0;
-
-    string_count = 0;
-    board = (struct smbios_board*)buffer;
-    board->hdr.type = 2;
-    board->hdr.length = sizeof(struct smbios_board);
-    board->hdr.handle = handle_count++;
-    board->vendor = board_args->vendor_len ? ++string_count : 0;
-    board->product = board_args->product_len ? ++string_count : 0;
-    board->version = board_args->version_len ? ++string_count : 0;
-    board->serial = board_args->serial_len ? ++string_count : 0;
-    board->asset_tag = board_args->asset_tag_len ? ++string_count : 0;
-    board->feature_flags = 0x5; /* hosting board, removable */
-    board->location = 0;
-    board->chassis_handle = chassis->hdr.handle;
-    board->board_type = 0xa; /* motherboard */
-    board->num_contained_handles = 0;
-    buffer += sizeof(struct smbios_board);
-
-    copy_smbios_string(&buffer, board_args->vendor, board_args->vendor_len);
-    copy_smbios_string(&buffer, board_args->product, board_args->product_len);
-    copy_smbios_string(&buffer, board_args->version, board_args->version_len);
-    copy_smbios_string(&buffer, board_args->serial, board_args->serial_len);
-    copy_smbios_string(&buffer, board_args->asset_tag, board_args->asset_tag_len);
-    if (!string_count) *buffer++ = 0;
-    *buffer++ = 0;
-
-    boot_info = (struct smbios_boot_info*)buffer;
-    boot_info->hdr.type = 32;
-    boot_info->hdr.length = sizeof(struct smbios_boot_info);
-    boot_info->hdr.handle = handle_count++;
-    memset(boot_info->reserved, 0, sizeof(boot_info->reserved));
-    memset(boot_info->boot_status, 0, sizeof(boot_info->boot_status)); /* no errors detected */
-    buffer += sizeof(struct smbios_boot_info);
-    *buffer++ = 0;
-    *buffer++ = 0;
-
-    end_of_table = (struct smbios_header*)buffer;
-    end_of_table->type = 127;
-    end_of_table->length = sizeof(struct smbios_header);
-    end_of_table->handle = handle_count++;
-    buffer += sizeof(struct smbios_header);
-    *buffer++ = 0;
-    *buffer++ = 0;
-
-    return STATUS_SUCCESS;
+    bios.vendor                    = ADD_STR( vendor );
+    bios.version                   = ADD_STR( version );
+    bios.start                     = 0xe000;
+    bios.date                      = ADD_STR( date );
+    bios.characteristics           = 0x8;  /* not supported */
+    bios.system_bios_major_release = 0xFF; /* not supported */
+    bios.system_bios_minor_release = 0xFF; /* not supported */
+    bios.ec_firmware_major_release = 0xFF; /* not supported */
+    bios.ec_firmware_minor_release = 0xFF; /* not supported */
+    return append_smbios( buf, &bios.hdr, strings, string_count );
 }
 
-#endif
+static WORD append_smbios_system( struct smbios_buffer *buf, const char *vendor, const char *product,
+                                  const char *version, const char *serial, const char *sku,
+                                  const char *family, const GUID *uuid )
+{
+    const char *strings[6];
+    unsigned int string_count = 0;
+    struct smbios_system system = { .hdr.type = SMBIOS_TYPE_SYSTEM, .hdr.length = sizeof(system) };
+
+    system.vendor       = ADD_STR( vendor );
+    system.product      = ADD_STR( product );
+    system.version      = ADD_STR( version );
+    system.serial       = ADD_STR( serial );
+    memcpy( &system.uuid, uuid, sizeof(*uuid) );
+    system.wake_up_type = 0x06; /* power switch */
+    system.sku_number   = ADD_STR( sku );
+    system.family       = ADD_STR( family );
+    return append_smbios( buf, &system.hdr, strings, string_count );
+}
+
+static WORD append_smbios_chassis( struct smbios_buffer *buf, BYTE type, const char *vendor,
+                                   const char *version, const char *serial, const char *asset_tag )
+{
+    const char *strings[4];
+    unsigned int string_count = 0;
+    struct smbios_chassis chassis = { .hdr.type = SMBIOS_TYPE_CHASSIS, .hdr.length = sizeof(chassis) };
+
+    chassis.vendor                       = ADD_STR( vendor );
+    chassis.type                         = type ? type : 2; /* unknown */
+    chassis.version                      = ADD_STR( version );
+    chassis.serial                       = ADD_STR( serial );
+    chassis.asset_tag                    = ADD_STR( asset_tag );
+    chassis.boot_state                   = 0x02; /* unknown */
+    chassis.power_supply_state           = 0x02; /* unknown */
+    chassis.thermal_state                = 0x02; /* unknown */
+    chassis.security_status              = 0x02; /* unknown */
+    chassis.oem_defined                  = 0;
+    chassis.height                       = 0; /* undefined */
+    chassis.num_power_cords              = 0; /* unspecified */
+    chassis.num_contained_elements       = 0;
+    chassis.contained_element_rec_length = 3;
+    return append_smbios( buf, &chassis.hdr, strings, string_count );
+}
+
+static WORD append_smbios_board( struct smbios_buffer *buf, WORD chassis_handle, const char *vendor,
+                                 const char *product, const char *version, const char *serial,
+                                 const char *asset_tag )
+{
+    const char *strings[5];
+    unsigned int string_count = 0;
+    struct smbios_board board = { .hdr.type = SMBIOS_TYPE_BASEBOARD, .hdr.length = sizeof(board) };
+
+    board.vendor                = ADD_STR( vendor );
+    board.product               = ADD_STR( product );
+    board.version               = ADD_STR( version );
+    board.serial                = ADD_STR( serial );
+    board.asset_tag             = ADD_STR( asset_tag );
+    board.feature_flags         = 0x5; /* hosting board, removable */
+    board.location              = 0;
+    board.chassis_handle        = chassis_handle;
+    board.board_type            = 0xa; /* motherboard */
+    board.num_contained_handles = 0;
+    return append_smbios( buf, &board.hdr, strings, string_count );
+}
+
+static WORD append_smbios_processor( struct smbios_buffer *buf, WORD core_count, WORD thread_count,
+                                     WORD family, const char *socket, const char *vendor,
+                                     const char *version, const char *serial, const char *asset_tag )
+{
+    const char *strings[5];
+    unsigned int string_count = 0;
+    struct smbios_processor proc = { .hdr.type = SMBIOS_TYPE_PROCESSOR, .hdr.length = sizeof(proc) };
+
+    proc.socket         = ADD_STR( socket );
+    proc.type           = 3;  /* central processor */
+    proc.family         = family ? min( family, 0xfe ) : 2; /* unknown */
+    proc.vendor         = ADD_STR( vendor );
+    proc.id             = cpu_id;
+    proc.version        = ADD_STR( version );
+    proc.status         = 0x41; /* cpu enabled */
+    proc.upgrade        = 2;  /* unknown */
+    proc.l1cache        = 0xffff;  /* unknown */
+    proc.l2cache        = 0xffff;  /* unknown */
+    proc.l3cache        = 0xffff;  /* unknown */
+    proc.serial         = ADD_STR( serial );
+    proc.asset_tag      = ADD_STR( asset_tag );
+    proc.core_count     = min( core_count, 0xff );
+    proc.core_enabled   = min( core_count, 0xff );
+    proc.thread_count   = min( thread_count, 0xff );
+    proc.family2        = family ? family : 2;
+    proc.core_count2    = core_count;
+    proc.core_enabled2  = core_count;
+    proc.thread_count2  = thread_count;
+    if (sizeof(void *) > sizeof(int)) proc.characteristics |= 1 << 2;  /* 64-bit */
+    if (core_count > 1) proc.characteristics |= 1 << 3;  /* multi-core */
+    if (thread_count > core_count) proc.characteristics |= 1 << 4;  /* multi-thread */
+    return append_smbios( buf, &proc.hdr, strings, string_count );
+}
+
+static WORD append_smbios_boot_info( struct smbios_buffer *buf )
+{
+    struct smbios_boot_info boot = { .hdr.type = SMBIOS_TYPE_BOOTINFO, .hdr.length = sizeof(boot) };
+
+    return append_smbios( buf, &boot.hdr, NULL, 0 );
+}
+
+static void append_smbios_end( struct smbios_buffer *buf )
+{
+    struct smbios_header end = { .type = SMBIOS_TYPE_END, .length = sizeof(end) };
+
+    append_smbios( buf, &end, NULL, 0 );
+}
+
+static void create_smbios_processors( struct smbios_buffer *buf )
+{
+    char socket[20], name[49];
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *p = logical_proc_info_ex;
+    UINT i, family = 0, core_count = 0, thread_count = 0, pkg_count = 0;
+
+    strcpy( name, cpu_name );
+    for (i = strlen(name); i > 0 && name[i - 1] == ' '; i--) name[i - 1] = 0;
+
+    while ((char *)p != (char *)logical_proc_info_ex + logical_proc_info_ex_size)
+    {
+        switch (p->Relationship)
+        {
+        case RelationProcessorPackage:
+            if (!pkg_count++) break;
+            snprintf( socket, sizeof(socket), "Socket #%u", pkg_count - 1 );
+            append_smbios_processor( buf, core_count, thread_count, family,
+                                     socket, cpu_vendor, name, "", "" );
+            core_count = thread_count = 0;
+            break;
+        case RelationProcessorCore:
+            core_count++;
+            thread_count++;
+            if (p->Processor.Flags & LTP_PC_SMT) thread_count++;
+            break;
+        default:
+            break;
+        }
+        p = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *)((char *)p + p->Size);
+    }
+    snprintf( socket, sizeof(socket), "Socket #%u", pkg_count - 1 );
+    append_smbios_processor( buf, core_count, thread_count, family,
+                             socket, cpu_vendor, name, "", "" );
+}
+
+#undef ADD_STR
 
 #ifdef linux
 
-static size_t get_smbios_string( const char *path, char *str, size_t size )
+static const char *get_smbios_string( const char *path, char *str, size_t size )
 {
     FILE *file;
     size_t len;
 
-    if (!(file = fopen(path, "r"))) return 0;
+    str[0] = 0;
+    if (!(file = fopen(path, "r"))) return str;
 
     len = fread( str, 1, size - 1, file );
     fclose( file );
 
     if (len >= 1 && str[len - 1] == '\n') len--;
     str[len] = 0;
-    return len;
+    return str;
 }
 
-static void get_system_uuid( GUID *uuid )
+static GUID *get_system_uuid( GUID *uuid )
 {
     static const unsigned char hex[] =
     {
@@ -1613,103 +1898,96 @@ static void get_system_uuid( GUID *uuid )
         }
         close( fd );
     }
+    return uuid;
 }
 
-static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
-                                   ULONG *required_len )
+static void fixup_missing_information( const GUID *uuid, char *buffer )
 {
-    switch (sfti->ProviderSignature)
-    {
-    case RSMB:
-    {
-        char bios_vendor[128], bios_version[128], bios_date[128];
-        struct smbios_bios_args bios_args;
-        char system_vendor[128], system_product[128], system_version[128], system_serial[128];
-        char system_sku[128], system_family[128];
-        struct smbios_system_args system_args;
-        char board_vendor[128], board_product[128], board_version[128], board_serial[128], board_asset_tag[128];
-        struct smbios_board_args board_args;
-        char chassis_vendor[128], chassis_version[128], chassis_serial[128], chassis_asset_tag[128];
-        char chassis_type[11] = "2"; /* unknown */
-        struct smbios_chassis_args chassis_args;
+    const BYTE *p = (const BYTE *)uuid;
+    snprintf( buffer, 33, "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X", p[0], p[1],
+              p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15] );
+}
+
+static struct smbios_prologue *create_smbios_data(void)
+{
+    char vendor[128], version[128], date[128], product[128], serial[128];
+    char sku[128], family[128], asset_tag[128], type[11];
+    GUID uuid;
+    BYTE chassis;
+    struct smbios_buffer buf = { 0 };
 
 #define S(s) s, sizeof(s)
-        bios_args.vendor_len = get_smbios_string("/sys/class/dmi/id/bios_vendor", S(bios_vendor));
-        bios_args.vendor = bios_vendor;
-        bios_args.version_len = get_smbios_string("/sys/class/dmi/id/bios_version", S(bios_version));
-        bios_args.version = bios_version;
-        bios_args.date_len = get_smbios_string("/sys/class/dmi/id/bios_date", S(bios_date));
-        bios_args.date = bios_date;
+    append_smbios_bios( &buf,
+                        get_smbios_string( "/sys/class/dmi/id/bios_vendor", S(vendor) ),
+                        get_smbios_string( "/sys/class/dmi/id/bios_version", S(version) ),
+                        get_smbios_string( "/sys/class/dmi/id/bios_date", S(date) ));
 
-        system_args.vendor_len = get_smbios_string("/sys/class/dmi/id/sys_vendor", S(system_vendor));
-        system_args.vendor = system_vendor;
-        system_args.product_len = get_smbios_string("/sys/class/dmi/id/product_name", S(system_product));
-        system_args.product = system_product;
-        system_args.version_len = get_smbios_string("/sys/class/dmi/id/product_version", S(system_version));
-        system_args.version = system_version;
-        system_args.serial_len = get_smbios_string("/sys/class/dmi/id/product_serial", S(system_serial));
-        system_args.serial = system_serial;
-        get_system_uuid(&system_args.uuid);
-        system_args.sku_len = get_smbios_string("/sys/class/dmi/id/product_sku", S(system_sku));
-        system_args.sku = system_sku;
-        system_args.family_len = get_smbios_string("/sys/class/dmi/id/product_family", S(system_family));
-        system_args.family = system_family;
+    /* Some fields may not have been read
+     * (either, they are not filled by the BIOS, or some of the files above are only readable by root).
+     * Ensure that some fields are always filled in.
+     */
+    if (!get_smbios_string( "/sys/class/dmi/id/product_serial", S(serial) )[0])
+        strcpy(serial, "System Serial Number");
 
-        board_args.vendor_len = get_smbios_string("/sys/class/dmi/id/board_vendor", S(board_vendor));
-        board_args.vendor = board_vendor;
-        board_args.product_len = get_smbios_string("/sys/class/dmi/id/board_name", S(board_product));
-        board_args.product = board_product;
-        board_args.version_len = get_smbios_string("/sys/class/dmi/id/board_version", S(board_version));
-        board_args.version = board_version;
-        board_args.serial_len = get_smbios_string("/sys/class/dmi/id/board_serial", S(board_serial));
-        board_args.serial = board_serial;
-        board_args.asset_tag_len = get_smbios_string("/sys/class/dmi/id/board_asset_tag", S(board_asset_tag));
-        board_args.asset_tag = board_asset_tag;
+    append_smbios_system( &buf,
+                          get_smbios_string( "/sys/class/dmi/id/sys_vendor", S(vendor) ),
+                          get_smbios_string( "/sys/class/dmi/id/product_name", S(product) ),
+                          get_smbios_string( "/sys/class/dmi/id/product_version", S(version) ),
+                          serial,
+                          get_smbios_string( "/sys/class/dmi/id/product_sku", S(sku) ),
+                          get_smbios_string( "/sys/class/dmi/id/product_family", S(family) ),
+                          get_system_uuid( &uuid ));
 
-        chassis_args.vendor_len = get_smbios_string("/sys/class/dmi/id/chassis_vendor", S(chassis_vendor));
-        chassis_args.vendor = chassis_vendor;
-        get_smbios_string("/sys/class/dmi/id/chassis_type", S(chassis_type));
-        chassis_args.type = atoi(chassis_type);
-        chassis_args.version_len = get_smbios_string("/sys/class/dmi/id/chassis_version", S(chassis_version));
-        chassis_args.version = chassis_version;
-        chassis_args.serial_len = get_smbios_string("/sys/class/dmi/id/chassis_serial", S(chassis_serial));
-        chassis_args.serial = chassis_serial;
-        chassis_args.asset_tag_len = get_smbios_string("/sys/class/dmi/id/chassis_tag", S(chassis_asset_tag));
-        chassis_args.asset_tag = chassis_asset_tag;
+
+    if (!get_smbios_string( "/sys/class/dmi/id/chassis_serial", S(serial) )[0])
+        strcpy(serial, "Chassis Serial Number");
+
+    get_smbios_string( "/sys/class/dmi/id/chassis_type", S(type) );
+    chassis = append_smbios_chassis( &buf, atoi(type),
+                                     get_smbios_string( "/sys/class/dmi/id/chassis_vendor", S(vendor) ),
+                                     get_smbios_string( "/sys/class/dmi/id/chassis_version", S(version) ),
+                                     serial,
+                                     get_smbios_string( "/sys/class/dmi/id/chassis_tag", S(asset_tag) ));
+
+    if (!get_smbios_string( "/sys/class/dmi/id/board_serial", S(serial) )[0])
+        fixup_missing_information(&uuid, serial);
+
+    append_smbios_board( &buf, chassis,
+                         get_smbios_string( "/sys/class/dmi/id/board_vendor", S(vendor) ),
+                         get_smbios_string( "/sys/class/dmi/id/board_name", S(product) ),
+                         get_smbios_string( "/sys/class/dmi/id/board_version", S(version) ),
+                         serial,
+                         get_smbios_string( "/sys/class/dmi/id/board_asset_tag", S(asset_tag) ));
 #undef S
 
-        return create_smbios_tables( sfti, available_len, required_len,
-                                     &bios_args, &system_args, &board_args, &chassis_args );
-    }
-    default:
-        FIXME("info_class SYSTEM_FIRMWARE_TABLE_INFORMATION provider %08x\n", (int)sfti->ProviderSignature);
-        return STATUS_NOT_IMPLEMENTED;
-    }
+    create_smbios_processors( &buf );
+    append_smbios_boot_info( &buf );
+    append_smbios_end( &buf );
+    return buf.prologue;
 }
 
 #elif defined(__APPLE__)
 
-static NTSTATUS get_smbios_from_iokit( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
-                                       ULONG *required_len )
+static struct smbios_prologue *get_smbios_from_iokit(void)
 {
     io_service_t service;
     CFDataRef data;
     const UInt8 *ptr;
     CFIndex len;
     struct smbios_prologue *prologue;
-    BYTE major_version = 2, minor_version = 0;
+    BYTE major_version = SMBIOS_MAJOR_VERSION, minor_version = SMBIOS_MINOR_VERSION;
 
     if (!(service = IOServiceGetMatchingService(0, IOServiceMatching("AppleSMBIOS"))))
     {
         WARN("can't find AppleSMBIOS service\n");
-        return STATUS_NO_MEMORY;
+        return NULL;
     }
 
     if (!(data = IORegistryEntryCreateCFProperty(service, CFSTR("SMBIOS-EPS"), kCFAllocatorDefault, 0)))
     {
         WARN("can't find SMBIOS entry point\n");
         IOObjectRelease(service);
-        return STATUS_NO_MEMORY;
+        return NULL;
     }
 
     len = CFDataGetLength(data);
@@ -1725,87 +2003,74 @@ static NTSTATUS get_smbios_from_iokit( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, 
     {
         WARN("can't find SMBIOS table\n");
         IOObjectRelease(service);
-        return STATUS_NO_MEMORY;
+        return NULL;
     }
 
     len = CFDataGetLength(data);
     ptr = CFDataGetBytePtr(data);
-    sfti->TableBufferLength = sizeof(*prologue) + len;
-    *required_len = sfti->TableBufferLength + FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer);
-    if (available_len < *required_len)
+    if ((prologue = malloc( sizeof(*prologue) + len )))
     {
-        CFRelease(data);
-        IOObjectRelease(service);
-        return STATUS_BUFFER_TOO_SMALL;
+        prologue->calling_method = 0;
+        prologue->major_version = major_version;
+        prologue->minor_version = minor_version;
+        prologue->revision = 0;
+        prologue->length = len;
+        memcpy( prologue + 1, ptr, len );
     }
-
-    prologue = (struct smbios_prologue *)sfti->TableBuffer;
-    prologue->calling_method = 0;
-    prologue->major_version = major_version;
-    prologue->minor_version = minor_version;
-    prologue->revision = 0;
-    prologue->length = sfti->TableBufferLength - sizeof(*prologue);
-
-    memcpy(sfti->TableBuffer + sizeof(*prologue), ptr, len);
-
     CFRelease(data);
     IOObjectRelease(service);
-    return STATUS_SUCCESS;
+    return prologue;
 }
 
-static size_t cf_to_string( CFTypeRef type_ref, char *buffer, size_t buffer_size )
+static void cf_to_string( CFTypeRef type_ref, char *buffer, size_t buffer_size )
 {
-    size_t length = 0;
-
+    buffer[0] = 0;
     if (!type_ref)
-        return 0;
+        return;
 
     if (CFGetTypeID(type_ref) == CFDataGetTypeID())
     {
-        length = MIN(CFDataGetLength(type_ref), buffer_size);
+        size_t length = MIN(CFDataGetLength(type_ref), buffer_size);
         CFDataGetBytes(type_ref, CFRangeMake(0, length), (UInt8*)buffer);
         buffer[length] = 0;
-        length = strlen(buffer);
     }
     else if (CFGetTypeID(type_ref) == CFStringGetTypeID())
     {
-        if (CFStringGetCString(type_ref, buffer, buffer_size, kCFStringEncodingASCII))
-            length = strlen(buffer);
+        CFStringGetCString(type_ref, buffer, buffer_size, kCFStringEncodingASCII);
     }
 
     CFRelease(type_ref);
-    return length;
 }
 
-static NTSTATUS generate_smbios( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
-                                 ULONG *required_len )
+static struct smbios_prologue *create_smbios_data(void)
 {
-    /* Apple Silicon Macs don't have SMBIOS, we need to generate it.
-     * Use strings and data from IOKit when available.
-     */
     io_service_t platform_expert;
     CFDataRef cf_manufacturer, cf_model;
     CFStringRef cf_serial_number, cf_uuid_string;
     char manufacturer[128], model[128], serial_number[128];
-    size_t manufacturer_len = 0, model_len = 0, serial_number_len = 0;
     GUID system_uuid = {0};
-    struct smbios_bios_args bios_args;
-    struct smbios_system_args system_args;
-    struct smbios_board_args board_args;
-    struct smbios_chassis_args chassis_args;
+    BYTE chassis;
+    struct smbios_buffer buf = { 0 };
+    struct smbios_prologue *ret;
+
+    if ((ret = get_smbios_from_iokit())) return ret;
+
+    /* Apple Silicon Macs don't have SMBIOS, we need to generate it.
+     * Use strings and data from IOKit when available.
+     */
 
     platform_expert = IOServiceGetMatchingService(0, IOServiceMatching("IOPlatformExpertDevice"));
     if (!platform_expert)
-        return STATUS_NO_MEMORY;
+        return NULL;
 
     cf_manufacturer = IORegistryEntryCreateCFProperty(platform_expert, CFSTR("manufacturer"), kCFAllocatorDefault, 0);
     cf_model = IORegistryEntryCreateCFProperty(platform_expert, CFSTR("model"), kCFAllocatorDefault, 0);
     cf_serial_number = IORegistryEntryCreateCFProperty(platform_expert, CFSTR(kIOPlatformSerialNumberKey), kCFAllocatorDefault, 0);
     cf_uuid_string = IORegistryEntryCreateCFProperty(platform_expert, CFSTR(kIOPlatformUUIDKey), kCFAllocatorDefault, 0);
 
-    manufacturer_len = cf_to_string(cf_manufacturer, manufacturer, sizeof(manufacturer));
-    model_len = cf_to_string(cf_model, model, sizeof(model));
-    serial_number_len = cf_to_string(cf_serial_number, serial_number, sizeof(serial_number));
+    cf_to_string(cf_manufacturer, manufacturer, sizeof(manufacturer));
+    cf_to_string(cf_model, model, sizeof(model));
+    cf_to_string(cf_serial_number, serial_number, sizeof(serial_number));
 
     if (cf_uuid_string)
     {
@@ -1826,69 +2091,67 @@ static NTSTATUS generate_smbios( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG 
 
     IOObjectRelease(platform_expert);
 
-#define S(s, t) { s ## _len = t ## _len; s = t; }
-#define STR(s, t) { s ## _len = sizeof(t)-1; s = t; }
-    S(bios_args.vendor, manufacturer);
-    /* BIOS version and date are both required */
-    STR(bios_args.version, "1.0");
-    STR(bios_args.date, "01/01/2021");
-
-    S(system_args.vendor, manufacturer);
-    S(system_args.product, model);
-    STR(system_args.version, "1.0");
-    S(system_args.serial, serial_number);
-    system_args.uuid = system_uuid;
-    system_args.sku_len = 0;
-    S(system_args.family, model);
-
-    S(board_args.vendor, manufacturer);
-    S(board_args.product, model);
-    S(board_args.version, model);
-    S(board_args.serial, serial_number);
-    board_args.asset_tag_len = 0;
-
-    S(chassis_args.vendor, manufacturer);
-    chassis_args.type = 2; /* unknown */
-    chassis_args.version_len = 0;
-    S(chassis_args.serial, serial_number);
-    chassis_args.asset_tag_len = 0;
-#undef STR
-#undef S
-
-    return create_smbios_tables( sfti, available_len, required_len,
-                                 &bios_args, &system_args, &board_args, &chassis_args );
+    append_smbios_bios( &buf, manufacturer, "1.0", "01/01/2021" );
+    append_smbios_system( &buf, manufacturer, model, "1.0", serial_number, "", model, &system_uuid );
+    chassis = append_smbios_chassis( &buf, 0, manufacturer, "", serial_number, "" );
+    append_smbios_board( &buf, chassis, manufacturer, model, model, serial_number, "" );
+    create_smbios_processors( &buf );
+    append_smbios_boot_info( &buf );
+    append_smbios_end( &buf );
+    return buf.prologue;
 }
+
+#else
+
+static struct smbios_prologue *create_smbios_data(void)
+{
+    static const char *vendor  = "The Wine project";
+    static const char *product = "Wine";
+    static const char *version = PACKAGE_VERSION;
+    static const char *serial  = "0";
+    GUID uuid = { 0 };
+    BYTE chassis;
+    struct smbios_buffer buf = { 0 };
+
+    append_smbios_bios( &buf, vendor, version, "01/01/2021" );
+    append_smbios_system( &buf, vendor, product, version, serial, "", "", &uuid );
+    chassis = append_smbios_chassis( &buf, 0, vendor, version, serial, "" );
+    append_smbios_board( &buf, chassis, vendor, product, version, serial, "" );
+    create_smbios_processors( &buf );
+    append_smbios_boot_info( &buf );
+    append_smbios_end( &buf );
+    return buf.prologue;
+}
+
+#endif
 
 static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
                                    ULONG *required_len )
 {
+    static struct smbios_prologue *smbios_data;
+    ULONG len;
+
     switch (sfti->ProviderSignature)
     {
     case RSMB:
-    {
-        NTSTATUS ret;
-        ret = get_smbios_from_iokit(sfti, available_len, required_len);
-        if (ret == STATUS_NO_MEMORY)
-            ret = generate_smbios(sfti, available_len, required_len);
-        return ret;
-    }
+        if (!smbios_data)
+        {
+            struct smbios_prologue *data = create_smbios_data();
+            if (!data) return STATUS_NO_MEMORY;
+            if (InterlockedCompareExchangePointer( (void **)&smbios_data, data, NULL )) free( data );
+        }
+        len = sizeof(*smbios_data) + smbios_data->length;
+        sfti->TableBufferLength = len;
+        *required_len = offsetof( SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer[len] );
+        if (available_len < *required_len) return STATUS_BUFFER_TOO_SMALL;
+        memcpy( sfti->TableBuffer, smbios_data, len );
+        return STATUS_SUCCESS;
+
     default:
         FIXME("info_class SYSTEM_FIRMWARE_TABLE_INFORMATION provider %08x\n", (unsigned int)sfti->ProviderSignature);
         return STATUS_NOT_IMPLEMENTED;
     }
 }
-
-#else
-
-static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
-                                   ULONG *required_len )
-{
-    FIXME("info_class SYSTEM_FIRMWARE_TABLE_INFORMATION\n");
-    sfti->TableBufferLength = 0;
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-#endif
 
 static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
 {
@@ -1975,7 +2238,15 @@ static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
                     mem_available = value * 1024;
             }
             fclose(fp);
+            totalram -= min( totalram, ram_reporting_bias );
             if (mem_available) freeram = mem_available;
+            if ((long long)freeram >= ram_reporting_bias) freeram -= ram_reporting_bias;
+            else
+            {
+                long long bias = ram_reporting_bias - freeram;
+                freeswap -= min( bias, freeswap );
+                freeram = 0;
+            }
         }
     }
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__) || \
@@ -2215,7 +2486,7 @@ static void find_reg_tz_info(RTL_DYNAMIC_TIME_ZONE_INFORMATION *tzi, const char*
     char buffer[128];
     KEY_BASIC_INFORMATION *info = (KEY_BASIC_INFORMATION *)buffer;
 
-    sprintf( buffer, "%u", year );
+    snprintf( buffer, sizeof(buffer), "%u", year );
     ascii_to_unicode( yearW, buffer, strlen(buffer) + 1 );
     init_unicode_string( &nameW, Time_ZonesW );
     InitializeObjectAttributes( &attr, &nameW, 0, 0, NULL );
@@ -2881,7 +3152,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
                     shi->Handle[i].AccessMask   = handle_info[i].access;
                     shi->Handle[i].HandleFlags  = handle_info[i].attributes;
                     shi->Handle[i].ObjectType   = handle_info[i].type;
-                    /* FIXME: Fill out ObjectPointer */
+                    shi->Handle[i].ObjectPointer = wine_server_get_ptr( handle_info[i].object );
                 }
             }
             else if (ret == STATUS_BUFFER_TOO_SMALL)
@@ -3102,7 +3373,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
                     shi->Handles[i].GrantedAccess    = handle_info[i].access;
                     shi->Handles[i].HandleAttributes = handle_info[i].attributes;
                     shi->Handles[i].ObjectTypeIndex  = handle_info[i].type;
-                    /* FIXME: Fill out Object */
+                    shi->Handles[i].Object           = wine_server_get_ptr( handle_info[i].object );
                 }
             }
             else if (ret == STATUS_BUFFER_TOO_SMALL)
@@ -3189,6 +3460,43 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         }
         else ret = STATUS_INFO_LENGTH_MISMATCH;
 
+        break;
+    }
+
+    case SystemProcessIdInformation: /* 88 */
+    {
+        SYSTEM_PROCESS_ID_INFORMATION *id = info;
+        UNICODE_STRING *str = &id->ImageName;
+        BOOL valid_buffer;
+
+        len = sizeof(*id);
+        if (len > size)                ret = STATUS_INFO_LENGTH_MISMATCH;
+        else if (id->ImageName.Length) ret = STATUS_INVALID_PARAMETER;
+        else if (!id->ProcessId)       ret = STATUS_INVALID_CID;
+
+        if (ret) break;
+
+        valid_buffer = virtual_check_buffer_for_write( str->Buffer, str->MaximumLength );
+        SERVER_START_REQ( get_process_image_name )
+        {
+            req->pid = HandleToULong( id->ProcessId );
+            if (valid_buffer) wine_server_set_reply( req, str->Buffer, str->MaximumLength );
+            ret = wine_server_call( req );
+            if (ret == STATUS_BUFFER_TOO_SMALL) ret = STATUS_INFO_LENGTH_MISMATCH;
+            if (ret == STATUS_SUCCESS && reply->len + 2 > str->MaximumLength) ret = STATUS_INFO_LENGTH_MISMATCH;
+            if (ret == STATUS_SUCCESS || ret == STATUS_INFO_LENGTH_MISMATCH) str->MaximumLength = reply->len + 2;
+            if (!ret && valid_buffer)
+            {
+                str->Length = reply->len;
+                str->Buffer[reply->len / 2] = 0;
+            }
+            else if (!valid_buffer && (!ret || ret == STATUS_INFO_LENGTH_MISMATCH))
+            {
+                str->Length = reply->len;
+                ret = STATUS_ACCESS_VIOLATION;
+            }
+        }
+        SERVER_END_REQ;
         break;
     }
 
@@ -3363,6 +3671,7 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
 
     case SystemSupportedProcessorArchitectures:
     {
+        SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION *machines = info;
         HANDLE process;
         ULONG i;
         USHORT machine = 0;
@@ -3380,20 +3689,30 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
             if (ret) return ret;
         }
 
-        len = (supported_machines_count + 1) * sizeof(ULONG);
+        len = (supported_machines_count + 1) * sizeof(*machines);
         if (size < len)
         {
             ret = STATUS_BUFFER_TOO_SMALL;
             break;
         }
-        for (i = 0; i < supported_machines_count; i++)
+        memset( machines, 0, len );
+
+        /* native machine */
+        machines[0].Machine = supported_machines[0];
+        machines[0].UserMode = 1;
+        machines[0].KernelMode = 1;
+        machines[0].Native = 1;
+        machines[0].Process = (supported_machines[0] == machine || is_machine_64bit( machine ));
+        machines[0].WoW64Container = 0;
+        machines[0].ReservedZero0 = 0;
+        /* wow64 machines */
+        for (i = 1; i < supported_machines_count; i++)
         {
-            USHORT flags = 2;  /* supported (?) */
-            if (!i) flags |= 5;  /* native machine (?) */
-            if (supported_machines[i] == machine) flags |= 8;  /* current machine */
-            ((DWORD *)info)[i] = MAKELONG( supported_machines[i], flags );
+            machines[i].Machine = supported_machines[i];
+            machines[i].UserMode = 1;
+            machines[i].Process = supported_machines[i] == machine;
+            machines[i].WoW64Container = 1;
         }
-        ((DWORD *)info)[i] = 0;
         ret = STATUS_SUCCESS;
         break;
     }
@@ -3448,7 +3767,10 @@ NTSTATUS WINAPI NtSystemDebugControl( SYSDBG_COMMAND command, void *in_buff, ULO
 {
     FIXME( "(%d, %p, %d, %p, %d, %p), stub\n",
            command, in_buff, (int)in_len, out_buff, (int)out_len, retlen );
-    return STATUS_NOT_IMPLEMENTED;
+
+    if (is_wow64()) return STATUS_NOT_IMPLEMENTED;
+
+    return STATUS_DEBUGGER_INACTIVE;
 }
 
 
@@ -3577,66 +3899,106 @@ static NTSTATUS fill_battery_state( SYSTEM_BATTERY_STATE *bs )
 
 static NTSTATUS fill_battery_state( SYSTEM_BATTERY_STATE *bs )
 {
-    CFArrayRef batteries;
-    CFDictionaryRef battery;
-    CFNumberRef prop;
-    uint32_t value, voltage;
-    CFTimeInterval remain;
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    CFArrayRef sources = IOPSCopyPowerSourcesList( blob );
+    CFIndex count, i;
+    CFDictionaryRef source = NULL;
+    CFTypeRef prop;
+    Boolean is_charging, is_internal, is_present;
+    int32_t value, voltage;
 
-    if (IOPMCopyBatteryInfo( 0, &batteries ) != kIOReturnSuccess)
-        return STATUS_ACCESS_DENIED;
-
-    if (CFArrayGetCount( batteries ) == 0)
+    if (!sources)
     {
-        /* Just assume we're on AC with no battery. */
+        if (blob) CFRelease( blob );
+        return STATUS_ACCESS_DENIED;
+    }
+
+    count = CFArrayGetCount( sources );
+
+    for (i = 0; i < count; i++)
+    {
+        source = IOPSGetPowerSourceDescription( blob, CFArrayGetValueAtIndex( sources, i ) );
+
+        if (!source)
+            continue;
+
+        prop = CFDictionaryGetValue( source, CFSTR(kIOPSTransportTypeKey) );
+        is_internal = !CFStringCompare( prop, CFSTR(kIOPSInternalType), 0 );
+
+        prop = CFDictionaryGetValue( source, CFSTR(kIOPSIsPresentKey) );
+        is_present = CFBooleanGetValue( prop );
+
+        if (is_internal && is_present)
+            break;
+    }
+
+    CFRelease( blob );
+
+    if (!source)
+    {
+        /* Just assume we're on AC with no internal power source. */
         bs->AcOnLine = TRUE;
+        CFRelease( sources );
         return STATUS_SUCCESS;
     }
-    /* Just use the first battery. */
-    battery = CFArrayGetValueAtIndex( batteries, 0 );
 
-    prop = CFDictionaryGetValue( battery, CFSTR(kIOBatteryFlagsKey) );
-    CFNumberGetValue( prop, kCFNumberSInt32Type, &value );
+    bs->BatteryPresent = TRUE;
 
-    if (value & kIOBatteryInstalled)
-        bs->BatteryPresent = TRUE;
-    else
-        /* Since we are executing code, we must have AC power. */
-        bs->AcOnLine = TRUE;
-    if (value & kIOBatteryChargerConnect)
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSIsChargingKey) );
+    is_charging = CFBooleanGetValue( prop );
+
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSPowerSourceStateKey) );
+
+    if (!CFStringCompare( prop, CFSTR(kIOPSACPowerValue), 0 ))
     {
         bs->AcOnLine = TRUE;
-        if (value & kIOBatteryCharge)
+        if (is_charging)
             bs->Charging = TRUE;
     }
     else
         bs->Discharging = TRUE;
 
     /* We'll need the voltage to be able to interpret the other values. */
-    prop = CFDictionaryGetValue( battery, CFSTR(kIOBatteryVoltageKey) );
-    CFNumberGetValue( prop, kCFNumberSInt32Type, &voltage );
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSVoltageKey) );
+    if (prop)
+        CFNumberGetValue( prop, kCFNumberIntType, &voltage );
+    else
+        /* kIOPSVoltageKey is optional and might not be populated.
+         * Assume 11.4 V then, which is a common value for Apple laptops. */
+        voltage = 11400;
 
-    prop = CFDictionaryGetValue( battery, CFSTR(kIOBatteryCapacityKey) );
-    CFNumberGetValue( prop, kCFNumberSInt32Type, &value );
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSMaxCapacityKey) );
+    CFNumberGetValue( prop, kCFNumberIntType, &value );
     bs->MaxCapacity = value * voltage;
     /* Apple uses "estimated time < 10:00" and "22%" for these, but we'll follow
      * Windows for now (5% and 33%). */
     bs->DefaultAlert1 = bs->MaxCapacity / 20;
     bs->DefaultAlert2 = bs->MaxCapacity / 3;
 
-    prop = CFDictionaryGetValue( battery, CFSTR(kIOBatteryCurrentChargeKey) );
-    CFNumberGetValue( prop, kCFNumberSInt32Type, &value );
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSCurrentCapacityKey) );
+    CFNumberGetValue( prop, kCFNumberIntType, &value );
     bs->RemainingCapacity = value * voltage;
 
-    prop = CFDictionaryGetValue( battery, CFSTR(kIOBatteryAmperageKey) );
-    CFNumberGetValue( prop, kCFNumberSInt32Type, &value );
-    bs->Rate = value * voltage;
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSCurrentKey) );
+    if (prop)
+        CFNumberGetValue( prop, kCFNumberIntType, &value );
+    else
+        /* kIOPSCurrentKey is optional and might not be populated. */
+        value = 0;
 
-    remain = IOPSGetTimeRemainingEstimate();
-    if (remain != kIOPSTimeRemainingUnknown && remain != kIOPSTimeRemainingUnlimited)
-        bs->EstimatedTime = (ULONG)remain;
+    bs->Rate = value * voltage / 1000;
 
-    CFRelease( batteries );
+    prop = CFDictionaryGetValue( source, CFSTR(kIOPSTimeToEmptyKey) );
+    if (prop)
+    {
+        CFNumberGetValue( prop, kCFNumberIntType, &value );
+        if (value > 0)
+            /*  A value of -1 indicates "Still Calculating the Time",
+             * otherwise estimated minutes left on the battery. */
+            bs->EstimatedTime = value * 60;
+    }
+
+    CFRelease( sources );
     return STATUS_SUCCESS;
 }
 
@@ -3777,7 +4139,7 @@ NTSTATUS WINAPI NtPowerInformation( POWER_INFORMATION_LEVEL level, void *input, 
             FILE* f;
 
             for(i = 0; i < out_cpus; i++) {
-                sprintf(filename, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+                snprintf(filename, sizeof(filename), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
                 f = fopen(filename, "r");
                 if (f && (fscanf(f, "%u", &val) == 1)) {
                     cpu_power[i].MaxMhz = val / 1000;
@@ -3796,7 +4158,7 @@ NTSTATUS WINAPI NtPowerInformation( POWER_INFORMATION_LEVEL level, void *input, 
                     if(f) fclose(f);
                 }
 
-                sprintf(filename, "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", i);
+                snprintf(filename, sizeof(filename), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", i);
                 f = fopen(filename, "r");
                 if(f && (fscanf(f, "%u", &val) == 1)) {
                     cpu_power[i].MhzLimit = val / 1000;

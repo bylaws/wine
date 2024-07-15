@@ -3159,11 +3159,7 @@ static BOOL pdb_load_stream_name_table(struct pdb_file_info* pdb_file, const cha
     /* bitfield: first dword is len (in dword), then data */
     ok_bits = pdw;
     pdw += *ok_bits++ + 1;
-    if (*pdw++ != 0)
-    {
-        FIXME("unexpected value\n");
-        return FALSE;
-    }
+    pdw += *pdw + 1; /* skip deleted vector */
 
     for (i = j = 0; i < count; i++)
     {
@@ -3317,11 +3313,11 @@ static HANDLE map_pdb_file(const struct process* pcs,
     switch (lookup->kind)
     {
     case PDB_JG:
-        ret = path_find_symbol_file(pcs, module, lookup->filename, DMT_PDB, NULL, lookup->timestamp,
+        ret = path_find_symbol_file(pcs, module, lookup->filename, TRUE, NULL, lookup->timestamp,
                                     lookup->age, dbg_file_path, &module->module.PdbUnmatched);
         break;
     case PDB_DS:
-        ret = path_find_symbol_file(pcs, module, lookup->filename, DMT_PDB, &lookup->guid, 0,
+        ret = path_find_symbol_file(pcs, module, lookup->filename, TRUE, &lookup->guid, 0,
                                     lookup->age, dbg_file_path, &module->module.PdbUnmatched);
         break;
     }
@@ -3809,6 +3805,7 @@ static BOOL pdb_process_internal(const struct process* pcs,
             /* no fpo ext stream in this case */
             break;
         case sizeof(PDB_STREAM_INDEXES):
+        case sizeof(PDB_STREAM_INDEXES) + 2:
             psi = (PDB_STREAM_INDEXES*)((const char*)symbols_image + sizeof(PDB_SYMBOLS) +
                                         symbols.module_size + symbols.sectcontrib_size +
                                         symbols.segmap_size + symbols.srcmodule_size +

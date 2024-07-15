@@ -70,7 +70,9 @@
 @ stdcall -norelay KiRaiseUserExceptionDispatcher()
 @ stdcall -norelay KiUserApcDispatcher(ptr long long long ptr)
 @ stdcall -norelay KiUserCallbackDispatcher(long ptr long)
+@ stdcall -norelay -arch=arm,arm64,arm64ec KiUserCallbackDispatcherReturn()
 @ stdcall -norelay KiUserExceptionDispatcher(ptr ptr)
+@ stdcall -norelay -arch=arm64ec KiUserEmulationDispatcher(ptr)
 # @ stub LdrAccessOutOfProcessResource
 @ stdcall LdrAccessResource(long ptr ptr ptr)
 @ stdcall LdrAddDllDirectory(ptr ptr)
@@ -192,7 +194,7 @@
 @ stdcall -syscall NtCreateThread(ptr long ptr long ptr ptr ptr long)
 @ stdcall -syscall NtCreateThreadEx(ptr long ptr long ptr ptr long long long long ptr)
 @ stdcall -syscall NtCreateTimer(ptr long ptr long)
-# @ stub NtCreateToken
+@ stdcall -syscall NtCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -syscall NtCreateTransaction(ptr long ptr ptr long long long long ptr ptr)
 @ stdcall -syscall NtCreateUserProcess(ptr ptr long long ptr ptr long long ptr ptr ptr)
 # @ stub NtCreateWaitablePort
@@ -483,8 +485,8 @@
 @ stdcall RtlAddAuditAccessAceEx(ptr long long long ptr long long)
 @ stdcall RtlAddAuditAccessObjectAce(ptr long long long ptr ptr ptr long long)
 # @ stub RtlAddCompoundAce
-@ cdecl -arch=arm,arm64,x86_64 RtlAddFunctionTable(ptr long long)
-@ stdcall -arch=arm,arm64,x86_64 RtlAddGrowableFunctionTable(ptr ptr long long long long)
+@ cdecl -arch=!i386 RtlAddFunctionTable(ptr long long)
+@ stdcall -arch=!i386 RtlAddGrowableFunctionTable(ptr ptr long long long long)
 @ stdcall RtlAddMandatoryAce(ptr long long long long ptr)
 @ stdcall RtlAddProcessTrustLabelAce(ptr long long ptr long long)
 # @ stub RtlAddRange
@@ -551,7 +553,7 @@
 @ stdcall RtlCopyExtendedContext(ptr long ptr)
 @ stdcall RtlCopyLuid(ptr ptr)
 @ stdcall RtlCopyLuidAndAttributesArray(long ptr ptr)
-@ stdcall -arch=x86_64 RtlCopyMemory(ptr ptr long)
+@ stdcall -arch=!i386 RtlCopyMemory(ptr ptr long)
 @ stdcall -arch=x86_64 RtlCopyMemoryNonTemporal(ptr ptr long) RtlCopyMemory
 # @ stub RtlCopyMemoryStreamTo
 # @ stub RtlCopyOutOfProcessMemoryStreamTo
@@ -599,10 +601,10 @@
 @ stdcall RtlDeleteAce(ptr long)
 @ stdcall RtlDeleteAtomFromAtomTable(ptr long)
 @ stdcall RtlDeleteCriticalSection(ptr)
-@ stdcall -arch=arm,arm64,x86_64 RtlDeleteGrowableFunctionTable(ptr)
+@ stdcall -arch=!i386 RtlDeleteGrowableFunctionTable(ptr)
 @ stub RtlDeleteElementGenericTable
 @ stub RtlDeleteElementGenericTableAvl
-@ cdecl -arch=arm,arm64,x86_64 RtlDeleteFunctionTable(ptr)
+@ cdecl -arch=!i386 RtlDeleteFunctionTable(ptr)
 @ stub RtlDeleteNoSplay
 @ stub RtlDeleteOwnersRanges
 @ stub RtlDeleteRange
@@ -714,7 +716,7 @@
 @ stub RtlGenerate8dot3Name
 @ stdcall RtlGetAce(ptr long ptr)
 @ stdcall RtlGetActiveActivationContext(ptr)
-@ stub RtlGetCallersAddress
+@ stdcall RtlGetCallersAddress(ptr ptr)
 @ stdcall RtlGetCompressionWorkSpaceSize(long ptr ptr)
 @ stdcall RtlGetControlSecurityDescriptor(ptr ptr ptr)
 @ stdcall RtlGetCurrentDirectory_U(long ptr)
@@ -740,8 +742,7 @@
 # @ stub RtlGetLengthWithoutTrailingPathSeperators
 @ stdcall RtlGetLocaleFileMappingAddress(ptr ptr ptr)
 @ stdcall RtlGetLongestNtPathLength()
-@ stdcall -syscall -arch=win32 RtlGetNativeSystemInformation(long ptr long ptr) NtWow64GetNativeSystemInformation
-@ stdcall -syscall -arch=win64 RtlGetNativeSystemInformation(long ptr long ptr) NtQuerySystemInformation
+@ stdcall RtlGetNativeSystemInformation(long ptr long ptr)
 # @ stub RtlGetNextRange
 @ stdcall RtlGetNtGlobalFlags()
 @ stdcall RtlGetNtProductType(ptr)
@@ -763,7 +764,7 @@
 @ stdcall RtlGetUserInfoHeap(ptr long ptr ptr ptr)
 @ stdcall RtlGetUserPreferredUILanguages(long long ptr ptr ptr)
 @ stdcall RtlGetVersion(ptr)
-@ stdcall -arch=arm,arm64,x86_64 RtlGrowFunctionTable(ptr long)
+@ stdcall -arch=!i386 RtlGrowFunctionTable(ptr long)
 @ stub RtlGuidToPropertySetName
 @ stdcall RtlHashUnicodeString(ptr long long ptr)
 @ stdcall RtlIdentifierAuthoritySid(ptr)
@@ -805,7 +806,7 @@
 # @ stub RtlInitializeStackTraceDataBase
 @ stub RtlInsertElementGenericTable
 @ stdcall RtlInsertElementGenericTableAvl(ptr ptr long ptr)
-@ cdecl -arch=arm,arm64,x86_64 RtlInstallFunctionTableCallback(long long long ptr ptr wstr)
+@ cdecl -arch=!i386 RtlInstallFunctionTableCallback(long long long ptr ptr wstr)
 @ stdcall RtlInt64ToUnicodeString(int64 long ptr)
 @ stdcall RtlIntegerToChar(long long long ptr)
 @ stdcall RtlIntegerToUnicodeString(long long ptr)
@@ -875,7 +876,8 @@
 @ stdcall RtlLookupAtomInAtomTable(ptr wstr ptr)
 @ stdcall RtlLookupElementGenericTable(ptr ptr)
 # @ stub RtlLookupElementGenericTableAvl
-@ stdcall -arch=arm,arm64,x86_64 RtlLookupFunctionEntry(long ptr ptr)
+@ stdcall -arch=!i386 RtlLookupFunctionEntry(long ptr ptr)
+@ stdcall -arch=!i386 RtlLookupFunctionTable(long ptr ptr)
 @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlMapGenericMask(ptr ptr)
 # @ stub RtlMapSecurityErrorToNtStatus
@@ -901,6 +903,7 @@
 @ stdcall RtlOemStringToUnicodeSize(ptr)
 @ stdcall RtlOemStringToUnicodeString(ptr ptr long)
 @ stdcall RtlOemToUnicodeN(ptr long ptr ptr long)
+@ stdcall -arch=win64 RtlOpenCrossProcessEmulatorWorkConnection(long ptr ptr)
 @ stdcall RtlOpenCurrentUser(long ptr)
 @ stdcall RtlPcToFileHeader(ptr ptr)
 @ stdcall RtlPinAtomInAtomTable(ptr long)
@@ -1067,7 +1070,7 @@
 @ stdcall RtlUnlockHeap(long)
 # @ stub RtlUnlockMemoryStreamRegion
 @ stdcall -norelay RtlUnwind(ptr ptr ptr ptr)
-@ stdcall -arch=arm,arm64,x86_64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr)
+@ stdcall -arch=!i386 RtlUnwindEx(ptr ptr ptr ptr ptr ptr)
 @ stdcall RtlUpcaseUnicodeChar(long)
 @ stdcall RtlUpcaseUnicodeString(ptr ptr long)
 @ stdcall RtlUpcaseUnicodeStringToAnsiString(ptr ptr long)
@@ -1090,13 +1093,14 @@
 @ stub RtlValidateProcessHeaps
 # @ stub RtlValidateUnicodeString
 @ stdcall RtlVerifyVersionInfo(ptr long int64)
-@ stdcall -arch=arm,arm64,x86_64 RtlVirtualUnwind(long long long ptr ptr ptr ptr ptr)
+@ stdcall -arch=!i386 RtlVirtualUnwind(long long long ptr ptr ptr ptr ptr)
+@ stdcall -arch=!i386 RtlVirtualUnwind2(long long long ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stdcall RtlWaitOnAddress(ptr ptr long ptr)
 @ stdcall RtlWakeAddressAll(ptr)
 @ stdcall RtlWakeAddressSingle(ptr)
 @ stdcall RtlWakeAllConditionVariable(ptr)
 @ stdcall RtlWakeConditionVariable(ptr)
-@ stub RtlWalkFrameChain
+@ stdcall RtlWalkFrameChain(ptr long long)
 @ stdcall RtlWalkHeap(long ptr)
 @ stdcall RtlWow64EnableFsRedirection(long)
 @ stdcall RtlWow64EnableFsRedirectionEx(long ptr)
@@ -1108,7 +1112,13 @@
 @ stdcall -arch=win64 RtlWow64GetThreadContext(long ptr)
 @ stdcall -arch=win64 RtlWow64GetThreadSelectorEntry(long ptr long ptr)
 @ stdcall RtlWow64IsWowGuestMachineSupported(long ptr)
+@ stdcall -arch=win64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
+@ stdcall -arch=win64 RtlWow64PopCrossProcessWorkFromFreeList(ptr)
+@ stdcall -arch=win64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)
+@ stdcall -arch=win64 RtlWow64PushCrossProcessWorkOntoWorkList(ptr ptr ptr)
+@ stdcall -arch=win64 RtlWow64RequestCrossProcessHeavyFlush(ptr)
 @ stdcall -arch=win64 RtlWow64SetThreadContext(long ptr)
+@ stdcall -arch=win64 RtlWow64SuspendThread(long ptr)
 @ stub RtlWriteMemoryStream
 @ stdcall RtlWriteRegistryValue(long ptr wstr long ptr long)
 @ stub RtlZeroHeap
@@ -1169,6 +1179,7 @@
 @ stdcall WinSqmIncrementDWORD(long long long)
 @ stdcall WinSqmIsOptedIn()
 @ stdcall WinSqmSetDWORD(ptr long long)
+@ stdcall WinSqmSetIfMaxDWORD(long long long)
 @ stdcall WinSqmStartSession(ptr long long)
 @ extern -arch=win32 Wow64Transition
 @ stdcall -private -syscall ZwAcceptConnectPort(ptr long ptr long ptr ptr) NtAcceptConnectPort
@@ -1235,7 +1246,7 @@
 @ stdcall -private -syscall ZwCreateThread(ptr long ptr long ptr ptr ptr long) NtCreateThread
 @ stdcall -private -syscall ZwCreateThreadEx(ptr long ptr long ptr ptr long long long long ptr) NtCreateThreadEx
 @ stdcall -private -syscall ZwCreateTimer(ptr long ptr long) NtCreateTimer
-# @ stub ZwCreateToken
+@ stdcall -private -syscall ZwCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr) NtCreateToken
 @ stdcall -private -syscall ZwCreateUserProcess(ptr ptr long long ptr ptr long long ptr ptr ptr) NtCreateUserProcess
 # @ stub ZwCreateWaitablePort
 @ stdcall -private -syscall ZwDebugActiveProcess(long long) NtDebugActiveProcess
@@ -1497,12 +1508,13 @@
 @ cdecl -private -arch=i386 _CIpow()
 @ cdecl -private -arch=i386 _CIsin()
 @ cdecl -private -arch=i386 _CIsqrt()
-@ stdcall -arch=x86_64,arm,arm64 __C_specific_handler(ptr long ptr ptr)
-@ cdecl -arch=arm,arm64,x86_64 -norelay __chkstk()
+@ stdcall -arch=!i386 __C_specific_handler(ptr long ptr ptr)
+@ cdecl -arch=!i386 -norelay __chkstk()
+@ cdecl -arch=arm64ec -norelay __chkstk_arm64ec()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
-@ stdcall -arch=arm __jump_unwind(ptr ptr)
+@ stdcall -arch=arm __jump_unwind(ptr ptr) _local_unwind
 @ cdecl __toascii(long)
 @ cdecl -norelay -arch=i386 -ret64 _alldiv(int64 int64)
 @ cdecl -arch=i386 -norelay _alldvrm(int64 int64)
@@ -1531,7 +1543,7 @@
 @ cdecl _itow(long ptr long)
 @ cdecl _itow_s(long ptr long long)
 @ cdecl _lfind(ptr ptr ptr long ptr)
-@ stdcall -arch=x86_64,arm64 _local_unwind(ptr ptr)
+@ stdcall -arch=win64 _local_unwind(ptr ptr)
 @ cdecl _ltoa(long ptr long)
 @ cdecl _ltoa_s(long ptr long long)
 @ cdecl _ltow(long ptr long)
@@ -1539,6 +1551,8 @@
 @ cdecl _makepath_s(ptr long str str str str)
 @ cdecl _memccpy(ptr ptr long long)
 @ cdecl _memicmp(str str long)
+@ cdecl -norelay -arch=arm,x86_64 _setjmp(ptr ptr) NTDLL__setjmpex
+@ cdecl -norelay -arch=!i386 _setjmpex(ptr ptr) NTDLL__setjmpex
 @ varargs _snprintf(ptr long str) NTDLL__snprintf
 @ varargs _snprintf_s(ptr long long str)
 @ varargs _snwprintf(ptr long wstr)
@@ -1617,6 +1631,7 @@
 @ cdecl isxdigit(long)
 @ cdecl labs(long) abs
 @ cdecl log(double)
+@ cdecl -arch=!i386 longjmp(ptr long) NTDLL_longjmp
 @ cdecl mbstowcs(ptr str long)
 @ cdecl memchr(ptr long long)
 @ cdecl memcmp(ptr ptr long)
@@ -1702,12 +1717,13 @@
 @ cdecl wine_server_handle_to_fd(long long ptr ptr)
 
 # Unix interface
-@ stdcall __wine_unix_call(int64 long ptr)
 @ stdcall __wine_unix_spawnvp(long ptr)
 @ stdcall __wine_ctrl_routine(ptr)
 @ extern -private __wine_syscall_dispatcher
 @ extern -private __wine_unix_call_dispatcher
+@ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
 @ extern -private __wine_unixlib_handle
+@ stdcall -syscall __wine_set_unix_env(ptr ptr)
 
 # Debugging
 @ stdcall -norelay __wine_dbg_write(ptr long)
@@ -1715,6 +1731,7 @@
 @ cdecl -norelay __wine_dbg_header(long long str)
 @ cdecl -norelay __wine_dbg_output(str)
 @ cdecl -norelay __wine_dbg_strdup(str)
+@ stdcall -syscall -norelay __wine_dbg_ftrace(ptr long long)
 
 # Version
 @ cdecl wine_get_version()
@@ -1724,3 +1741,4 @@
 # Filesystem
 @ stdcall -syscall wine_nt_to_unix_file_name(ptr ptr ptr long)
 @ stdcall -syscall wine_unix_to_nt_file_name(str ptr ptr)
+@ stdcall -syscall __wine_needs_override_large_address_aware()

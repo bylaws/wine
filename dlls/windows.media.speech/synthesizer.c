@@ -23,6 +23,219 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(speech);
 
+struct voice_information
+{
+    IVoiceInformation IVoiceInformation_iface;
+    LONG ref;
+
+    HSTRING id;
+    HSTRING display_name;
+    HSTRING language;
+    HSTRING description;
+    VoiceGender gender;
+    BOOL is_static;
+};
+
+static inline struct voice_information *impl_from_IVoiceInformation( IVoiceInformation *iface )
+{
+    return CONTAINING_RECORD(iface, struct voice_information, IVoiceInformation_iface);
+}
+
+static void voice_information_delete( struct voice_information *voice_info )
+{
+    WindowsDeleteString(voice_info->id);
+    WindowsDeleteString(voice_info->display_name);
+    WindowsDeleteString(voice_info->language);
+    WindowsDeleteString(voice_info->description);
+    free(voice_info);
+}
+
+static HRESULT WINAPI voice_information_QueryInterface( IVoiceInformation *iface, REFIID iid, void **ppvObject)
+{
+    struct voice_information *impl = impl_from_IVoiceInformation( iface );
+
+    TRACE("iface %p, riid %s, ppv %p\n", iface, wine_dbgstr_guid(iid), ppvObject);
+
+    if (IsEqualGUID(iid, &IID_IUnknown) ||
+        IsEqualGUID(iid, &IID_IInspectable) ||
+        IsEqualGUID(iid, &IID_IVoiceInformation))
+    {
+        IInspectable_AddRef((*ppvObject = &impl->IVoiceInformation_iface));
+        return S_OK;
+    }
+
+    WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI voice_information_AddRef( IVoiceInformation *iface )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+    ULONG ref = InterlockedIncrement(&impl->ref);
+    TRACE("iface %p, ref %lu.\n", iface, ref);
+    return ref;
+}
+
+static ULONG WINAPI voice_information_Release( IVoiceInformation *iface )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+    ULONG ref = InterlockedDecrement(&impl->ref);
+    TRACE("iface %p, ref %lu.\n", iface, ref);
+    /* only deallocate non static instances */
+    if (!ref && !impl->is_static)
+        voice_information_delete(impl);
+    return ref;
+}
+
+static HRESULT WINAPI voice_information_GetIids( IVoiceInformation *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME("iface %p, iid_count %p, iids %p stub!\n", iface, iid_count, iids);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI voice_information_GetRuntimeClassName( IVoiceInformation *iface, HSTRING *class_name )
+{
+    FIXME("iface %p, class_name %p stub!\n", iface, class_name);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI voice_information_GetTrustLevel( IVoiceInformation *iface, TrustLevel *trust_level )
+{
+    FIXME("iface %p, trust_level %p stub!\n", iface, trust_level);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI voice_information_get_DisplayName( IVoiceInformation *iface, HSTRING *value )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+
+    TRACE("iface %p, value %p!n", iface, value);
+    return WindowsDuplicateString(impl->display_name, value);
+}
+
+static HRESULT WINAPI voice_information_get_Id( IVoiceInformation *iface, HSTRING *value )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+
+    TRACE("iface %p, value %p\n", iface, value);
+    return WindowsDuplicateString(impl->id, value);
+}
+
+static HRESULT WINAPI voice_information_get_Language( IVoiceInformation *iface, HSTRING *value )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+
+    TRACE("iface %p, value %p\n", iface, value);
+    return WindowsDuplicateString(impl->language, value);
+}
+
+static HRESULT WINAPI voice_information_get_Description( IVoiceInformation *iface, HSTRING *value )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+
+    TRACE("iface %p, value %p\n", iface, value);
+    return WindowsDuplicateString(impl->description, value);
+}
+
+static HRESULT WINAPI voice_information_get_Gender( IVoiceInformation *iface, VoiceGender *value )
+{
+    struct voice_information *impl = impl_from_IVoiceInformation(iface);
+
+    TRACE("iface %p, value %p\n", iface, value);
+    *value = impl->gender;
+    return S_OK;
+}
+
+static const struct IVoiceInformationVtbl voice_information_vtbl =
+{
+    /*** IUnknown methods ***/
+    voice_information_QueryInterface,
+    voice_information_AddRef,
+    voice_information_Release,
+
+    /*** IInspectable methods ***/
+    voice_information_GetIids,
+    voice_information_GetRuntimeClassName,
+    voice_information_GetTrustLevel,
+
+    /*** IVoiceInformation methods ***/
+    voice_information_get_DisplayName,
+    voice_information_get_Id,
+    voice_information_get_Language,
+    voice_information_get_Description,
+    voice_information_get_Gender,
+};
+
+HRESULT voice_information_allocate(const WCHAR *display_name, const WCHAR *id, const WCHAR *locale,
+                                   VoiceGender gender, IVoiceInformation **pvoice)
+{
+    struct voice_information *voice_info;
+    WCHAR *description;
+    HRESULT hr;
+    size_t len, langlen;
+
+    voice_info = calloc(1, sizeof(*voice_info));
+    if (!voice_info) return E_OUTOFMEMORY;
+
+    len = wcslen(display_name) + 3;
+    langlen = GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, NULL, 0);
+    description = malloc((len + langlen)  * sizeof(WCHAR));
+    wcscpy(description, display_name);
+    wcscat(description, L" - ");
+    GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, description + len, langlen);
+
+    hr = WindowsCreateString(display_name, wcslen(display_name), &voice_info->display_name);
+    if (SUCCEEDED(hr))
+        hr = WindowsCreateString(id, wcslen(id), &voice_info->id);
+    if (SUCCEEDED(hr))
+        hr = WindowsCreateString(locale, wcslen(locale), &voice_info->language);
+    if (SUCCEEDED(hr))
+        hr = WindowsCreateString(description, len + langlen - 1, &voice_info->description);
+    if (SUCCEEDED(hr))
+    {
+        voice_info->gender = gender;
+        voice_info->is_static = TRUE;
+        voice_info->IVoiceInformation_iface.lpVtbl = &voice_information_vtbl;
+        *pvoice = &voice_info->IVoiceInformation_iface;
+    }
+    else
+    {
+        voice_information_delete(voice_info);
+    }
+    free(description);
+    return hr;
+}
+
+HRESULT voice_information_clone(IVoiceInformation *voice, IVoiceInformation **out)
+{
+    struct voice_information *voice_info;
+    HRESULT hr;
+
+    voice_info = calloc(1, sizeof(*voice_info));
+    if (!voice_info) return E_OUTOFMEMORY;
+
+    hr = IVoiceInformation_get_DisplayName(voice, &voice_info->display_name);
+    if (SUCCEEDED(hr))
+        hr = IVoiceInformation_get_Id(voice, &voice_info->id);
+    if (SUCCEEDED(hr))
+        hr = IVoiceInformation_get_Language(voice, &voice_info->language);
+    if (SUCCEEDED(hr))
+        hr = IVoiceInformation_get_Description(voice, &voice_info->description);
+    if (SUCCEEDED(hr))
+        hr = IVoiceInformation_get_Gender(voice, &voice_info->gender);
+    if (SUCCEEDED(hr))
+    {
+        voice_info->IVoiceInformation_iface.lpVtbl = &voice_information_vtbl;
+        voice_info->ref = 1;
+        *out = &voice_info->IVoiceInformation_iface;
+    }
+    else
+        voice_information_delete(voice_info);
+
+    return hr;
+}
+
 /*
  *
  * IVectorView_VoiceInformation
@@ -33,6 +246,8 @@ struct voice_information_vector
 {
     IVectorView_VoiceInformation IVectorView_VoiceInformation_iface;
     LONG ref;
+
+    struct synth_provider provider;
 };
 
 static inline struct voice_information_vector *impl_from_IVectorView_VoiceInformation( IVectorView_VoiceInformation *iface )
@@ -44,7 +259,7 @@ static HRESULT WINAPI vector_view_voice_information_QueryInterface( IVectorView_
 {
     struct voice_information_vector *impl = impl_from_IVectorView_VoiceInformation(iface);
 
-    TRACE("iface %p, iid %s, out %p stub!\n", iface, debugstr_guid(iid), out);
+    TRACE("iface %p, iid %s, out %p\n", iface, debugstr_guid(iid), out);
 
     if (IsEqualGUID(iid, &IID_IUnknown) ||
         IsEqualGUID(iid, &IID_IInspectable) ||
@@ -95,23 +310,39 @@ static HRESULT WINAPI vector_view_voice_information_GetTrustLevel( IVectorView_V
 
 static HRESULT WINAPI vector_view_voice_information_GetAt( IVectorView_VoiceInformation *iface, UINT32 index, IVoiceInformation **value )
 {
-    FIXME("iface %p, index %#x, value %p stub!\n", iface, index, value);
-    *value = NULL;
-    return E_BOUNDS;
+    struct voice_information_vector *impl = impl_from_IVectorView_VoiceInformation(iface);
+    TRACE("iface %p, index %#x, value %p\n", iface, index, value);
+    if (index >= impl->provider.num_voices)
+    {
+        *value = NULL;
+        return E_BOUNDS;
+    }
+    IVoiceInformation_AddRef( *value = impl->provider.voices[index] );
+    return S_OK;
 }
 
 static HRESULT WINAPI vector_view_voice_information_get_Size( IVectorView_VoiceInformation *iface, UINT32 *value )
 {
-    FIXME("iface %p, value %p stub!\n", iface, value);
-    *value = 0;
+    struct voice_information_vector *impl = impl_from_IVectorView_VoiceInformation(iface);
+    TRACE("iface %p, value %p\n", iface, value);
+    *value = impl->provider.num_voices;
     return S_OK;
 }
 
 static HRESULT WINAPI vector_view_voice_information_IndexOf( IVectorView_VoiceInformation *iface,
                                                              IVoiceInformation *element, UINT32 *index, BOOLEAN *found )
 {
-    FIXME("iface %p, element %p, index %p, found %p stub!\n", iface, element, index, found);
-    *index = 0;
+    struct voice_information_vector *impl = impl_from_IVectorView_VoiceInformation(iface);
+    int i;
+
+    TRACE("iface %p, element %p, index %p, found %p\n", iface, element, index, found);
+    for (i = 0; i < impl->provider.num_voices; i++)
+        if (element == impl->provider.voices[i])
+        {
+            *index = i;
+            *found = TRUE;
+            return S_OK;
+        }
     *found = FALSE;
     return S_OK;
 }
@@ -119,8 +350,18 @@ static HRESULT WINAPI vector_view_voice_information_IndexOf( IVectorView_VoiceIn
 static HRESULT WINAPI vector_view_voice_information_GetMany( IVectorView_VoiceInformation *iface, UINT32 start_index,
                                                              UINT32 items_size, IVoiceInformation **items, UINT *value )
 {
-    FIXME("iface %p, start_index %#x, items %p, value %p stub!\n", iface, start_index, items, value);
-    *value = 0;
+    struct voice_information_vector *impl = impl_from_IVectorView_VoiceInformation(iface);
+    int i;
+
+    TRACE("iface %p, start_index %#x, items %p, value %p\n", iface, start_index, items, value);
+    if (start_index >= impl->provider.num_voices)
+    {
+        *value = 0;
+        return S_OK;
+    }
+    *value = min(impl->provider.num_voices - start_index, items_size);
+    for (i = 0; i < *value; i++)
+        IVoiceInformation_AddRef(items[i] = impl->provider.voices[start_index + i]);
     return S_OK;
 }
 
@@ -143,7 +384,8 @@ static const struct IVectorView_VoiceInformationVtbl vector_view_voice_informati
 static struct voice_information_vector all_voices =
 {
     {&vector_view_voice_information_vtbl},
-    0
+    0,
+    {},
 };
 
 /*
@@ -282,6 +524,309 @@ error:
 
 /*
  *
+ * SpeechSynthesizerOptions runtimeclass
+ *
+ */
+struct synthesizer_options
+{
+    ISpeechSynthesizerOptions ISpeechSynthesizerOptions_iface;
+    ISpeechSynthesizerOptions2 ISpeechSynthesizerOptions2_iface;
+    ISpeechSynthesizerOptions3 ISpeechSynthesizerOptions3_iface;
+    LONG ref;
+
+    /* options */
+    boolean include_word_boundary;
+    boolean include_sentence_boundary;
+
+    /* options 2 */
+    double audio_volume;
+    double speaking_rate;
+    double audio_pitch;
+
+    /* options 3 */
+    enum SpeechAppendedSilence appended_silence;
+    enum SpeechPunctuationSilence punctuation_silence;
+};
+
+static inline struct synthesizer_options *impl_from_ISpeechSynthesizerOptions( ISpeechSynthesizerOptions *iface )
+{
+    return CONTAINING_RECORD(iface, struct synthesizer_options, ISpeechSynthesizerOptions_iface);
+}
+
+static HRESULT WINAPI synthesizer_options_QueryInterface( ISpeechSynthesizerOptions *iface, REFIID iid, void **out)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+
+    TRACE("iface %p, iid %s, out %p stub!\n", iface, debugstr_guid(iid), out);
+
+    if (IsEqualGUID(iid, &IID_IUnknown) ||
+        IsEqualGUID(iid, &IID_IInspectable) ||
+        IsEqualGUID(iid, &IID_IAgileObject) ||
+        IsEqualGUID(iid, &IID_ISpeechSynthesizerOptions))
+    {
+        IInspectable_AddRef((*out = &impl->ISpeechSynthesizerOptions_iface));
+        return S_OK;
+    }
+
+    if (IsEqualGUID(iid, &IID_ISpeechSynthesizerOptions2))
+    {
+        IInspectable_AddRef((*out = &impl->ISpeechSynthesizerOptions2_iface));
+        return S_OK;
+    }
+
+    if (IsEqualGUID(iid, &IID_ISpeechSynthesizerOptions3))
+    {
+        IInspectable_AddRef((*out = &impl->ISpeechSynthesizerOptions3_iface));
+        return S_OK;
+    }
+
+    FIXME("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI synthesizer_options_AddRef( ISpeechSynthesizerOptions *iface )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    ULONG ref = InterlockedIncrement(&impl->ref);
+
+    TRACE("iface %p, ref %lu.\n", iface, ref);
+    return ref;
+}
+
+static ULONG WINAPI synthesizer_options_Release( ISpeechSynthesizerOptions *iface )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    ULONG ref = InterlockedDecrement(&impl->ref);
+
+    TRACE("iface %p, ref %lu.\n", iface, ref);
+    if (ref == 0)
+        free(impl);
+    return ref;
+}
+
+static HRESULT WINAPI synthesizer_options_GetIids( ISpeechSynthesizerOptions *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME("iface %p, iid_count %p, iids %p stub.\n", iface, iid_count, iids);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI synthesizer_options_GetRuntimeClassName( ISpeechSynthesizerOptions *iface, HSTRING *class_name )
+{
+    FIXME("iface %p, class_name %p stub.\n", iface, class_name);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI synthesizer_options_GetTrustLevel( ISpeechSynthesizerOptions *iface, TrustLevel *trust_level )
+{
+    FIXME("iface %p, trust_level %p stub.\n", iface, trust_level);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI synthesizer_options_get_IncludeWordBoundaryMetadata( ISpeechSynthesizerOptions *iface, boolean *value )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    TRACE("iface %p, value %p semi-stub.\n", iface, value);
+
+    *value = impl->include_word_boundary;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options_put_IncludeWordBoundaryMetadata( ISpeechSynthesizerOptions *iface, boolean value )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    TRACE("iface %p, value %s semi-stub.\n", iface, value ? "true" : "false");
+
+    impl->include_word_boundary = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options_get_IncludeSentenceBoundaryMetadata( ISpeechSynthesizerOptions *iface, boolean *value )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    TRACE("iface %p, value %p stub.\n", iface, value);
+
+    *value = impl->include_sentence_boundary;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options_put_IncludeSentenceBoundaryMetadata( ISpeechSynthesizerOptions *iface, boolean value )
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions(iface);
+    TRACE("iface %p, value %s stub.\n", iface, value ? "true" : "false");
+
+    impl->include_sentence_boundary = value;
+    return S_OK;
+}
+
+static const struct ISpeechSynthesizerOptionsVtbl synthesizer_options_vtbl =
+{
+    /*** IUnknown methods ***/
+    synthesizer_options_QueryInterface,
+    synthesizer_options_AddRef,
+    synthesizer_options_Release,
+    /*** IInspectable methods ***/
+    synthesizer_options_GetIids,
+    synthesizer_options_GetRuntimeClassName,
+    synthesizer_options_GetTrustLevel,
+    /*** ISpeechSynthesizerOptions methods ***/
+    synthesizer_options_get_IncludeWordBoundaryMetadata,
+    synthesizer_options_put_IncludeWordBoundaryMetadata,
+    synthesizer_options_get_IncludeSentenceBoundaryMetadata,
+    synthesizer_options_put_IncludeSentenceBoundaryMetadata,
+};
+
+DEFINE_IINSPECTABLE(synthesizer_options2, ISpeechSynthesizerOptions2, struct synthesizer_options, ISpeechSynthesizerOptions_iface)
+
+static HRESULT WINAPI synthesizer_options2_get_AudioVolume( ISpeechSynthesizerOptions2 *iface, DOUBLE *value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %p semi-stub!\n", iface, value);
+    *value = impl->audio_volume;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options2_put_AudioVolume( ISpeechSynthesizerOptions2 *iface, DOUBLE value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %g semi-stub!\n", iface, value);
+    impl->audio_volume = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options2_get_SpeakingRate( ISpeechSynthesizerOptions2 *iface, DOUBLE *value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %p semi-stub!\n", iface, value);
+    *value = impl->speaking_rate;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options2_put_SpeakingRate( ISpeechSynthesizerOptions2 *iface, DOUBLE value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %g semi-stub!\n", iface, value);
+    impl->speaking_rate = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options2_get_AudioPitch( ISpeechSynthesizerOptions2 *iface, DOUBLE *value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %p semi-stub!\n", iface, value);
+    *value = impl->audio_pitch;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options2_put_AudioPitch( ISpeechSynthesizerOptions2 *iface, DOUBLE value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions2(iface);
+
+    TRACE("iface %p value %g semi-stub!\n", iface, value);
+    impl->audio_pitch = value;
+    return S_OK;
+}
+
+static const struct ISpeechSynthesizerOptions2Vtbl synthesizer_options2_vtbl =
+{
+    /*** IUnknown methods ***/
+    synthesizer_options2_QueryInterface,
+    synthesizer_options2_AddRef,
+    synthesizer_options2_Release,
+    /*** IInspectable methods ***/
+    synthesizer_options2_GetIids,
+    synthesizer_options2_GetRuntimeClassName,
+    synthesizer_options2_GetTrustLevel,
+    /*** ISpeechSynthesizerOptions methods ***/
+    synthesizer_options2_get_AudioVolume,
+    synthesizer_options2_put_AudioVolume,
+    synthesizer_options2_get_SpeakingRate,
+    synthesizer_options2_put_SpeakingRate,
+    synthesizer_options2_get_AudioPitch,
+    synthesizer_options2_put_AudioPitch,
+};
+
+DEFINE_IINSPECTABLE(synthesizer_options3, ISpeechSynthesizerOptions3, struct synthesizer_options, ISpeechSynthesizerOptions_iface)
+
+static HRESULT WINAPI synthesizer_options3_get_AppendedSilence( ISpeechSynthesizerOptions3 *iface, enum SpeechAppendedSilence *value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions3(iface);
+
+    TRACE("iface %p value %p semi-stub!\n", iface, value);
+    *value = impl->appended_silence;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options3_put_AppendedSilence( ISpeechSynthesizerOptions3 *iface, enum SpeechAppendedSilence value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions3(iface);
+
+    TRACE("iface %p value %u semi-stub!\n", iface, value);
+    impl->appended_silence = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options3_get_PunctuationSilence( ISpeechSynthesizerOptions3 *iface, enum SpeechPunctuationSilence *value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions3(iface);
+
+    TRACE("iface %p value %p semi-stub!\n", iface, value);
+    *value = impl->punctuation_silence;
+    return S_OK;
+}
+
+static HRESULT WINAPI synthesizer_options3_put_PunctuationSilence( ISpeechSynthesizerOptions3 *iface, enum SpeechPunctuationSilence value)
+{
+    struct synthesizer_options *impl = impl_from_ISpeechSynthesizerOptions3(iface);
+
+    TRACE("iface %p value %u semi-stub!\n", iface, value);
+    impl->punctuation_silence = value;
+    return S_OK;
+}
+
+static const struct ISpeechSynthesizerOptions3Vtbl synthesizer_options3_vtbl =
+{
+    /*** IUnknown methods ***/
+    synthesizer_options3_QueryInterface,
+    synthesizer_options3_AddRef,
+    synthesizer_options3_Release,
+    /*** IInspectable methods ***/
+    synthesizer_options3_GetIids,
+    synthesizer_options3_GetRuntimeClassName,
+    synthesizer_options3_GetTrustLevel,
+    /*** ISpeechSynthesizerOptions methods ***/
+    synthesizer_options3_get_AppendedSilence,
+    synthesizer_options3_put_AppendedSilence,
+    synthesizer_options3_get_PunctuationSilence,
+    synthesizer_options3_put_PunctuationSilence,
+};
+
+static HRESULT synthesizer_options_allocate( struct synthesizer_options **out )
+{
+    struct synthesizer_options *options;
+
+    if (!(options = calloc(1, sizeof(*options)))) return E_OUTOFMEMORY;
+
+    options->ISpeechSynthesizerOptions_iface.lpVtbl = &synthesizer_options_vtbl;
+    options->ISpeechSynthesizerOptions2_iface.lpVtbl = &synthesizer_options2_vtbl;
+    options->ISpeechSynthesizerOptions3_iface.lpVtbl = &synthesizer_options3_vtbl;
+    /* all other values default to 0 or false */
+    options->audio_pitch = 1.0;
+    options->audio_volume = 1.0;
+    options->speaking_rate = 1.0;
+    options->ref = 1;
+    *out = options;
+
+    return S_OK;
+}
+
+/*
+ *
  * SpeechSynthesizer runtimeclass
  *
  */
@@ -292,6 +837,9 @@ struct synthesizer
     ISpeechSynthesizer2 ISpeechSynthesizer2_iface;
     IClosable IClosable_iface;
     LONG ref;
+
+    struct synthesizer_options *options;
+    IVoiceInformation *current_voice;
 };
 
 /*
@@ -352,7 +900,13 @@ static ULONG WINAPI synthesizer_Release( ISpeechSynthesizer *iface )
     TRACE("iface %p, ref %lu.\n", iface, ref);
 
     if (!ref)
+    {
+        if (impl->options)
+            ISpeechSynthesizerOptions_Release(&impl->options->ISpeechSynthesizerOptions_iface);
+        if (impl->current_voice)
+            IVoiceInformation_Release(impl->current_voice);
         free(impl);
+    }
 
     return ref;
 }
@@ -403,14 +957,49 @@ static HRESULT WINAPI synthesizer_SynthesizeSsmlToStreamAsync( ISpeechSynthesize
 
 static HRESULT WINAPI synthesizer_put_Voice( ISpeechSynthesizer *iface, IVoiceInformation *value )
 {
-    FIXME("iface %p, value %p stub.\n", iface, value);
-    return E_NOTIMPL;
+    struct synthesizer *impl = impl_from_ISpeechSynthesizer(iface);
+    IVoiceInformation *voice;
+    HSTRING id, id2;
+    HRESULT hr;
+    INT32 cmp, idx;
+
+    TRACE("iface %p, value %p semi-stub.\n", iface, value);
+
+    hr = IVoiceInformation_get_Id(value, &id);
+    if (FAILED(hr)) return hr;
+
+    for (idx = 0; ; idx++)
+    {
+        if (SUCCEEDED(hr = IVectorView_VoiceInformation_GetAt(&all_voices.IVectorView_VoiceInformation_iface, idx, &voice)))
+        {
+            if (SUCCEEDED(hr = IVoiceInformation_get_Id(voice, &id2)))
+            {
+                hr = WindowsCompareStringOrdinal(id, id2, &cmp);
+                WindowsDeleteString(id2);
+            }
+            IVoiceInformation_Release(voice);
+        }
+        if (FAILED(hr) || cmp == 0) break;
+    }
+    WindowsDeleteString(id);
+
+    if (SUCCEEDED(hr))
+    {
+        if (impl->current_voice)
+            IVoiceInformation_Release(impl->current_voice);
+        IVoiceInformation_AddRef(impl->current_voice = value);
+    }
+    return hr;
 }
 
 static HRESULT WINAPI synthesizer_get_Voice( ISpeechSynthesizer *iface, IVoiceInformation **value )
 {
-    FIXME("iface %p, value %p stub.\n", iface, value);
-    return E_NOTIMPL;
+    struct synthesizer *impl = impl_from_ISpeechSynthesizer(iface);
+
+    TRACE("iface %p, value %p.\n", iface, value);
+    if (!impl->current_voice) return E_NOTIMPL;
+    IVoiceInformation_AddRef(*value = impl->current_voice);
+    return S_OK;
 }
 
 static const struct ISpeechSynthesizerVtbl synthesizer_vtbl =
@@ -440,8 +1029,21 @@ DEFINE_IINSPECTABLE(synthesizer2, ISpeechSynthesizer2, struct synthesizer, ISpee
 
 static HRESULT WINAPI synthesizer2_get_Options( ISpeechSynthesizer2 *iface, ISpeechSynthesizerOptions **value )
 {
-    FIXME("iface %p, value %p stub.\n", iface, value);
-    return E_NOTIMPL;
+    struct synthesizer *impl = impl_from_ISpeechSynthesizer2(iface);
+
+    WARN("iface %p, value %p semi-stub.\n", iface, value);
+    if (!impl->options)
+    {
+        struct synthesizer_options *options;
+        HRESULT hr = synthesizer_options_allocate(&options);
+        if (FAILED(hr)) return hr;
+
+        if (InterlockedCompareExchangePointer((void **)&impl->options, options, NULL) != NULL)
+            /* another thread beat us */
+            ISpeechSynthesizerOptions_AddRef(&options->ISpeechSynthesizerOptions_iface);
+    }
+    ISpeechSynthesizerOptions_AddRef(*value = &impl->options->ISpeechSynthesizerOptions_iface);
+    return S_OK;
 }
 
 static const struct ISpeechSynthesizer2Vtbl synthesizer2_vtbl =
@@ -572,7 +1174,9 @@ static HRESULT WINAPI factory_GetTrustLevel( IActivationFactory *iface, TrustLev
 
 static HRESULT WINAPI factory_ActivateInstance( IActivationFactory *iface, IInspectable **instance )
 {
+    struct IVoiceInformation *static_voice;
     struct synthesizer *impl;
+    HRESULT hr;
 
     TRACE("iface %p, instance %p.\n", iface, instance);
 
@@ -585,6 +1189,15 @@ static HRESULT WINAPI factory_ActivateInstance( IActivationFactory *iface, IInsp
     impl->ISpeechSynthesizer_iface.lpVtbl = &synthesizer_vtbl;
     impl->ISpeechSynthesizer2_iface.lpVtbl = &synthesizer2_vtbl;
     impl->IClosable_iface.lpVtbl = &closable_vtbl;
+    /* assuming default is the first one... */
+    hr = IVectorView_VoiceInformation_GetAt(&all_voices.IVectorView_VoiceInformation_iface, 0, &static_voice);
+    if (SUCCEEDED(hr))
+        hr = voice_information_clone(static_voice, &impl->current_voice);
+    if (FAILED(hr))
+    {
+        free(impl);
+        return hr;
+    }
     impl->ref = 1;
 
     *instance = (IInspectable *)&impl->ISpeechSynthesizer_iface;
@@ -604,6 +1217,26 @@ static const struct IActivationFactoryVtbl factory_vtbl =
     factory_ActivateInstance,
 };
 
+static HRESULT dummy_provider_init(struct synth_provider *provider)
+{
+    HRESULT hr;
+    WCHAR locale[LOCALE_NAME_MAX_LENGTH];
+
+    if (GetUserDefaultLocaleName(locale, ARRAY_SIZE(locale)) > ARRAY_SIZE(locale))
+        return E_OUTOFMEMORY;
+
+    provider->voices = calloc(1, sizeof(all_voices.provider.voices[0]));
+    if (!provider->voices) return E_OUTOFMEMORY;
+    hr = voice_information_allocate(L"Dummy voice", L"--noid--", locale, VoiceGender_Male, &provider->voices[0]);
+    if (FAILED(hr))
+    {
+        free(provider->voices);
+    }
+    else
+        provider->num_voices = 1;
+    return hr;
+}
+
 /*
  *
  * IInstalledVoicesStatic for SpeechSynthesizer runtimeclass
@@ -612,18 +1245,46 @@ static const struct IActivationFactoryVtbl factory_vtbl =
 
 DEFINE_IINSPECTABLE(installed_voices_static, IInstalledVoicesStatic, struct synthesizer_statics, IActivationFactory_iface)
 
+static CRITICAL_SECTION allvoices_cs;
+static CRITICAL_SECTION_DEBUG allvoices_critsect_debug =
+{
+    0, 0, &allvoices_cs,
+    { &allvoices_critsect_debug.ProcessLocksList, &allvoices_critsect_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": allvoices_cs") }
+};
+static CRITICAL_SECTION allvoices_cs = { &allvoices_critsect_debug, -1, 0, 0, 0, 0 };
+
 static HRESULT WINAPI installed_voices_static_get_AllVoices( IInstalledVoicesStatic *iface, IVectorView_VoiceInformation **value )
 {
+    HRESULT hr;
+
     TRACE("iface %p, value %p.\n", iface, value);
-    *value = &all_voices.IVectorView_VoiceInformation_iface;
-    IVectorView_VoiceInformation_AddRef(*value);
-    return S_OK;
+
+    EnterCriticalSection(&allvoices_cs);
+    if (all_voices.provider.num_voices == 0)
+        hr = dummy_provider_init(&all_voices.provider);
+    else
+        hr = S_OK;
+    if (SUCCEEDED(hr))
+        IVectorView_VoiceInformation_AddRef(*value = &all_voices.IVectorView_VoiceInformation_iface);
+    LeaveCriticalSection(&allvoices_cs);
+    return hr;
 }
 
 static HRESULT WINAPI installed_voices_static_get_DefaultVoice( IInstalledVoicesStatic *iface, IVoiceInformation **value )
 {
-    FIXME("iface %p, value %p stub!\n", iface, value);
-    return E_NOTIMPL;
+    struct IVoiceInformation *static_voice;
+    HRESULT hr;
+
+    TRACE("iface %p, value %p\n", iface, value);
+
+    EnterCriticalSection(&allvoices_cs);
+    hr = IVectorView_VoiceInformation_GetAt(&all_voices.IVectorView_VoiceInformation_iface, 0, &static_voice);
+    if (SUCCEEDED(hr))
+        hr = voice_information_clone(static_voice, value);
+    LeaveCriticalSection(&allvoices_cs);
+
+    return hr;
 }
 
 static const struct IInstalledVoicesStaticVtbl installed_voices_static_vtbl =

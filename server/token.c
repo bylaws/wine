@@ -23,11 +23,15 @@
 #include "config.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/types.h>
 #include <unistd.h>
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -70,10 +74,11 @@ struct sid_attrs
     unsigned int      attrs;
 };
 
+const struct sid owner_rights_sid = { SID_REVISION, 1, SECURITY_CREATOR_SID_AUTHORITY, { SECURITY_CREATOR_OWNER_RIGHTS_RID } };
 const struct sid world_sid = { SID_REVISION, 1, SECURITY_WORLD_SID_AUTHORITY, { SECURITY_WORLD_RID } };
 const struct sid local_system_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_LOCAL_SYSTEM_RID } };
 const struct sid high_label_sid = { SID_REVISION, 1, SECURITY_MANDATORY_LABEL_AUTHORITY, { SECURITY_MANDATORY_HIGH_RID } };
-const struct sid local_user_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1000 } };
+      struct sid local_user_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1000 } };
 const struct sid builtin_admins_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS } };
 const struct sid builtin_users_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS } };
 const struct sid domain_users_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, DOMAIN_GROUP_RID_USERS } };
@@ -143,6 +148,8 @@ static const struct object_ops token_ops =
     no_add_queue,              /* add_queue */
     NULL,                      /* remove_queue */
     NULL,                      /* signaled */
+    NULL,                      /* get_esync_fd */
+    NULL,                      /* get_fsync_idx */
     NULL,                      /* satisfied */
     no_signal,                 /* signal */
     no_get_fd,                 /* get_fd */
@@ -197,6 +204,35 @@ const struct sid *security_unix_uid_to_sid( uid_t uid )
         return &local_user_sid;
     else
         return &anonymous_logon_sid;
+}
+
+void init_user_sid(void)
+{
+    char machine_id[17];
+    uint64_t id;
+    size_t n;
+    FILE *f;
+
+    f = fopen( "/etc/machine-id", "r" );
+    if (!f)
+    {
+        fprintf( stderr, "Failed to open /etc/machine-id, error %s.\n", strerror( errno ));
+        return;
+    }
+
+    n = fread( machine_id, sizeof(*machine_id), 16, f );
+    fclose(f);
+
+    if (n != 16)
+    {
+        fprintf( stderr, "Failed to read /etc/machine-id, error %s.\n", strerror( errno ));
+        return;
+    }
+    machine_id[n] = 0;
+    id = strtoull( machine_id, NULL, 0x10 );
+    local_user_sid.sub_auth[1] = id >> 32;
+    local_user_sid.sub_auth[2] = id & 0xffffffff;
+    local_user_sid.sub_auth[3] = getuid();
 }
 
 static int acl_is_valid( const struct acl *acl, data_size_t size )
@@ -472,7 +508,7 @@ static struct token *create_token( unsigned int primary, unsigned int session_id
                                    const struct sid_attrs *groups, unsigned int group_count,
                                    const struct luid_attr *privs, unsigned int priv_count,
                                    const struct acl *default_dacl, const struct luid *modified_id,
-                                   int impersonation_level, int elevation )
+                                   unsigned int primary_group, int impersonation_level, int elevation )
 {
     struct token *token = alloc_object( &token_ops );
     if (token)
@@ -519,8 +555,8 @@ static struct token *create_token( unsigned int primary, unsigned int session_id
             group->attrs = groups[i].attrs;
             copy_sid( &group->sid, groups[i].sid );
             list_add_tail( &token->groups, &group->entry );
-            /* Use first owner capable group as owner and primary group */
-            if (!token->primary_group && (group->attrs & SE_GROUP_OWNER))
+
+            if (primary_group == i)
             {
                 token->owner = &group->sid;
                 token->primary_group = &group->sid;
@@ -598,7 +634,7 @@ struct token *token_duplicate( struct token *src_token, unsigned primary,
 
     token = create_token( primary, src_token->session_id, src_token->user, NULL, 0,
                           NULL, 0, src_token->default_dacl, modified_id,
-                          impersonation_level, src_token->elevation );
+                          0, impersonation_level, src_token->elevation );
     if (!token) return token;
 
     /* copy groups */
@@ -773,7 +809,7 @@ struct token *token_create_admin( unsigned primary, int impersonation_level, int
 
     token = create_token( primary, session_id, user_sid, admin_groups, ARRAY_SIZE( admin_groups ),
                           admin_privs, ARRAY_SIZE( admin_privs ), default_dacl,
-                          NULL, impersonation_level, elevation );
+                          NULL, 4 /* domain_users */, impersonation_level, elevation );
     /* we really need a primary group */
     assert( token->primary_group );
 
@@ -1086,6 +1122,102 @@ int check_object_access(struct token *token, struct object *obj, unsigned int *a
 
     if (!res) set_error( STATUS_ACCESS_DENIED );
     return res;
+}
+
+
+/* create a security token */
+DECL_HANDLER(create_token)
+{
+    struct token *token;
+    struct object_attributes *objattr;
+    struct sid *user;
+    struct sid_attrs *groups;
+    struct luid_attr *privs;
+    struct acl *dacl = NULL;
+    unsigned int i;
+    data_size_t data_size, groups_size;
+    struct acl *default_dacl = NULL;
+    unsigned int *attrs;
+    struct sid *sid;
+
+    objattr = (struct object_attributes *)get_req_data();
+    user = (struct sid *)get_req_data_after_objattr( objattr, &data_size );
+
+    if (!user || !sid_valid_size( user, data_size ))
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    data_size -= sid_len( user );
+    groups_size = req->group_count * sizeof( attrs[0] );
+
+    if (data_size < groups_size)
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    if (req->primary_group < 0 || req->primary_group >= req->group_count)
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    groups = mem_alloc( req->group_count * sizeof( groups[0] ) );
+    if (!groups) return;
+
+    attrs = (unsigned int *)((char *)user + sid_len( user ));
+    sid = (struct sid *)&attrs[req->group_count];
+
+    for (i = 0; i < req->group_count; i++)
+    {
+        groups[i].attrs = attrs[i];
+        groups[i].sid = sid;
+
+        if (!sid_valid_size( sid, data_size - groups_size ))
+        {
+            free( groups );
+            set_error( STATUS_INVALID_PARAMETER );
+            return;
+        }
+
+        groups_size += sid_len( sid );
+        sid = (struct sid *)((char *)sid + sid_len( sid ));
+    }
+
+    data_size -= groups_size;
+
+    if (data_size < req->priv_count * sizeof( privs[0] ))
+    {
+        free( groups );
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    privs = (struct luid_attr *)((char *)attrs + groups_size);
+    data_size -= req->priv_count * sizeof( privs[0] );
+
+    if (data_size)
+    {
+        dacl = (struct acl *)((char *)privs + req->priv_count * sizeof(privs[0]));
+        if (!acl_is_valid( dacl, data_size ))
+        {
+            free( groups );
+            set_error( STATUS_INVALID_PARAMETER );
+            return;
+        }
+    }
+    else
+        dacl = default_dacl = create_default_dacl( &domain_users_sid );
+
+    token = create_token( req->primary, default_session_id, user, groups, req->group_count,
+                          privs, req->priv_count, dacl, NULL, req->primary_group, req->impersonation_level, 0 );
+    if (token)
+        reply->token = alloc_handle( current->process, token, req->access, objattr->attributes );
+
+    free( default_dacl );
+    free( groups );
 }
 
 

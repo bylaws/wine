@@ -55,6 +55,7 @@ struct font_physdev
 {
     struct gdi_physdev dev;
     struct gdi_font   *font;
+    UINT               aa_flags;
 };
 
 static inline struct font_physdev *get_font_dev( PHYSDEV dev )
@@ -85,6 +86,7 @@ struct gdi_font_face
     UINT          face_index;
     FONTSIGNATURE fs;
     UINT          ntmFlags;
+    UINT          weight;
     UINT          version;
     UINT          flags;                 /* ADDFONT flags */
     BOOL          scalable;
@@ -1164,7 +1166,7 @@ static BOOL insert_face_in_family_list( struct gdi_font_face *face, struct gdi_f
 static struct gdi_font_face *create_face( struct gdi_font_family *family, const WCHAR *style,
                                           const WCHAR *fullname, const WCHAR *file,
                                           void *data_ptr, SIZE_T data_size, UINT index, FONTSIGNATURE fs,
-                                          DWORD ntmflags, DWORD version, DWORD flags,
+                                          DWORD ntmflags, DWORD weight, DWORD version, DWORD flags,
                                           const struct bitmap_font_size *size )
 {
     struct gdi_font_face *face = calloc( 1, sizeof(*face) );
@@ -1175,6 +1177,7 @@ static struct gdi_font_face *create_face( struct gdi_font_family *family, const 
     face->face_index = index;
     face->fs         = fs;
     face->ntmFlags   = ntmflags;
+    face->weight     = weight;
     face->version    = version;
     face->flags      = flags;
     face->data_ptr   = data_ptr;
@@ -1190,7 +1193,7 @@ static struct gdi_font_face *create_face( struct gdi_font_family *family, const 
 int add_gdi_face( const WCHAR *family_name, const WCHAR *second_name,
                   const WCHAR *style, const WCHAR *fullname, const WCHAR *file,
                   void *data_ptr, SIZE_T data_size, UINT index, FONTSIGNATURE fs,
-                  DWORD ntmflags, DWORD version, DWORD flags,
+                  DWORD ntmflags, DWORD weight, DWORD version, DWORD flags,
                   const struct bitmap_font_size *size )
 {
     struct gdi_font_face *face;
@@ -1201,7 +1204,7 @@ int add_gdi_face( const WCHAR *family_name, const WCHAR *second_name,
     else if (!(family = create_family( family_name, second_name ))) return ret;
 
     if ((face = create_face( family, style, fullname, file, data_ptr, data_size,
-                             index, fs, ntmflags, version, flags, size )))
+                             index, fs, ntmflags, weight, version, flags, size )))
     {
         if (flags & ADDFONT_ADD_TO_CACHE) add_face_to_cache( face );
         release_face( face );
@@ -1234,7 +1237,7 @@ int add_gdi_face( const WCHAR *family_name, const WCHAR *second_name,
         else if (!(family = create_family( vert_family, vert_second ))) return ret;
 
         if ((face = create_face( family, style, fullname, file, data_ptr, data_size,
-                                 index, fs, ntmflags, version, flags | ADDFONT_VERTICAL_FONT, size )))
+                                 index, fs, ntmflags, weight, version, flags | ADDFONT_VERTICAL_FONT, size )))
         {
             if (flags & ADDFONT_ADD_TO_CACHE) add_face_to_cache( face );
             release_face( face );
@@ -1252,6 +1255,7 @@ struct cached_face
     DWORD                   index;
     DWORD                   flags;
     DWORD                   ntmflags;
+    DWORD                   weight;
     DWORD                   version;
     struct bitmap_font_size size;
     FONTSIGNATURE           fs;
@@ -1279,8 +1283,8 @@ static void load_face_from_cache( HKEY hkey_family, struct gdi_font_family *fami
             ((DWORD *)cached)[info->DataLength / sizeof(DWORD)] = 0;
             if ((face = create_face( family, name, cached->full_name,
                                      cached->full_name + lstrlenW(cached->full_name) + 1,
-                                     NULL, 0, cached->index, cached->fs, cached->ntmflags, cached->version,
-                                     cached->flags, scalable ? NULL : &cached->size )))
+                                     NULL, 0, cached->index, cached->fs, cached->ntmflags, cached->weight,
+                                     cached->version, cached->flags, scalable ? NULL : &cached->size )))
             {
                 if (!scalable)
                     TRACE("Adding bitmap size h %d w %d size %d x_ppem %d y_ppem %d\n",
@@ -1371,6 +1375,7 @@ static void add_face_to_cache( struct gdi_font_face *face )
     cached->index = face->face_index;
     cached->flags = face->flags;
     cached->ntmflags = face->ntmFlags;
+    cached->weight = face->weight;
     cached->version = face->version;
     cached->fs = face->fs;
     if (!face->scalable) cached->size = face->size;
@@ -1556,6 +1561,14 @@ static const WCHAR ms_minchoW[] =
     {'M','S',' ','M','i','n','c','h','o',0};
 static const WCHAR ms_p_minchoW[] =
     {'M','S',' ','P','M','i','n','c','h','o',0};
+static const WCHAR arialW[] =
+    {'A','r','i','a','l',0};
+static const WCHAR arial_boldW[] =
+    {'A','r','i','a','l',' ','B','o','l','d',0};
+static const WCHAR courier_newW[] =
+    {'C','o','u','r','i','e','r',' ','N','e','w',0};
+static const WCHAR courier_new_boldW[] =
+    {'C','o','u','r','i','e','r',' ','N','e','w',' ','B','o','l','d',0};
 
 static const WCHAR * const font_links_list[] =
 {
@@ -2443,7 +2456,7 @@ static struct gdi_font *create_gdi_font( const struct gdi_font_face *face, const
     font->fs = face->fs;
     font->lf = *lf;
     font->fake_italic = (lf->lfItalic && !(face->ntmFlags & NTM_ITALIC));
-    font->fake_bold = (lf->lfWeight > 550 && !(face->ntmFlags & NTM_BOLD));
+    font->fake_bold = lf->lfWeight > 550 && !(face->ntmFlags & NTM_BOLD) && face->weight < 550;
     font->scalable = face->scalable;
     font->face_index = face->face_index;
     font->ntmFlags = face->ntmFlags;
@@ -3098,6 +3111,10 @@ static void update_font_system_link_info(void)
             }
             set_multi_value_key(hkey, link_reg->font_name, link, len);
         }
+        set_multi_value_key(hkey, arialW, link, len);
+        set_multi_value_key(hkey, arial_boldW, link, len);
+        set_multi_value_key(hkey, courier_newW, link, len);
+        set_multi_value_key(hkey, courier_new_boldW, link, len);
         NtClose( hkey );
     }
 }
@@ -3136,7 +3153,13 @@ static void update_codepage( UINT screen_dpi )
     if (query_reg_ascii_value( wine_fonts_key, "Codepages", info, sizeof(value_buffer) ))
     {
         cp_match = !wcscmp( (const WCHAR *)info->Data, cpbufW );
-        if (cp_match && screen_dpi == font_dpi) return;  /* already set correctly */
+        if (cp_match && screen_dpi == font_dpi)
+        {
+            /* already set correctly, but, as a HACK, update font link
+               info anyway, so that old Proton prefixes are fixed */
+            update_font_system_link_info();
+            return;
+        }
         TRACE( "updating registry, codepages/logpixels changed %s/%u -> %u,%u/%u\n",
                debugstr_w((const WCHAR *)info->Data), font_dpi, ansi_cp.CodePage, oem_cp.CodePage, screen_dpi );
     }
@@ -3571,7 +3594,7 @@ static BOOL font_EnumFonts( PHYSDEV dev, LOGFONTW *lf, font_enum_proc proc, LPAR
 
 static BOOL check_unicode_tategaki( WCHAR ch )
 {
-    extern const unsigned short vertical_orientation_table[] DECLSPEC_HIDDEN;
+    extern const unsigned short vertical_orientation_table[];
     unsigned short orientation = vertical_orientation_table[vertical_orientation_table[vertical_orientation_table[ch >> 8]+((ch >> 4) & 0x0f)]+ (ch & 0xf)];
 
     /* We only reach this code if typographical substitution did not occur */
@@ -3832,7 +3855,7 @@ static UINT get_glyph_index_linked( struct gdi_font **font, UINT glyph )
 
 static DWORD get_glyph_outline( struct gdi_font *font, UINT glyph, UINT format,
                                 GLYPHMETRICS *gm_ret, ABC *abc_ret, DWORD buflen, void *buf,
-                                const MAT2 *mat )
+                                const MAT2 *mat, UINT aa_flags )
 {
     GLYPHMETRICS gm;
     ABC abc;
@@ -3866,7 +3889,7 @@ static DWORD get_glyph_outline( struct gdi_font *font, UINT glyph, UINT format,
     if (format == GGO_METRICS && !mat && get_gdi_font_glyph_metrics( font, index, &gm, &abc ))
         goto done;
 
-    ret = font_funcs->get_glyph_outline( font, index, format, &gm, &abc, buflen, buf, mat, tategaki );
+    ret = font_funcs->get_glyph_outline( font, index, format, &gm, &abc, buflen, buf, mat, tategaki, aa_flags );
     if (ret == GDI_ERROR) return ret;
 
     if (format == GGO_METRICS && !mat)
@@ -3915,7 +3938,7 @@ static BOOL font_GetCharABCWidths( PHYSDEV dev, UINT first, UINT count, WCHAR *c
     for (i = 0; i < count; i++)
     {
         c = chars ? chars[i] : first + i;
-        get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &buffer[i], 0, NULL, NULL );
+        get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &buffer[i], 0, NULL, NULL, physdev->aa_flags );
     }
     pthread_mutex_unlock( &font_lock );
     return TRUE;
@@ -3941,7 +3964,7 @@ static BOOL font_GetCharABCWidthsI( PHYSDEV dev, UINT first, UINT count, WORD *g
     pthread_mutex_lock( &font_lock );
     for (c = 0; c < count; c++, buffer++)
         get_glyph_outline( physdev->font, gi ? gi[c] : first + c, GGO_METRICS | GGO_GLYPH_INDEX,
-                           NULL, buffer, 0, NULL, NULL );
+                           NULL, buffer, 0, NULL, NULL, physdev->aa_flags );
     pthread_mutex_unlock( &font_lock );
     return TRUE;
 }
@@ -3968,7 +3991,7 @@ static BOOL font_GetCharWidth( PHYSDEV dev, UINT first, UINT count, const WCHAR 
     for (i = 0; i < count; i++)
     {
         c = chars ? chars[i] : i + first;
-        if (get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &abc, 0, NULL, NULL ) == GDI_ERROR)
+        if (get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &abc, 0, NULL, NULL, physdev->aa_flags ) == GDI_ERROR)
             buffer[i] = 0;
         else
             buffer[i] = abc.abcA + abc.abcB + abc.abcC;
@@ -4147,7 +4170,7 @@ static DWORD font_GetGlyphOutline( PHYSDEV dev, UINT glyph, UINT format,
         return dev->funcs->pGetGlyphOutline( dev, glyph, format, gm, buflen, buf, mat );
     }
     pthread_mutex_lock( &font_lock );
-    ret = get_glyph_outline( physdev->font, glyph, format, gm, NULL, buflen, buf, mat );
+    ret = get_glyph_outline( physdev->font, glyph, format, gm, NULL, buflen, buf, mat, physdev->aa_flags );
     pthread_mutex_unlock( &font_lock );
     return ret;
 }
@@ -4327,7 +4350,7 @@ static BOOL font_GetTextExtentExPoint( PHYSDEV dev, const WCHAR *str, INT count,
     pthread_mutex_lock( &font_lock );
     for (i = pos = 0; i < count; i++)
     {
-        get_glyph_outline( physdev->font, str[i], GGO_METRICS, NULL, &abc, 0, NULL, NULL );
+        get_glyph_outline( physdev->font, str[i], GGO_METRICS, NULL, &abc, 0, NULL, NULL, physdev->aa_flags );
         pos += abc.abcA + abc.abcB + abc.abcC;
         dxs[i] = pos;
     }
@@ -4357,7 +4380,7 @@ static BOOL font_GetTextExtentExPointI( PHYSDEV dev, const WORD *indices, INT co
     for (i = pos = 0; i < count; i++)
     {
         get_glyph_outline( physdev->font, indices[i], GGO_METRICS | GGO_GLYPH_INDEX,
-                           NULL, &abc, 0, NULL, NULL );
+                           NULL, &abc, 0, NULL, NULL, physdev->aa_flags );
         pos += abc.abcA + abc.abcB + abc.abcC;
         dxs[i] = pos;
     }
@@ -4671,6 +4694,7 @@ static HFONT font_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
                     *aa_flags = font_smoothing;
             }
             *aa_flags = font_funcs->get_aa_flags( font, *aa_flags, antialias_fakes );
+            physdev->aa_flags = *aa_flags;
         }
         TRACE( "%p %s %d aa %x\n", hfont, debugstr_w(lf.lfFaceName), (int)lf.lfHeight, *aa_flags );
         pthread_mutex_unlock( &font_lock );
@@ -6243,7 +6267,6 @@ BOOL WINAPI NtGdiGetCharABCWidthsW( HDC hdc, UINT first, UINT last, WCHAR *chars
     PHYSDEV dev;
     unsigned int i, count = last;
     BOOL ret;
-    TEXTMETRICW tm;
 
     if (!dc) return FALSE;
 
@@ -6260,17 +6283,6 @@ BOOL WINAPI NtGdiGetCharABCWidthsW( HDC hdc, UINT first, UINT last, WCHAR *chars
     }
     else
     {
-        if (flags & NTGDI_GETCHARABCWIDTHS_INT)
-        {
-            /* unlike float variant, this one is supposed to fail on non-scalable fonts */
-            dev = GET_DC_PHYSDEV( dc, pGetTextMetrics );
-            if (!dev->funcs->pGetTextMetrics( dev, &tm ) || !(tm.tmPitchAndFamily & TMPF_VECTOR))
-            {
-                release_dc_ptr( dc );
-                return FALSE;
-            }
-        }
-
         if (!chars) count = last - first + 1;
         dev = GET_DC_PHYSDEV( dc, pGetCharABCWidths );
         ret = dev->funcs->pGetCharABCWidths( dev, first, count, chars, buffer );
@@ -7008,7 +7020,7 @@ BOOL WINAPI NtGdiGetRasterizerCaps( RASTERIZER_STATUS *status, UINT size )
  *             NtGdiGetFontFileData   (win32u.@)
  */
 BOOL WINAPI NtGdiGetFontFileData( DWORD instance_id, DWORD file_index, UINT64 *offset,
-                                  void *buff, DWORD buff_size )
+                                  void *buff, SIZE_T buff_size )
 {
     struct gdi_font *font;
     DWORD tag = 0, size;
@@ -7085,12 +7097,13 @@ BOOL WINAPI NtGdiGetCharWidthInfo( HDC hdc, struct char_width_info *info )
 /***********************************************************************
  *           DrawTextW    (win32u.so)
  */
-INT WINAPI DECLSPEC_HIDDEN DrawTextW( HDC hdc, const WCHAR *str, INT count, RECT *rect, UINT flags )
+INT WINAPI DrawTextW( HDC hdc, const WCHAR *str, INT count, RECT *rect, UINT flags )
 {
     struct draw_text_params *params;
+    struct draw_text_result *result;
     ULONG ret_len, size;
-    void *ret_ptr;
-    int ret;
+    NTSTATUS status;
+    int ret = 0;
 
     if (count == -1) count = wcslen( str );
     size = FIELD_OFFSET( struct draw_text_params, str[count] );
@@ -7099,8 +7112,13 @@ INT WINAPI DECLSPEC_HIDDEN DrawTextW( HDC hdc, const WCHAR *str, INT count, RECT
     params->rect = *rect;
     params->flags = flags;
     if (count) memcpy( params->str, str, count * sizeof(WCHAR) );
-    ret = KeUserModeCallback( NtUserDrawText, params, size, &ret_ptr, &ret_len );
-    if (ret_len == sizeof(*rect)) *rect = *(const RECT *)ret_ptr;
+
+    status = KeUserModeCallback( NtUserDrawText, params, size, (void **)&result, &ret_len );
+    if (!status && ret_len == sizeof(*result))
+    {
+        ret = result->height;
+        *rect = result->rect;
+    }
     free( params );
     return ret;
 }

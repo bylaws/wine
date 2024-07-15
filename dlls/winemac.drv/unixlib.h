@@ -27,7 +27,6 @@ enum macdrv_funcs
     unix_dnd_release,
     unix_dnd_retain,
     unix_init,
-    unix_notify_icon,
     unix_quit_result,
     unix_funcs_count
 };
@@ -70,13 +69,6 @@ struct init_params
     struct localized_string *strings;
 };
 
-/* macdrv_notify_icon params */
-struct notify_icon_params
-{
-    unsigned int msg;
-    struct _NOTIFYICONDATAW *data;
-};
-
 /* macdrv_quit_result params */
 struct quit_result_params
 {
@@ -102,18 +94,6 @@ struct app_icon_entry
     UINT32 size;
     UINT32 icon;
     UINT64 png;
-};
-
-struct app_icon_result
-{
-    UINT32 count;
-    struct app_icon_entry entries[64];
-};
-
-/* macdrv_app_icon params */
-struct app_icon_params
-{
-    UINT64 result; /* FIXME: Use NtCallbackReturn instead */
 };
 
 /* macdrv_app_quit_request params */

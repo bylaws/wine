@@ -347,7 +347,7 @@ static void WCMD_show_prompt (BOOL newLine) {
     }
     else {
       p++;
-      switch (toupper(*p)) {
+      switch (towupper(*p)) {
         case '$':
 	  *q++ = '$';
 	  break;
@@ -596,7 +596,7 @@ static WCHAR *WCMD_expand_envvar(WCHAR *start, WCHAR startchar)
     /* If there's complex substitution, just need %var% for now
        to get the expanded data to play with                    */
     if (colonpos) {
-        *colonpos = startchar;
+        *colonpos = '%';
         savedchar = *(colonpos+1);
         *(colonpos+1) = 0x00;
     }
@@ -2302,6 +2302,7 @@ WCHAR *WCMD_ReadAndParseLine(const WCHAR *optionalcmd, CMD_LIST **output, HANDLE
 
         WINE_TRACE("Need to read more data as outstanding brackets or carets\n");
         inOneLine = FALSE;
+        ignoreBracket = FALSE;
         prevDelim = CMD_NONE;
         inQuotes = 0;
         memset(extraSpace, 0x00, (MAXSTRING+1) * sizeof(WCHAR));
@@ -2409,6 +2410,12 @@ void WCMD_free_commands(CMD_LIST *cmds) {
       free(thisCmd->redirects);
       free(thisCmd);
     }
+}
+
+static BOOL WINAPI my_event_handler(DWORD ctrl)
+{
+    WCMD_output(L"\n");
+    return ctrl == CTRL_C_EVENT;
 }
 
 
@@ -2657,6 +2664,10 @@ int __cdecl wmain (int argc, WCHAR *argvW[])
        * executable is done later */
       if (opt_s && *cmd=='\"')
           WCMD_strip_quotes(cmd);
+  }
+  else
+  {
+      SetConsoleCtrlHandler(my_event_handler, TRUE);
   }
 
   /* Save cwd into appropriate env var (Must be before the /c processing */

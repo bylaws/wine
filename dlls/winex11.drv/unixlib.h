@@ -22,10 +22,6 @@
 enum x11drv_funcs
 {
     unix_init,
-    unix_systray_clear,
-    unix_systray_dock,
-    unix_systray_hide,
-    unix_systray_init,
     unix_tablet_attach_queue,
     unix_tablet_get_packet,
     unix_tablet_info,
@@ -39,16 +35,6 @@ enum x11drv_funcs
 struct init_params
 {
     WNDPROC foreign_window_proc;
-    BOOL *show_systray;
-};
-
-struct systray_dock_params
-{
-    UINT64 event_handle;
-    void *icon;
-    int cx;
-    int cy;
-    BOOL *layered;
 };
 
 /* x11drv_tablet_info params */
@@ -69,30 +55,15 @@ struct xim_preedit_state_params
 /* driver client callbacks exposed with KernelCallbackTable interface */
 enum x11drv_client_funcs
 {
-    client_func_callback = NtUserDriverCallbackFirst,
-    client_func_dnd_enter_event,
+    client_func_dnd_enter_event = NtUserDriverCallbackFirst,
     client_func_dnd_position_event,
     client_func_dnd_post_drop,
-    client_func_systray_change_owner,
+    client_func_dnd_drop_event,
+    client_func_dnd_leave_event,
     client_func_last
 };
 
 C_ASSERT( client_func_last <= NtUserDriverCallbackLast + 1 );
-
-/* simplified interface for client callbacks requiring only a single UINT parameter */
-enum client_callback
-{
-    client_dnd_drop_event,
-    client_dnd_leave_event,
-    client_funcs_count
-};
-
-/* x11drv_callback params */
-struct client_callback_params
-{
-    UINT id;
-    UINT arg;
-};
 
 /* x11drv_dnd_enter_event and x11drv_dnd_post_drop params */
 struct format_entry
@@ -108,9 +79,4 @@ struct dnd_position_event_params
     ULONG hwnd;
     POINT point;
     DWORD effect;
-};
-
-struct systray_change_owner_params
-{
-    UINT64 event_handle;
 };

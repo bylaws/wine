@@ -23,7 +23,6 @@ import argparse
 import logging
 import os
 import re
-import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
@@ -65,7 +64,7 @@ from enum import Enum
 LOGGER = logging.Logger("vulkan")
 LOGGER.addHandler(logging.StreamHandler())
 
-VK_XML_VERSION = "1.3.260"
+VK_XML_VERSION = "1.3.285"
 WINE_VK_VERSION = (1, 3)
 
 # Filenames to create.
@@ -96,14 +95,14 @@ UNSUPPORTED_EXTENSIONS = [
 
     # Device extensions
     "VK_AMD_display_native_hdr",
+    "VK_ARM_render_pass_striped", # XML bug, see https://github.com/KhronosGroup/Vulkan-Docs/pull/2279
     "VK_EXT_full_screen_exclusive",
     "VK_GOOGLE_display_timing",
     "VK_KHR_external_fence_win32",
-    "VK_KHR_external_semaphore_win32",
     # Relates to external_semaphore and needs type conversions in bitflags.
     "VK_KHR_shared_presentable_image", # Needs WSI work.
+    "VK_KHR_video_encode_queue",
     "VK_KHR_video_queue", # TODO Video extensions use separate headers + xml
-    "VK_KHR_win32_keyed_mutex",
     "VK_NV_external_memory_rdma", # Needs shared resources work.
 
     # Extensions for other platforms
@@ -113,8 +112,6 @@ UNSUPPORTED_EXTENSIONS = [
     "VK_EXT_physical_device_drm",
     "VK_GOOGLE_surfaceless_query",
     "VK_KHR_external_fence_fd",
-    "VK_KHR_external_memory_fd",
-    "VK_KHR_external_semaphore_fd",
     "VK_SEC_amigo_profiling", # Angle specific.
 
     # Extensions which require callback handling
@@ -129,7 +126,7 @@ UNSUPPORTED_EXTENSIONS = [
 # winevulkan may nonetheless use, or extensions we want to generate headers for
 # but not expose to applications (useful for test commits)
 UNEXPOSED_EXTENSIONS = {
-    "VK_KHR_external_memory_win32",
+    "VK_EXT_map_memory_placed",
 }
 
 # The Vulkan loader provides entry-points for core functionality and important
@@ -162,124 +159,213 @@ PERF_CRITICAL_FUNCTIONS = [
 # in FUNCTION_OVERRIDES
 DRIVER_VERSION = 11
 
-class ThunkType(Enum):
-    NONE = 1
-    PUBLIC = 2
-    PRIVATE = 3
-
 # Table of functions for which we have a special implementation.
 # These are regular device / instance functions for which we need
 # to do more work compared to a regular thunk or because they are
 # part of the driver interface.
-# - dispatch set whether we need a function pointer in the device
-#   / instance dispatch table.
-# - driver sets whether the API is part of the driver interface.
-# - thunk sets whether to create a thunk in vulkan_thunks.c.
-#   - NONE means there's a fully custom implementation.
-#   - PUBLIC means the implementation is fully auto generated.
-#   - PRIVATE thunks can be used in custom implementations for
-#     struct conversion.
-# - loader_thunk sets whether to create a thunk for unix funcs.
+# - dispatch (default: True):  set whether we need a function pointer in the device / instance dispatch table.
 FUNCTION_OVERRIDES = {
     # Global functions
-    "vkCreateInstance" : {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE, "extra_param" : "client_ptr"},
-    "vkEnumerateInstanceExtensionProperties" : {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkEnumerateInstanceLayerProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.NONE},
-    "vkEnumerateInstanceVersion": {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkGetInstanceProcAddr": {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.NONE},
+    "vkCreateInstance" : {"extra_param" : "client_ptr"},
 
     # Instance functions
-    "vkCreateDevice" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE, "extra_param" : "client_ptr"},
-    "vkDestroyInstance" : {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkEnumerateDeviceExtensionProperties" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkEnumerateDeviceLayerProperties": {"dispatch": True, "driver": False, "thunk": ThunkType.NONE},
-    "vkEnumeratePhysicalDeviceGroups" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkEnumeratePhysicalDevices" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceExternalBufferProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceExternalFenceProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceExternalSemaphoreProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceImageFormatProperties2" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkGetPhysicalDeviceProperties2" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PUBLIC, "loader_thunk" : ThunkType.PRIVATE},
-    "vkGetPhysicalDeviceProperties2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PUBLIC, "loader_thunk" : ThunkType.PRIVATE},
+    "vkCreateDevice" : {"extra_param" : "client_ptr"},
+    "vkDestroyInstance" : {"dispatch" : False},
+    "vkGetPhysicalDeviceExternalBufferProperties" : {"dispatch" : True},
+    "vkGetPhysicalDeviceExternalFenceProperties" : {"dispatch" : False},
+    "vkGetPhysicalDeviceExternalSemaphoreProperties" : {"dispatch" : True},
 
     # Device functions
-    "vkAllocateCommandBuffers" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkCreateCommandPool" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE, "extra_param" : "client_ptr"},
-    "vkDestroyCommandPool" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkDestroyDevice" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkFreeCommandBuffers" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.PRIVATE},
-    "vkGetDeviceProcAddr" : {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.NONE},
-    "vkGetDeviceQueue" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetDeviceQueue2" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkAllocateMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkFreeMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkMapMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkMapMemory2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkUnmapMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkUnmapMemory2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkCreateBuffer" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-    "vkCreateImage" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
-
-    # VK_KHR_surface
-    "vkDestroySurfaceKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceSurfaceSupportKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkGetPhysicalDeviceSurfaceCapabilitiesKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PRIVATE},
-    "vkGetPhysicalDeviceSurfaceFormatsKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkGetPhysicalDeviceSurfacePresentModesKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-
-    # VK_KHR_get_surface_capabilities2
-    "vkGetPhysicalDeviceSurfaceCapabilities2KHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PRIVATE},
-    "vkGetPhysicalDeviceSurfaceFormats2KHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-
-    # VK_KHR_win32_surface
-    "vkCreateWin32SurfaceKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceWin32PresentationSupportKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-
-    # VK_KHR_swapchain
-    "vkCreateSwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkDestroySwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkGetSwapchainImagesKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkQueuePresentKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
+    "vkCreateCommandPool" : {"extra_param" : "client_ptr"},
+    "vkGetDeviceProcAddr" : {"dispatch" : False},
+    "vkAllocateMemory" : {"dispatch" : True},
+    "vkGetSemaphoreCounterValue" : {"dispatch" : True},
+    "vkSignalSemaphore" : {"dispatch" : True},
+    "vkWaitSemaphores" : {"dispatch" : True},
+    "vkQueueBindSparse" : {"dispatch" : True},
+    "vkQueueSubmit" : {"dispatch" : True},
+    "vkQueueSubmit2" : {"dispatch" : True},
+    "vkDestroySemaphore" : {"dispatch" : True},
 
     # VK_KHR_external_fence_capabilities
-    "vkGetPhysicalDeviceExternalFencePropertiesKHR" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkGetPhysicalDeviceExternalFencePropertiesKHR" : {"dispatch" : False},
 
     # VK_KHR_external_memory_capabilities
-    "vkGetPhysicalDeviceExternalBufferPropertiesKHR" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceImageFormatProperties2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
+    "vkGetPhysicalDeviceExternalBufferPropertiesKHR" : {"dispatch" : True},
 
     # VK_KHR_external_semaphore_capabilities
-    "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR" : {"dispatch" : True},
 
-    # VK_KHR_device_group_creation
-    "vkEnumeratePhysicalDeviceGroupsKHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    # VK_KHR_external_semaphore_win32
+    "vkCreateSemaphore" : {"dispatch" : True },
+    "vkGetSemaphoreWin32HandleKHR" : {"dispatch" : True},
+    "vkImportSemaphoreWin32HandleKHR" : {"dispatch" : True},
 
-    # VK_KHR_device_group
-    "vkGetDeviceGroupSurfacePresentModesKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkGetPhysicalDevicePresentRectanglesKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
+    # VK_KHR_external_memory_win32
+    "vkGetMemoryWin32HandleKHR" : {"dispatch" : True},
+    "vkGetMemoryWin32HandlePropertiesKHR" : {"dispatch" : True},
 
-    # VK_KHR_deferred_host_operations
-    "vkCreateDeferredOperationKHR" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkDestroyDeferredOperationKHR" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
+    # VK_KHR_timeline_semaphore
+    "vkGetSemaphoreCounterValueKHR" : {"dispatch" : True},
+    "vkSignalSemaphoreKHR" : {"dispatch" : True},
+    "vkWaitSemaphoresKHR" : {"dispatch" : True},
 
-    # VK_EXT_calibrated_timestamps
-    "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetCalibratedTimestampsEXT" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    # VK_KHR_synchronization2
+    "vkQueueSubmit2KHR" : {"dispatch" : True},
 
-    # VK_EXT_debug_utils
-    "vkCreateDebugUtilsMessengerEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkDestroyDebugUtilsMessengerEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
+    # Custom functions
+    "wine_vkAcquireKeyedMutex" : {"dispatch": True},
+    "wine_vkReleaseKeyedMutex" : {"dispatch": True},
+}
 
-    # VK_EXT_debug_report
-    "vkCreateDebugReportCallbackEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkDestroyDebugReportCallbackEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
+# functions for which a user driver entry must be generated
+USER_DRIVER_FUNCS = {
+    "vkAcquireNextImage2KHR",
+    "vkAcquireNextImageKHR",
+    "vkCreateInstance",
+    "vkCreateSwapchainKHR",
+    "vkCreateWin32SurfaceKHR",
+    "vkDestroyInstance",
+    "vkDestroySurfaceKHR",
+    "vkDestroySwapchainKHR",
+    "vkEnumerateInstanceExtensionProperties",
+    "vkGetDeviceGroupSurfacePresentModesKHR",
+    "vkGetDeviceProcAddr",
+    "vkGetInstanceProcAddr",
+    "vkGetPhysicalDevicePresentRectanglesKHR",
+    "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+    "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+    "vkGetPhysicalDeviceSurfaceFormats2KHR",
+    "vkGetPhysicalDeviceSurfaceFormatsKHR",
+    "vkGetPhysicalDeviceSurfacePresentModesKHR",
+    "vkGetPhysicalDeviceSurfaceSupportKHR",
+    "vkGetPhysicalDeviceWin32PresentationSupportKHR",
+    "vkGetSwapchainImagesKHR",
+    "vkQueuePresentKHR",
+}
+
+# functions for which the unix thunk is manually implemented
+MANUAL_UNIX_THUNKS = {
+    "vkAllocateCommandBuffers",
+    "vkAllocateMemory",
+    "vkCreateBuffer",
+    "vkCreateCommandPool",
+    "vkCreateDebugReportCallbackEXT",
+    "vkCreateDebugUtilsMessengerEXT",
+    "vkCreateDeferredOperationKHR",
+    "vkCreateDevice",
+    "vkCreateImage",
+    "vkCreateInstance",
+    "vkCreateSemaphore",
+    "vkCreateSwapchainKHR",
+    "vkCreateWin32SurfaceKHR",
+    "vkDestroyCommandPool",
+    "vkDestroyDebugReportCallbackEXT",
+    "vkDestroyDebugUtilsMessengerEXT",
+    "vkDestroyDeferredOperationKHR",
+    "vkDestroyDevice",
+    "vkDestroyInstance",
+    "vkDestroySurfaceKHR",
+    "vkDestroySwapchainKHR",
+    "vkGetSemaphoreWin32HandleKHR",
+    "vkImportSemaphoreWin32HandleKHR",
+    "vkEnumerateDeviceExtensionProperties",
+    "vkEnumerateDeviceLayerProperties",
+    "vkEnumerateInstanceExtensionProperties",
+    "vkEnumerateInstanceLayerProperties",
+    "vkEnumerateInstanceVersion",
+    "vkEnumeratePhysicalDeviceGroups",
+    "vkEnumeratePhysicalDeviceGroupsKHR",
+    "vkEnumeratePhysicalDevices",
+    "vkFreeCommandBuffers",
+    "vkFreeMemory",
+    "vkGetCalibratedTimestampsEXT",
+    "vkGetCalibratedTimestampsKHR",
+    "vkGetDeviceProcAddr",
+    "vkGetMemoryWin32HandleKHR",
+    "vkGetMemoryWin32HandlePropertiesKHR",
+    "vkGetDeviceQueue",
+    "vkGetDeviceQueue2",
+    "vkGetInstanceProcAddr",
+    "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT",
+    "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR",
+    "vkGetPhysicalDeviceExternalBufferProperties",
+    "vkGetPhysicalDeviceExternalBufferPropertiesKHR",
+    "vkGetPhysicalDeviceExternalFenceProperties",
+    "vkGetPhysicalDeviceExternalFencePropertiesKHR",
+    "vkGetPhysicalDeviceExternalSemaphoreProperties",
+    "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR",
+    "vkGetPhysicalDeviceImageFormatProperties2",
+    "vkGetPhysicalDeviceImageFormatProperties2KHR",
+    "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+    "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+    "vkGetSwapchainImagesKHR",
+    "vkQueuePresentKHR",
+    "vkMapMemory",
+    "vkMapMemory2KHR",
+    "vkUnmapMemory",
+    "vkUnmapMemory2KHR",
+    "vkGetSemaphoreCounterValue",
+    "vkSignalSemaphore",
+    "vkWaitSemaphores",
+    "vkQueueBindSparse",
+    "vkQueueSubmit",
+    "vkQueueSubmit2",
+    "vkDestroySemaphore",
+    "vkGetSemaphoreCounterValueKHR",
+    "vkSignalSemaphoreKHR",
+    "vkWaitSemaphoresKHR",
+    "vkQueueSubmit2KHR",
+    # Custom functions
+    "wine_vkAcquireKeyedMutex",
+    "wine_vkReleaseKeyedMutex",
+}
+
+# loader functions which are entirely manually implemented
+MANUAL_LOADER_FUNCTIONS = {
+    "vkEnumerateInstanceLayerProperties",
+    "vkGetDeviceProcAddr",
+    "vkGetInstanceProcAddr",
+}
+
+# functions which loader thunks are manually implemented
+MANUAL_LOADER_THUNKS = {
+    "vkAllocateCommandBuffers",
+    "vkCreateCommandPool",
+    "vkCreateDevice",
+    "vkCreateInstance",
+    "vkDestroyCommandPool",
+    "vkDestroyDevice",
+    "vkDestroyInstance",
+    "vkEnumerateInstanceExtensionProperties",
+    "vkEnumerateInstanceVersion",
+    "vkFreeCommandBuffers",
+    "vkGetPhysicalDeviceProperties",
+    "vkGetPhysicalDeviceProperties2",
+    "vkGetPhysicalDeviceProperties2KHR",
 }
 
 STRUCT_CHAIN_CONVERSIONS = {
     # Ignore to not confuse host loader.
     "VkDeviceCreateInfo": ["VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO"],
     "VkInstanceCreateInfo": ["VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO"],
+
+    # Structs which require pNext chain modification
+    "VkBufferCreateInfo": [],
+    "VkImageCreateInfo": [],
+    "VkMemoryAllocateInfo": [],
+    "VkPhysicalDeviceImageFormatInfo2": [],
+    "VkPhysicalDeviceExternalSemaphoreInfo": [],
+    "VkSemaphoreCreateInfo": [],
+    "VkSubmitInfo": [],
+    "VkSubmitInfo2": [],
+    "VkBindSparseInfo" : [],
 }
+
+STRUCT_COPY = {
+    "VkSubmitInfo",
+    "VkSubmitInfo2",
+};
 
 # Some struct members are conditionally ignored and callers are free to leave them uninitialized.
 # We can't deduce that from XML, so we allow expressing it here.
@@ -306,8 +392,35 @@ class Direction(Enum):
     INPUT = 1
     OUTPUT = 2
 
+
+class Unwrap(Enum):
+    NONE = 0
+    HOST = 1
+    DRIVER = 2
+
+
 def api_is_vulkan(obj):
     return "vulkan" in obj.get("api", "vulkan").split(",")
+
+
+def convert_suffix(direction, win_type, unwrap, is_wrapped):
+    if direction == Direction.OUTPUT:
+        if not is_wrapped:
+            return "host_to_{0}".format(win_type)
+        if unwrap == Unwrap.NONE:
+            return "unwrapped_host_to_{0}".format(win_type)
+        if unwrap == Unwrap.DRIVER:
+            return "driver_to_{0}".format(win_type)
+        return "host_to_{0}".format(win_type)
+    else:
+        if not is_wrapped:
+            return "{0}_to_host".format(win_type)
+        if unwrap == Unwrap.NONE:
+            return "{0}_to_unwrapped_host".format(win_type)
+        if unwrap == Unwrap.DRIVER:
+            return "{0}_to_driver".format(win_type)
+        return "{0}_to_host".format(win_type)
+
 
 class VkBaseType(object):
     def __init__(self, name, _type, alias=None, requires=None):
@@ -581,16 +694,20 @@ class VkFunction(object):
         self.alias = alias
 
         # For some functions we need some extra metadata from FUNCTION_OVERRIDES.
-        func_info = FUNCTION_OVERRIDES.get(self.name, None)
-        self.dispatch = func_info["dispatch"] if func_info else True
-        self.driver = func_info["driver"] if func_info else False
-        self.thunk_type = func_info["thunk"] if func_info else ThunkType.PUBLIC
-        self.loader_thunk_type = func_info["loader_thunk"] if func_info and "loader_thunk" in func_info else ThunkType.PUBLIC
-        self.extra_param = func_info["extra_param"] if func_info and "extra_param" in func_info else None
+        func_info = FUNCTION_OVERRIDES.get(self.name, {})
+        self.dispatch = func_info.get("dispatch", True)
+        self.extra_param = func_info.get("extra_param", None)
 
         # Required is set while parsing which APIs and types are required
         # and is used by the code generation.
         self.required = True if func_info else False
+
+        if self.name in MANUAL_UNIX_THUNKS:
+            self.unwrap = Unwrap.NONE
+        elif self.name in USER_DRIVER_FUNCS:
+            self.unwrap = Unwrap.DRIVER
+        else:
+            self.unwrap = Unwrap.HOST
 
     @staticmethod
     def from_alias(command, alias):
@@ -638,7 +755,7 @@ class VkFunction(object):
 
         conversions = []
         for param in self.params:
-            conversions.extend(param.get_conversions(self.thunk_type == ThunkType.PUBLIC))
+            conversions.extend(param.get_conversions(self.unwrap))
         return conversions
 
     def is_alias(self):
@@ -661,7 +778,7 @@ class VkFunction(object):
 
     def is_driver_func(self):
         """ Returns if function is part of Wine driver interface. """
-        return self.driver
+        return self.name in USER_DRIVER_FUNCS
 
     def is_global_func(self):
         # Treat vkGetInstanceProcAddr as a global function as it
@@ -695,8 +812,8 @@ class VkFunction(object):
         return self.dispatch
 
     def needs_private_thunk(self):
-        return self.needs_exposing() and self.loader_thunk_type != ThunkType.NONE and \
-            self.thunk_type != ThunkType.PUBLIC
+        return self.needs_exposing() and self.name not in MANUAL_LOADER_FUNCTIONS and \
+            self.name in MANUAL_UNIX_THUNKS
 
     def needs_exposing(self):
         # The function needs exposed if at-least one extension isn't both UNSUPPORTED and UNEXPOSED
@@ -733,13 +850,12 @@ class VkFunction(object):
         pfn += ")"
         return pfn
 
-    def prototype(self, call_conv=None, prefix=None, postfix=None, is_thunk=False):
+    def prototype(self, call_conv=None, prefix=None, is_thunk=False):
         """ Generate prototype for given function.
 
         Args:
             call_conv (str, optional): calling convention e.g. WINAPI
             prefix (str, optional): prefix to append prior to function name e.g. vkFoo -> wine_vkFoo
-            postfix (str, optional): text to append after function name but prior to semicolon e.g. DECLSPEC_HIDDEN
         """
 
         proto = "{0}".format(self.type)
@@ -756,13 +872,16 @@ class VkFunction(object):
         proto += ", ".join([p.definition() for p in self.params])
 
         if is_thunk and self.extra_param:
-            proto += ", void *" + self.extra_param
+            extra_param_is_new = True
+            for p in self.params:
+                if p.name == self.extra_param:
+                    extra_param_is_new = False
+            if extra_param_is_new:
+                proto += ", void *" + self.extra_param
+            else:
+                proto += ", void *win_" + self.extra_param
 
-        if postfix is not None:
-            proto += ") {0}".format(postfix)
-        else:
-            proto += ")"
-
+        proto += ")"
         return proto
 
     def loader_body(self):
@@ -783,14 +902,14 @@ class VkFunction(object):
             body += "    return params.result;\n"
         return body
 
-    def body(self, conv, unwrap, params_prefix=""):
+    def body(self, conv, params_prefix=""):
         body = ""
         needs_alloc = False
         deferred_op = None
 
         # Declare any tmp parameters for conversion.
         for p in self.params:
-            if p.needs_variable(conv, unwrap):
+            if p.needs_variable(conv, self.unwrap):
                 if p.is_dynamic_array():
                     body += "    {2}{0} *{1}_host;\n".format(
                         p.type, p.name, "const " if p.is_const() else "")
@@ -799,7 +918,7 @@ class VkFunction(object):
                     needs_alloc = True
                 else:
                     body += "    {0} {1}_host;\n".format(p.type, p.name)
-            if p.needs_alloc(conv, unwrap):
+            if p.needs_alloc(conv, self.unwrap):
                 needs_alloc = True
             if p.type == "VkDeferredOperationKHR" and not p.is_pointer():
                 deferred_op = p.name
@@ -828,29 +947,30 @@ class VkFunction(object):
                 body += "        ctx = &wine_deferred_operation_from_handle(params->{})->ctx;\n".format(deferred_op)
 
         # Call any win_to_host conversion calls.
-        unwrap = self.thunk_type == ThunkType.PUBLIC
+        unwrap = self.name not in MANUAL_UNIX_THUNKS
         for p in self.params:
-            if p.needs_conversion(conv, unwrap, Direction.INPUT):
-                body += p.copy(Direction.INPUT, conv, unwrap, prefix=params_prefix)
-            elif p.is_dynamic_array() and p.needs_conversion(conv, unwrap, Direction.OUTPUT):
+            if p.needs_conversion(conv, self.unwrap, Direction.INPUT):
+                body += p.copy(Direction.INPUT, conv, self.unwrap, prefix=params_prefix)
+            elif p.is_dynamic_array() and p.needs_conversion(conv, self.unwrap, Direction.OUTPUT):
                 body += "    {0}_host = ({2}{0} && {1}) ? conversion_context_alloc(ctx, sizeof(*{0}_host) * {1}) : NULL;\n".format(
                     p.name, p.get_dyn_array_len(params_prefix, conv), params_prefix)
 
         # Build list of parameters containing converted and non-converted parameters.
         # The param itself knows if conversion is needed and applies it when we set conv=True.
-        params = ", ".join([p.variable(conv=conv, unwrap=unwrap, params_prefix=params_prefix) for p in self.params])
+        unwrap = Unwrap.NONE if self.name in MANUAL_UNIX_THUNKS else self.unwrap
+        params = ", ".join([p.variable(conv, unwrap, params_prefix) for p in self.params])
         if self.extra_param:
             if conv:
                 params += ", UlongToPtr({0}{1})".format(params_prefix, self.extra_param)
             else:
-                params += ", {0}{1}".format(params_prefix, self.extra_param)
+                params += ", (void *){0}{1}".format(params_prefix, self.extra_param)
 
-        if unwrap or self.thunk_type == ThunkType.PUBLIC:
+        if self.name not in MANUAL_UNIX_THUNKS:
             func_prefix = "{0}.p_".format(self.params[0].dispatch_table(params_prefix, conv))
         else:
             func_prefix = "wine_"
 
-        # Call the native Vulkan function.
+        # Call the host Vulkan function.
         if self.type == "void":
             body += "    {0}{1}({2});\n".format(func_prefix, self.name, params)
         else:
@@ -858,8 +978,8 @@ class VkFunction(object):
 
         # Call any host_to_win conversion calls.
         for p in self.params:
-            if p.needs_conversion(conv, unwrap, Direction.OUTPUT):
-                body += p.copy(Direction.OUTPUT, conv, unwrap, prefix=params_prefix)
+            if p.needs_conversion(conv, self.unwrap, Direction.OUTPUT):
+                body += p.copy(Direction.OUTPUT, conv, self.unwrap, prefix=params_prefix)
 
         if needs_alloc:
             if deferred_op is not None:
@@ -921,16 +1041,19 @@ class VkFunction(object):
         if conv:
             thunk += "    struct\n"
             thunk += "    {\n"
+            extra_param_is_new = True
             for p in self.params:
                 thunk += "        {0};\n".format(p.definition(conv=True, is_member=True))
-            if self.extra_param:
+                if p.name == self.extra_param:
+                    extra_param_is_new = False
+            if self.extra_param and extra_param_is_new:
                 thunk += "        PTR32 {0};\n".format(self.extra_param)
             if self.type != "void":
                 thunk += "        {0} result;\n".format(self.type)
             thunk += "    } *params = args;\n"
         else:
             thunk += "    struct {0}_params *params = args;\n".format(self.name)
-        thunk += self.body(conv=conv, unwrap=self.thunk_type == ThunkType.PUBLIC, params_prefix="params->")
+        thunk += self.body(conv, params_prefix="params->")
         thunk += "}\n"
         if not conv:
             thunk += "#endif /* _WIN64 */\n"
@@ -1118,33 +1241,37 @@ class VkHandle(object):
     def is_required(self):
         return self.required
 
-    def native_handle(self, name):
-        """ Provide access to the native handle of a wrapped object. """
+    def host_handle(self, name):
+        """ Provide access to the host handle of a wrapped object. """
 
         if self.name == "VkCommandBuffer":
-            return "wine_cmd_buffer_from_handle({0})->command_buffer".format(name)
+            return "wine_cmd_buffer_from_handle({0})->host_command_buffer".format(name)
         if self.name == "VkCommandPool":
-            return "wine_cmd_pool_from_handle({0})->command_pool".format(name)
+            return "wine_cmd_pool_from_handle({0})->host_command_pool".format(name)
         if self.name == "VkDebugUtilsMessengerEXT":
-            return "wine_debug_utils_messenger_from_handle({0})->debug_messenger".format(name)
+            return "wine_debug_utils_messenger_from_handle({0})->host_debug_messenger".format(name)
         if self.name == "VkDebugReportCallbackEXT":
-            return "wine_debug_report_callback_from_handle({0})->debug_callback".format(name)
+            return "wine_debug_report_callback_from_handle({0})->host_debug_callback".format(name)
         if self.name == "VkDeferredOperationKHR":
-            return "wine_deferred_operation_from_handle({0})->deferred_operation".format(name)
+            return "wine_deferred_operation_from_handle({0})->host_deferred_operation".format(name)
         if self.name == "VkDevice":
-            return "wine_device_from_handle({0})->device".format(name)
+            return "wine_device_from_handle({0})->host_device".format(name)
         if self.name == "VkInstance":
-            return "wine_instance_from_handle({0})->instance".format(name)
+            return "wine_instance_from_handle({0})->host_instance".format(name)
         if self.name == "VkDeviceMemory":
-            return "wine_device_memory_from_handle({0})->memory".format(name)
+            return "wine_device_memory_from_handle({0})->host_memory".format(name)
+        if self.name == "VkSemaphore":
+            return "wine_semaphore_host_handle( wine_semaphore_from_handle({0}) )".format(name)
         if self.name == "VkPhysicalDevice":
-            return "wine_phys_dev_from_handle({0})->phys_dev".format(name)
+            return "wine_phys_dev_from_handle({0})->host_physical_device".format(name)
         if self.name == "VkQueue":
-            return "wine_queue_from_handle({0})->queue".format(name)
+            return "wine_queue_from_handle({0})->host_queue".format(name)
         if self.name == "VkSurfaceKHR":
-            return "wine_surface_from_handle({0})->surface".format(name)
+            return "wine_surface_from_handle({0})->host_surface".format(name)
+        if self.name == "VkSwapchainKHR":
+            return "wine_swapchain_from_handle({0})->host_swapchain".format(name)
         if self.is_dispatchable():
-            LOGGER.error("Unhandled native handle for: {0}".format(self.name))
+            LOGGER.error("Unhandled host handle for: {0}".format(self.name))
         return None
 
     def driver_handle(self, name):
@@ -1153,13 +1280,20 @@ class VkHandle(object):
         if self.name == "VkSurfaceKHR":
             return "wine_surface_from_handle({0})->driver_surface".format(name)
 
-        return self.native_handle(name)
+        return self.host_handle(name)
+
+    def unwrap_handle(self, name, unwrap):
+        if unwrap == Unwrap.DRIVER:
+            return self.driver_handle(name)
+        if unwrap == Unwrap.HOST:
+            return self.host_handle(name)
+        if unwrap == Unwrap.NONE:
+            return name
+        return None
 
     def is_wrapped(self):
-        return self.native_handle("test") is not None
+        return self.host_handle("test") is not None
 
-    def needs_unwrapping(self):
-        return self.is_wrapped()
 
 class VkVariable(object):
     def __init__(self, const=False, type_info=None, type=None, name=None, pointer=None, array_len=None,
@@ -1266,7 +1400,7 @@ class VkVariable(object):
         Vulkan uses this for dynamically sized arrays for which
         there is a 'count' parameter.
         """
-        return self.dyn_array_len is not None
+        return self.dyn_array_len is not None and self.array_len is None
 
     def is_static_array(self):
         """ Returns if the member is an array.
@@ -1305,14 +1439,14 @@ class VkVariable(object):
             return not self.handle.is_dispatchable()
         return False
 
-    def needs_unwrapping(self):
+    def is_wrapped(self):
         """ Returns if variable needs unwrapping of handle. """
 
         if self.is_struct():
-            return self.struct.needs_unwrapping()
+            return self.struct.is_wrapped()
 
         if self.is_handle():
-            return self.handle.needs_unwrapping()
+            return self.handle.is_wrapped()
 
         if self.is_generic_handle():
             return True
@@ -1353,6 +1487,9 @@ class VkVariable(object):
                     conversions.append(StructConversionFunction(struct, Direction.INPUT, conv, unwrap, is_const))
                 if struct.needs_conversion(conv, unwrap, Direction.OUTPUT, is_const):
                     conversions.append(StructConversionFunction(struct, Direction.OUTPUT, conv, unwrap, is_const))
+
+            if struct.name in STRUCT_COPY:
+                conversions.append(StructConversionFunction(struct, Direction.INPUT, False, unwrap, is_const, True))
 
         if self.is_static_array() or self.is_dynamic_array():
             for conv in [False, True]:
@@ -1483,60 +1620,67 @@ class VkMember(VkVariable):
                         values=values, object_type=object_type, bit_width=bit_width, returnedonly=returnedonly,
                         parent=parent, selection=selection, selector=selector)
 
-    def copy(self, input, output, direction, conv, unwrap):
+    def copy(self, input, output, direction, conv, unwrap, copy):
         """ Helper method for use by conversion logic to generate a C-code statement to copy this member.
             - `conv` indicates whether the statement is in a struct alignment conversion path. """
 
         win_type = "win32" if conv else "win64"
+        suffix = convert_suffix(direction, win_type, unwrap, self.is_wrapped())
+
         if self.needs_conversion(conv, unwrap, direction, False):
             if self.is_dynamic_array():
                 # Array length is either a variable name (string) or an int.
                 count = self.get_dyn_array_len(input, conv)
-                host_part = "host" if unwrap else "unwrapped_host"
                 pointer_part = "pointer_" if self.pointer_array else ""
                 if direction == Direction.OUTPUT:
-                    return "convert_{2}_{7}array_{6}_to_{5}({3}{1}, {0}, {4});\n".format(
-                        self.value(output, conv), self.name, self.type, input, count, win_type,
-                        host_part, pointer_part)
+                    return "convert_{2}_{6}array_{5}({3}{1}, {0}, {4});\n".format(self.value(output, conv),
+                        self.name, self.type, input, count, suffix, pointer_part)
                 else:
-                    return "{0}{1} = convert_{2}_{7}array_{5}_to_{6}(ctx, {3}, {4});\n".format(
-                        output, self.name, self.type, self.value(input, conv), count, win_type,
-                        host_part, pointer_part)
+                    return "{0}{1} = convert_{2}_{6}array_{5}(ctx, {3}, {4});\n".format(output,
+                        self.name, self.type, self.value(input, conv), count, suffix, pointer_part)
             elif self.is_static_array():
                 count = self.array_len
                 if direction == Direction.OUTPUT:
                     # Needed by VkMemoryHeap.memoryHeaps
-                    host_part = "host" if unwrap else "unwrapped_host"
-                    return "convert_{0}_array_{6}_to_{5}({2}{1}, {3}{1}, {4});\n".format(
-                        self.type, self.name, input, output, count, win_type, host_part)
+                    return "convert_{0}_array_{5}({2}{1}, {3}{1}, {4});\n".format(self.type,
+                        self.name, input, output, count, suffix)
                 else:
                     # Nothing needed this yet.
                     LOGGER.warn("TODO: implement copying of static array for {0}.{1}".format(self.type, self.name))
-            elif self.is_handle() and self.needs_unwrapping():
+            elif self.is_handle() and self.is_wrapped():
                 handle = self.type_info["data"]
                 if direction == Direction.OUTPUT:
                     LOGGER.err("OUTPUT parameter {0}.{1} cannot be unwrapped".format(self.type, self.name))
                 elif self.optional:
-                    return "{0}{1} = {2} ? {3} : 0;\n".format(output, self.name,
-                        self.value(input, conv), handle.driver_handle(self.value(input, conv)))
+                    return "{0}{1} = {2} ? {3} : 0;\n".format(output, self.name, self.value(input, conv),
+                        handle.unwrap_handle(self.value(input, conv), unwrap))
                 else:
-                    return "{0}{1} = {2};\n".format(output, self.name, handle.driver_handle(self.value(input, conv)))
+                    input_name = "{0}{1}".format(input, self.name)
+                    return "{0}{1} = {2} ? {3} : VK_NULL_HANDLE;\n".format(output, self.name,
+                        input_name, handle.unwrap_handle(self.value(input, conv), unwrap))
             elif self.is_generic_handle():
                 if direction == Direction.OUTPUT:
                     LOGGER.err("OUTPUT parameter {0}.{1} cannot be unwrapped".format(self.type, self.name))
-                else:
-                    return "{0}{1} = wine_vk_unwrap_handle({2}{3}, {2}{1});\n".format(output, self.name, input, self.object_type)
+                if unwrap == Unwrap.DRIVER and self.is_wrapped(Unwrap.DRIVER):
+                    LOGGER.err("DRIVER unwrapping of {0}.{1} not implemented".format(self.type, self.name))
+                return "{0}{1} = wine_vk_unwrap_handle({2}{3}, {2}{1});\n".format(output, self.name, input, self.object_type)
             else:
                 selector_part = ", {0}{1}".format(input, self.selector) if self.selector else ""
                 if direction == Direction.OUTPUT:
-                    return "convert_{0}_host_to_{4}(&{2}{1}, &{3}{1}{5});\n".format(self.type, self.name, input, output, win_type, selector_part)
+                    return "convert_{0}_{4}(&{2}{1}, &{3}{1}{5});\n".format(self.type,
+                        self.name, input, output, suffix, selector_part)
                 else:
                     ctx_param = "ctx, " if self.needs_alloc(conv, unwrap) else ""
-                    host_part = "host" if unwrap else "unwrapped_host"
-                    return "convert_{0}_{4}_to_{6}({5}&{2}{1}, &{3}{1}{7});\n".format(self.type, self.name, input, output, win_type, ctx_param, host_part, selector_part)
+                    return "convert_{0}_{4}({5}&{2}{1}, &{3}{1}{6});\n".format(self.type,
+                        self.name, input, output, suffix, ctx_param, selector_part)
         elif self.is_static_array():
             bytes_count = "{0} * sizeof({1})".format(self.array_len, self.type)
             return "memcpy({0}{1}, {2}{1}, {3});\n".format(output, self.name, input, bytes_count)
+        elif self.is_dynamic_array() and copy:
+            if self.type == "void":
+                return "MEMDUP_VOID(ctx, {0}{1}, {2}{1}, {3});\n".format(output, self.name, input, self.get_dyn_array_len(input, conv))
+            else:
+                return "MEMDUP(ctx, {0}{1}, {2}{1}, {3});\n".format(output, self.name, input, self.get_dyn_array_len(input, conv))
         elif direction == Direction.INPUT:
             return "{0}{1} = {2};\n".format(output, self.name, self.value(input, conv))
         elif conv and direction == Direction.OUTPUT and self.is_pointer():
@@ -1616,12 +1760,12 @@ class VkMember(VkVariable):
                 return True
 
         if self.is_handle():
-            if unwrap and self.handle.is_wrapped():
+            if unwrap != Unwrap.NONE and self.handle.is_wrapped():
                 return True
             if conv and self.handle.is_dispatchable():
                 return True
         elif self.is_generic_handle():
-            if unwrap:
+            if unwrap != Unwrap.NONE:
                 return True
         elif self.is_struct() or self.is_union():
             if self.struct.needs_conversion(conv, unwrap, direction, is_const):
@@ -1742,32 +1886,32 @@ class VkParam(VkVariable):
 
     def copy(self, direction, conv, unwrap, prefix=""):
         win_type = "win32" if conv else "win64"
-        wrap_part = "" if unwrap or not self.needs_unwrapping() else "unwrapped_"
+        suffix = convert_suffix(direction, win_type, unwrap, self.is_wrapped())
+
         if direction == Direction.INPUT:
             ctx_param = "ctx, " if self.needs_alloc(conv, unwrap) else ""
             if self.is_dynamic_array():
-                return "    {0}_host = convert_{2}_array_{4}_to_{6}host({5}{1}, {3});\n".format(
-                    self.name, self.value(prefix, conv), self.type, self.get_dyn_array_len(prefix, conv),
-                    win_type, ctx_param, wrap_part)
+                return "    {0}_host = convert_{2}_array_{4}({5}{1}, {3});\n".format(self.name, self.value(prefix, conv),
+                    self.type, self.get_dyn_array_len(prefix, conv), suffix, ctx_param)
             elif self.optional:
                 ret  = "    if ({0}{1})\n".format(prefix, self.name)
                 ret += "    {\n"
                 ret += "        {0}_host = conversion_context_alloc(ctx, sizeof(*{0}_host));\n".format(self.name)
-                ret += "        convert_{0}_{3}_to_{5}host({4}{1}, {2}_host);\n".format(
-                    self.type, self.value(prefix, conv), self.name, win_type, ctx_param, wrap_part)
+                ret += "        convert_{0}_{3}({4}{1}, {2}_host);\n".format(self.type, self.value(prefix, conv),
+                    self.name, suffix, ctx_param)
                 ret += "    }\n"
                 return ret
             elif self.is_struct():
-                return "    convert_{0}_{3}_to_{5}host({4}{1}, &{2}_host);\n".format(
-                    self.type, self.value(prefix, conv), self.name, win_type, ctx_param, wrap_part)
+                return "    convert_{0}_{3}({4}{1}, &{2}_host);\n".format(self.type, self.value(prefix, conv),
+                    self.name, suffix, ctx_param)
             elif self.is_pointer_size() and self.type != "size_t":
                 return "    {0}_host = UlongToPtr(*{1});\n".format(self.name, self.value(prefix, conv))
             else:
                 return "    {0}_host = *{1};\n".format(self.name, self.value(prefix, conv))
         else:
             if self.is_dynamic_array():
-                return "    convert_{0}_array_{1}host_to_{2}({3}_host, {4}, {5});\n".format(
-                    self.type, wrap_part, win_type, self.name, self.value(prefix, conv),
+                return "    convert_{0}_array_{1}({2}_host, {3}, {4});\n".format(
+                    self.type, suffix, self.name, self.value(prefix, conv),
                     self.get_dyn_array_len(prefix, conv))
             elif self.is_struct():
                 ref_part = "" if self.optional else "&"
@@ -1850,7 +1994,7 @@ class VkParam(VkVariable):
             if direction != param_direction:
                 return False
 
-            if unwrap and self.handle.is_wrapped():
+            if unwrap != Unwrap.NONE and self.handle.is_wrapped():
                 return True
             if conv and self.handle.is_dispatchable():
                 return True
@@ -1903,7 +2047,7 @@ class VkParam(VkVariable):
 
         # Hack until we enable allocation callbacks from ICD to application. These are a joy
         # to enable one day, because of calling convention conversion.
-        if unwrap and "VkAllocationCallbacks" in self.type:
+        if unwrap != Unwrap.NONE and "VkAllocationCallbacks" in self.type:
             LOGGER.debug("TODO: setting NULL VkAllocationCallbacks for {0}".format(self.name))
             return "NULL"
 
@@ -1915,16 +2059,18 @@ class VkParam(VkVariable):
 
         p = self.value(params_prefix, conv)
 
-        if unwrap:
+        if unwrap != Unwrap.NONE:
             unwrap_handle = None
             if self.object_type != None and self.type == "uint64_t":
+                if unwrap == Unwrap.DRIVER and self.is_wrapped(Unwrap.DRIVER):
+                    LOGGER.err("DRIVER unwrapping of {0}.{1} not implemented".format(self.type, self.name))
                 unwrap_handle = "wine_vk_unwrap_handle({0}{1}, {0}{2})".format(
                     params_prefix, self.object_type, self.name)
 
             elif self.is_handle():
-                # We need to pass the native handle to the native Vulkan calls and
+                # We need to pass the host handle to the host Vulkan calls and
                 # the wine driver's handle to calls which are wrapped by the driver.
-                unwrap_handle = self.handle.driver_handle(p)
+                unwrap_handle = self.handle.unwrap_handle(p, unwrap)
             if unwrap_handle:
                 if self.optional:
                     unwrap_handle = "{0}{1} ? {2} : 0".format(params_prefix, self.name, unwrap_handle)
@@ -1979,14 +2125,11 @@ class VkStruct(Sequence):
 
         # Those structs seem to be broken in spec, they are specified as
         # returned only, but documented as input structs.
-        if name in ["VkSubpassShadingPipelineCreateInfoHUAWEI",
-                    "VkPipelineShaderStageRequiredSubgroupSizeCreateInfo"]:
+        if name in ["VkPipelineShaderStageRequiredSubgroupSizeCreateInfo"]:
             returnedonly = False
 
         # Those structs don't have returnedonly in spec, but they could (should?).
-        if name in ["VkSurfaceCapabilitiesPresentBarrierNV",
-                    "VkCooperativeMatrixPropertiesNV",
-                    "VkPerformanceValueINTEL"]:
+        if name in ["VkSurfaceCapabilitiesPresentBarrierNV"]:
             returnedonly = True
 
         structextends = struct.attrib.get("structextends")
@@ -2106,13 +2249,13 @@ class VkStruct(Sequence):
                 return True
         return False
 
-    def needs_unwrapping(self):
+    def is_wrapped(self):
         """ Returns if struct members need unwrapping of handle. """
 
         for m in self.members:
             if self.name == m.type:
                 continue
-            if m.needs_unwrapping():
+            if m.is_wrapped():
                 return True
         return False
 
@@ -2129,17 +2272,16 @@ class VkStruct(Sequence):
         if self.name in ["VkOpticalFlowSessionCreateInfoNV",
                          "VkDescriptorBufferBindingInfoEXT"]:
             is_const = True
-        needs_output_copy = False
 
         for e in self.struct_extensions:
             if not e.required:
                 continue
-            if e.needs_conversion(conv, True, direction, is_const, check_extensions=False):
+            if e.needs_conversion(conv, Unwrap.HOST, direction, is_const, check_extensions=False):
                 return True
             if direction == Direction.INPUT:
                 # we need input conversion of structs containing struct chain even if it's returnedonly,
                 # so that we have a chance to allocate buffers
-                if e.needs_conversion(conv, True, Direction.OUTPUT, is_const, check_extensions=False):
+                if e.needs_conversion(conv, Unwrap.HOST, Direction.OUTPUT, is_const, check_extensions=False):
                     return True
 
         return False
@@ -2247,7 +2389,7 @@ class VkStruct(Sequence):
         for e in self.struct_extensions:
             if not e.required:
                 continue
-            conversions.extend(e.get_conversions(True, parent_const))
+            conversions.extend(e.get_conversions(Unwrap.HOST, parent_const))
 
         # Collect any conversion for any member structs.
         for m in self:
@@ -2259,21 +2401,21 @@ class VkStruct(Sequence):
 
 
 class StructConversionFunction(object):
-    def __init__(self, struct, direction, conv, unwrap, const):
+    def __init__(self, struct, direction, conv, unwrap, const, copy=False):
         self.direction = direction
         self.operand = struct
         self.type = struct.name
         self.conv = conv
-        self.unwrap = unwrap or not self.operand.needs_unwrapping()
+        self.unwrap = unwrap
         self.const = const
+        self.copy = copy
 
-        name = "convert_{0}_".format(self.type)
-        win_type = "win32" if self.conv else "win64"
-        host_part = "host" if self.unwrap else "unwrapped_host"
-        if self.direction == Direction.INPUT:
-            name += "{0}_to_{1}".format(win_type, host_part)
-        else: # Direction.OUTPUT
-            name += "{0}_to_{1}".format(host_part, win_type)
+        if copy:
+            name = "copy_{0}".format(self.type)
+        else:
+            name = "convert_{0}_".format(self.type)
+            win_type = "win32" if self.conv else "win64"
+            name += convert_suffix(direction, win_type, unwrap, struct.is_wrapped())
         self.name = name
 
     def __eq__(self, other):
@@ -2305,7 +2447,7 @@ class StructConversionFunction(object):
 
         body = ""
 
-        if not self.conv:
+        if not self.conv and not self.copy:
             body += "#ifdef _WIN64\n"
 
         needs_alloc = self.direction != Direction.OUTPUT and self.operand.needs_alloc(self.conv, self.unwrap)
@@ -2315,8 +2457,11 @@ class StructConversionFunction(object):
         if self.direction == Direction.OUTPUT and self.const:
             win_type = "const " + win_type
 
-        if self.conv:
+        if self.copy:
+            body += "void {0}(".format(self.name)
+        else:
             body += "static inline void {0}(".format(self.name)
+        if self.conv:
 
             if self.direction == Direction.OUTPUT:
                 params = ["const {0} *in".format(self.type), "{0} *out".format(win_type)]
@@ -2333,8 +2478,6 @@ class StructConversionFunction(object):
             body += ")\n"
 
         else:
-            body += "static inline void {0}(".format(self.name)
-
             params = ["const {0} *in".format(self.type), "{0} *out".format(self.type)]
 
             # Generate parameter list
@@ -2374,7 +2517,7 @@ class StructConversionFunction(object):
                 body += " || ".join("selector == {}".format(s) for s in m.selection)
                 body += ")\n    "
 
-            body += "    " + m.copy("in->", "out->", self.direction, self.conv, self.unwrap)
+            body += "    " + m.copy("in->", "out->", self.direction, self.conv, self.unwrap, self.copy)
 
         if needs_extensions:
             if self.conv and self.direction == Direction.INPUT:
@@ -2388,9 +2531,12 @@ class StructConversionFunction(object):
             ident = "            "
 
             if self.direction == Direction.INPUT and self.type in STRUCT_CHAIN_CONVERSIONS:
+                has_any_chain_conversions = False
                 for i in STRUCT_CHAIN_CONVERSIONS[self.type]:
                     body += "        case {0}:\n".format(i)
-                body += ident + "break;\n"
+                    has_any_chain_conversions = True
+                if has_any_chain_conversions:
+                    body += ident + "break;\n"
 
             for ext in self.operand.struct_extensions:
                 if not ext.required:
@@ -2400,6 +2546,8 @@ class StructConversionFunction(object):
                     continue
 
                 stype = next(x for x in ext.members if x.name == "sType").values
+                if self.type in STRUCT_CHAIN_CONVERSIONS and stype in STRUCT_CHAIN_CONVERSIONS[self.type]:
+                    continue
                 win_type = ext.name + "32" if self.conv and ext.needs_win32_type() else ext.name
                 if self.direction == Direction.INPUT:
                     in_type = "const " + win_type
@@ -2428,8 +2576,7 @@ class StructConversionFunction(object):
                     if m.name == "pNext":
                         copy_body += ident + "out_ext->pNext = NULL;\n"
                         continue
-
-                    copy_body += ident + m.copy("in_ext->", "out_ext->", self.direction, self.conv, True)
+                    copy_body += ident + m.copy("in_ext->", "out_ext->", self.direction, self.conv, Unwrap.HOST, self.copy)
 
                 # Generate the definition of "in_ext" if we need it
                 if "in_ext->" in copy_body:
@@ -2444,7 +2591,18 @@ class StructConversionFunction(object):
 
             body += "        default:\n"
             if self.direction == Direction.INPUT:
-                body += ident + "FIXME(\"Unhandled sType %u.\\n\", in_header->sType);\n"
+                body += ident + "if ((in_header->sType >> 16) == 0x7ead)\n"
+                body += ident + "{\n"
+                body += ident + "    VkBaseOutStructure *out_ext = conversion_context_alloc(ctx, 32);\n";
+                body += ident + "    memcpy(out_ext, in_header, 32);\n";
+                body += ident + "    out_ext->pNext = NULL;\n";
+                body += ident + "    out_header->pNext = (void *)out_ext;\n";
+                body += ident + "    out_header = (void *)out_ext;\n";
+                body += ident + "}\n"
+                body += ident + "else\n"
+                body += ident + "{\n"
+                body += ident + "    FIXME(\"Unhandled sType %u.\\n\", in_header->sType);\n"
+                body += ident + "}\n"
             body += "            break;\n"
             body += "        }\n"
             body += "    }\n"
@@ -2453,7 +2611,7 @@ class StructConversionFunction(object):
             body += "        FIXME(\"Unexpected pNext\\n\");\n"
 
         body += "}\n"
-        if not self.conv:
+        if not self.conv and not self.copy:
             body += "#endif /* _WIN64 */\n"
         body += "\n"
 
@@ -2466,7 +2624,7 @@ class ArrayConversionFunction(object):
         self.direction = direction
         self.type = array.type
         self.conv = conv
-        self.unwrap = unwrap or not array.needs_unwrapping()
+        self.unwrap = unwrap
 
         if array.is_static_array() and direction == Direction.INPUT:
             LOGGER.error("Static array input conversion is not supported")
@@ -2476,11 +2634,7 @@ class ArrayConversionFunction(object):
             name += "pointer_"
         name += "array_"
         win_type = "win32" if self.conv else "win64"
-        host_part = "host" if self.unwrap else "unwrapped_host"
-        if self.direction == Direction.INPUT:
-            name += "{0}_to_{1}".format(win_type, host_part)
-        else: # Direction.OUTPUT
-            name += "{0}_to_{1}".format(host_part, win_type)
+        name += convert_suffix(direction, win_type, unwrap, array.is_wrapped())
         self.name = name
 
     def __eq__(self, other):
@@ -2551,19 +2705,14 @@ class ArrayConversionFunction(object):
             if self.array.is_struct():
                 struct = self.array.struct
                 win_part = "win32" if self.conv else "win64"
-                host_part = "host" if self.unwrap else "unwrapped_host"
-                if self.direction == Direction.INPUT:
-                    conv_suffix = "{0}_to_{1}".format(win_part, host_part)
-                else:
-                    conv_suffix = "{0}_to_{1}".format(host_part, win_part)
-
+                suffix = convert_suffix(self.direction, win_part, self.unwrap, struct.is_wrapped())
                 ctx_part = ""
                 if self.direction == Direction.INPUT and struct.needs_alloc(self.conv, self.unwrap):
                     ctx_part = "ctx, "
 
                 if not self.array.pointer_array:
                     body += "        convert_{0}_{1}({2}&in[i], &out[i]);\n".format(
-                        struct.name, conv_suffix, ctx_part)
+                        struct.name, suffix, ctx_part)
                 else:
                     if struct.needs_conversion(self.conv, self.unwrap, self.direction, False):
                         body += "        if (in[i])\n"
@@ -2574,12 +2723,12 @@ class ArrayConversionFunction(object):
                         else:
                             in_param = "in[i]"
                         body += "            convert_{0}_{1}({2}{3}, out[i]);\n".format(
-                            struct.name, conv_suffix, ctx_part, in_param)
+                            struct.name, suffix, ctx_part, in_param)
                         body += "        }\n"
                         body += "        else\n"
                         body += "            out[i] = NULL;\n"
                     else:
-                        body += "        out[i] = UlongToPtr(in[i]);\n".format(win_type)
+                        body += "        out[i] = UlongToPtr(in[i]);\n"
             elif self.array.is_handle():
                 if self.array.pointer_array:
                     LOGGER.error("Unhandled handle pointer arrays")
@@ -2591,10 +2740,10 @@ class ArrayConversionFunction(object):
                 else:
                     input = "PtrToUlong(in[i])"
 
-                if not self.unwrap or not handle.is_wrapped():
+                if self.unwrap == Unwrap.NONE or not handle.is_wrapped():
                     body += "        out[i] = {0};\n".format(input)
                 elif self.direction == Direction.INPUT:
-                    body += "        out[i] = " + handle.driver_handle(input) + ";\n"
+                    body += "        out[i] = {0};\n".format(handle.unwrap_handle(input, self.unwrap))
                 else:
                     LOGGER.warning("Unhandled handle output conversion")
             elif self.array.pointer_array:
@@ -2689,10 +2838,10 @@ class VkGenerator(object):
             f.write("    case {}:\n".format(handle.object_type))
             if handle.is_dispatchable():
                 f.write("        return (uint64_t) (uintptr_t) ")
-                f.write(handle.native_handle("(({}) (uintptr_t) handle)".format(handle.name)))
+                f.write(handle.host_handle("(({}) (uintptr_t) handle)".format(handle.name)))
             else:
                 f.write("        return (uint64_t) ")
-                f.write(handle.native_handle("handle"))
+                f.write(handle.host_handle("handle"))
             f.write(";\n");
         f.write("    default:\n")
         f.write("       return handle;\n")
@@ -2708,7 +2857,7 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type == ThunkType.NONE:
+            if vk_func.name in MANUAL_LOADER_FUNCTIONS:
                 continue
 
             f.write(vk_func.thunk(prefix="thunk64_"))
@@ -2779,7 +2928,7 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type == ThunkType.NONE:
+            if vk_func.name in MANUAL_LOADER_FUNCTIONS:
                 continue
 
             if vk_func.is_perf_critical():
@@ -2803,7 +2952,7 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type == ThunkType.NONE:
+            if vk_func.name in MANUAL_LOADER_FUNCTIONS:
                 continue
 
             if vk_func.is_perf_critical():
@@ -2827,7 +2976,7 @@ class VkGenerator(object):
             if not vk_func.needs_private_thunk():
                 continue
 
-            f.write("{0};\n".format(vk_func.prototype(prefix=prefix, postfix="DECLSPEC_HIDDEN", is_thunk=True)))
+            f.write("{0};\n".format(vk_func.prototype(prefix=prefix, is_thunk=True)))
         f.write("\n")
 
         f.write("/* For use by vkDevice and children */\n")
@@ -2902,7 +3051,7 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type != ThunkType.PUBLIC:
+            if vk_func.name in MANUAL_LOADER_THUNKS | MANUAL_LOADER_FUNCTIONS:
                 continue
 
             f.write(vk_func.loader_thunk())
@@ -2987,7 +3136,7 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type == ThunkType.NONE:
+            if vk_func.name in MANUAL_LOADER_FUNCTIONS:
                 continue
 
             f.write("    unix_{0},\n".format(vk_func.name))
@@ -2997,14 +3146,18 @@ class VkGenerator(object):
         for vk_func in self.registry.funcs.values():
             if not vk_func.needs_exposing():
                 continue
-            if vk_func.loader_thunk_type == ThunkType.NONE:
+            if vk_func.name in MANUAL_LOADER_FUNCTIONS:
                 continue
 
             f.write("struct {0}_params\n".format(vk_func.name))
             f.write("{\n");
+            extra_param_is_new = True
             for p in vk_func.params:
                 f.write("    {0};\n".format(p.definition(is_member=True)))
-            if vk_func.extra_param:
+                if p.name == vk_func.extra_param:
+                    extra_param_is_new = False
+
+            if vk_func.extra_param and extra_param_is_new:
                 f.write("    void *{0};\n".format(vk_func.extra_param))
             if vk_func.type != "void":
                 f.write("    {0} result;\n".format(vk_func.type))
@@ -3133,10 +3286,15 @@ class VkGenerator(object):
 
         f.write("\n")
         f.write("    /* winevulkan specific functions */\n")
-        f.write("    VkSurfaceKHR (*p_wine_get_native_surface)(VkSurfaceKHR);\n")
+        f.write("    VkSurfaceKHR (*p_wine_get_host_surface)(VkSurfaceKHR);\n")
+        f.write("\n")
+        f.write("    /* Optional. Returns TRUE if FS hack is active, otherwise returns FALSE. If\n")
+        f.write("     * it returns TRUE, then real_sz will contain the actual display\n")
+        f.write("     * resolution; user_sz will contain the app's requested mode; and dst_blit\n")
+        f.write("     * will contain the area to blit the user image to in real coordinates.\n")
+        f.write("     * All parameters are optional. */\n")
+        f.write("    VkBool32 (*query_fs_hack)(VkSurfaceKHR surface, VkExtent2D *real_sz, VkExtent2D *user_sz, VkRect2D *dst_blit, VkFilter *filter);\n")
         f.write("};\n\n")
-
-        f.write("extern const struct vulkan_funcs * __wine_get_vulkan_driver(UINT version);\n\n")
 
         f.write("static inline void *get_vulkan_driver_device_proc_addr(\n")
         f.write("        const struct vulkan_funcs *vulkan_funcs, const char *name)\n{\n")
@@ -3166,6 +3324,28 @@ class VkGenerator(object):
         f.write("\n")
         f.write("    name -= 2;\n\n")
         f.write("    return get_vulkan_driver_device_proc_addr(vulkan_funcs, name);\n}\n\n")
+
+        f.write("typedef VkResult (WINAPI *PFN_native_vkCreateInstance)(const VkInstanceCreateInfo *, const VkAllocationCallbacks *, VkInstance *,\n")
+        f.write("                                                       void * (*)(VkInstance, const char *), void *);\n");
+        f.write("typedef VkResult (WINAPI *PFN_native_vkCreateDevice)(VkPhysicalDevice, const VkDeviceCreateInfo *, const VkAllocationCallbacks *, VkDevice *,\n");
+        f.write("                                                     void * (*)(VkInstance, const char *), void *);\n\n");
+        f.write("typedef struct VkCreateInfoWineDeviceCallback {\n");
+        f.write("    VkStructureType             sType;\n");
+        f.write("    const void*                 pNext;\n");
+        f.write("    PFN_native_vkCreateDevice   native_create_callback;\n");
+        f.write("    void*                       context;\n");
+        f.write("} VkCreateInfoWineDeviceCallback;\n");
+
+        f.write("#define VK_STRUCTURE_TYPE_CREATE_INFO_WINE_DEVICE_CALLBACK 2125312001\n");
+
+        f.write("typedef struct VkCreateInfoWineInstanceCallback {\n");
+        f.write("    VkStructureType             sType;\n");
+        f.write("    const void*                 pNext;\n");
+        f.write("    PFN_native_vkCreateInstance native_create_callback;\n");
+        f.write("    void*                       context;\n");
+        f.write("} VkCreateInfoWineInstanceCallback;\n");
+
+        f.write("#define VK_STRUCTURE_TYPE_CREATE_INFO_WINE_INSTANCE_CALLBACK 2125312002\n");
 
         f.write("#endif /* __WINE_VULKAN_DRIVER_H */\n")
 
@@ -3238,12 +3418,16 @@ class VkRegistry(object):
         # function call we want we set a member 'required' to True.
         tree = ET.parse(reg_filename)
         root = tree.getroot()
+
+        tree_custom = ET.parse("vk_custom.xml")
+        root_custom = tree_custom.getroot()
+
         self._parse_enums(root)
         self._parse_types(root)
-        self._parse_commands(root)
+        self._parse_commands(root, root_custom)
 
         # Pull in any required types and functions.
-        self._parse_features(root)
+        self._parse_features(root, root_custom)
         self._parse_extensions(root)
 
         for enum in self.enums.values():
@@ -3336,10 +3520,10 @@ class VkRegistry(object):
             if not handle.object_type:
                 LOGGER.warning("No object type found for {}".format(handle.name))
 
-    def _parse_commands(self, root):
+    def _parse_commands(self, root, root_custom):
         """ Parse command section containing the Vulkan function calls. """
         funcs = {}
-        commands = root.findall("./commands/")
+        commands = root.findall("./commands/") + root_custom.findall("./commands/")
 
         # As of Vulkan 1.1, various extensions got promoted to Core.
         # The old commands (e.g. KHR) are available for backwards compatibility
@@ -3355,6 +3539,7 @@ class VkRegistry(object):
                 continue
 
             func = VkFunction.from_xml(command, self.types)
+
             if func:
                 funcs[func.name] = func
 
@@ -3606,10 +3791,10 @@ class VkRegistry(object):
         # Sort in alphabetical order.
         self.extensions = sorted(extensions, key=lambda ext: ext["name"])
 
-    def _parse_features(self, root):
+    def _parse_features(self, root, root_custom):
         """ Parse the feature section, which describes Core commands and types needed. """
 
-        for feature in root.findall("./feature"):
+        for feature in (root.findall("./feature") + root_custom.findall("./feature")):
             if not api_is_vulkan(feature):
                 continue
             feature_name = feature.attrib["name"]
@@ -3708,7 +3893,7 @@ class VkRegistry(object):
                 # Since we already parsed the enum before, just link it in.
                 try:
                     type_info["data"] = self.enums[name]
-                except KeyError as e:
+                except KeyError:
                     # Not all enums seem to be defined yet, typically that's for
                     # ones ending in 'FlagBits' where future extensions may add
                     # definitions.

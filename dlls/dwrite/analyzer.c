@@ -28,9 +28,9 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dwrite);
 
-extern const unsigned short wine_linebreak_table[] DECLSPEC_HIDDEN;
-extern const unsigned short wine_scripts_table[] DECLSPEC_HIDDEN;
-extern const unsigned short bidi_direction_table[] DECLSPEC_HIDDEN;
+extern const unsigned short wine_linebreak_table[];
+extern const unsigned short wine_scripts_table[];
+extern const unsigned short bidi_direction_table[];
 
 /* Number of characters needed for LOCALE_SNATIVEDIGITS */
 #define NATIVE_DIGITS_LEN 11
@@ -208,7 +208,7 @@ static const struct dwritescript_properties dwritescripts_properties[Script_Last
 
 const char *debugstr_sa_script(UINT16 script)
 {
-    return script < Script_LastId ? debugstr_tag(dwritescripts_properties[script].props.isoScriptCode) : "undefined";
+    return script < Script_LastId ? debugstr_fourcc(dwritescripts_properties[script].props.isoScriptCode) : "undefined";
 }
 
 static const struct fallback_description
@@ -248,7 +248,7 @@ system_fallback_config[] =
     { "0D00-0D7F",              L"Noto Sans Malayalam" },
     { "0D80-0DFF",              L"Noto Sans Sinhala" },
 
-    { "0E00-0E7F",              L"Noto Sans Thai" },
+    { "0E00-0E7F",              L"Microsoft Sans Serif" },
     { "0E80-0EFF",              L"Noto Sans Lao" },
 
     { "0F00-0FFF",              L"Noto Serif Tibetan" },
@@ -268,7 +268,7 @@ system_fallback_config[] =
     { "1100-11FF, 3130-318F, "
       "3200-321F, 3260-327F, "
       "A960-A97F, AC00-D7FF, "
-      "D7B0-D7FF",              L"Noto Sans CJK KR" },
+      "D7B0-D7FF",              L"Malgun Gothic" },
 
     { "1680-169F",              L"Noto Sans Ogham" },
 
@@ -297,27 +297,27 @@ system_fallback_config[] =
 
     /* CJK Radicals Supplement - 2E80-2EFF */
 
-    { "2E80-2EFF",              L"Noto Sans CJK SC", L"zh-Hans" },
+    { "2E80-2EFF",              L"Microsoft YaHei", L"zh-Hans" },
     { "2E80-2EFF",              L"Noto Sans CJK TC", L"zh-Hant" },
-    { "2E80-2EFF",              L"Noto Sans CJK KR", L"ko" },
+    { "2E80-2EFF",              L"Malgun Gothic", L"ko" },
 
     /* CJK Symbols and Punctuation - 3000-303F
        Hiragana                    - 3040-309F
        Katakana                    - 30A0-30FF
        Katakana Phonetic Ext.      - 31F0-31FF */
 
-    { "3000-30FF, 31F0-31FF",   L"Noto Sans CJK SC", L"zh-Hans" },
+    { "3000-30FF, 31F0-31FF",   L"Microsoft YaHei", L"zh-Hans" },
     { "3000-30FF, 31F0-31FF",   L"Noto Sans CJK TC", L"zh-Hant" },
-    { "3000-30FF, 31F0-31FF",   L"Noto Sans CJK KR", L"ko" },
-    { "3000-30FF, 31F0-31FF",   L"Noto Sans CJK JP" },
+    { "3000-30FF, 31F0-31FF",   L"Malgun Gothic", L"ko" },
+    { "3000-30FF, 31F0-31FF",   L"MS Gothic" },
 
     /* CJK Unified Ext A - 3400-4DBF
        CJK Unified       - 4E00-9FFF */
 
-    { "3400-4DBF, 4E00-9FFF",   L"Noto Sans CJK SC", L"zh-Hans" },
+    { "3400-4DBF, 4E00-9FFF",   L"Microsoft YaHei", L"zh-Hans" },
     { "3400-4DBF, 4E00-9FFF",   L"Noto Sans CJK TC", L"zh-Hant" },
-    { "3400-4DBF, 4E00-9FFF",   L"Noto Sans CJK KR", L"ko" },
-    { "3400-4DBF, 4E00-9FFF",   L"Noto Sans CJK JP" },
+    { "3400-4DBF, 4E00-9FFF",   L"Malgun Gothic", L"ko" },
+    { "3400-4DBF, 4E00-9FFF",   L"MS Gothic" },
 
     { "A000-A4CF",              L"Noto Sans Yi" },
     { "A4D0-A4FF",              L"Noto Sans Lisu" },
@@ -333,30 +333,30 @@ system_fallback_config[] =
 
     /* CJK Compatibility Ideographs - F900-FAFF */
 
-    { "F900-FAFF",              L"Noto Sans CJK SC", L"zh-Hans" },
+    { "F900-FAFF",              L"Microsoft YaHei", L"zh-Hans" },
     { "F900-FAFF",              L"Noto Sans CJK TC", L"zh-Hant" },
-    { "F900-FAFF",              L"Noto Sans CJK KR", L"ko" },
-    { "F900-FAFF",              L"Noto Sans CJK JP" },
+    { "F900-FAFF",              L"Malgun Gothic", L"ko" },
+    { "F900-FAFF",              L"MS Gothic" },
 
     /* Vertical Forms - FE10-FE1F */
 
-    { "FE10-FE1F",              L"Noto Sans CJK SC", L"zh-Hans" },
-    { "FE10-FE1F",              L"Noto Sans CJK KR", L"ko" },
+    { "FE10-FE1F",              L"Microsoft YaHei", L"zh-Hans" },
+    { "FE10-FE1F",              L"Malgun Gothic", L"ko" },
     { "FE10-FE1F",              L"Noto Sans CJK TC" },
 
     /* CJK Compatibility Forms - FE30-FE4F
        Small Form Variants     - FE50-FE6F */
 
-    { "FE30-FE6F",              L"Noto Sans CJK SC", L"zh-Hans" },
-    { "FE30-FE6F",              L"Noto Sans CJK KR", L"ko" },
-    { "FE30-FE6F",              L"Noto Sans CJK JP", L"ja" },
+    { "FE30-FE6F",              L"Microsoft YaHei", L"zh-Hans" },
+    { "FE30-FE6F",              L"Malgun Gothic", L"ko" },
+    { "FE30-FE6F",              L"MS Gothic", L"ja" },
     { "FE30-FE6F",              L"Noto Sans CJK TC" },
 
     /* Halfwidth and Fullwidth Forms */
-    { "FF00-FFEF",              L"Noto Sans CJK SC", L"zh-Hans" },
+    { "FF00-FFEF",              L"Microsoft YaHei", L"zh-Hans" },
     { "FF00-FFEF",              L"Noto Sans CJK TC", L"zh-Hant" },
-    { "FF00-FFEF",              L"Noto Sans CJK KR", L"ko" },
-    { "FF00-FFEF",              L"Noto Sans CJK JP" },
+    { "FF00-FFEF",              L"Malgun Gothic", L"ko" },
+    { "FF00-FFEF",              L"MS Gothic" },
 };
 
 struct text_source_context
@@ -658,7 +658,7 @@ static DWRITE_SCRIPT_ANALYSIS get_char_sa(UINT32 c)
 
     sa.script = get_char_script(c);
     sa.shapes = DWRITE_SCRIPT_SHAPES_DEFAULT;
-    if ((c >= 0x0001 && c <= 0x001f)           /* C0 controls */
+    if ((c <= 0x001f)                          /* C0 controls */
             || (c >= 0x007f && c <= 0x009f)    /* DELETE, C1 controls */
             || (c == 0x00ad)                   /* SOFT HYPHEN */
             || (c >= 0x200b && c <= 0x200f)    /* ZWSP, ZWNJ, ZWJ, LRM, RLM */
@@ -1508,7 +1508,7 @@ static void analyzer_dump_user_features(DWRITE_TYPOGRAPHIC_FEATURES const **feat
     for (i = 0, start = 0; i < feature_ranges; start += feature_range_lengths[i++]) {
         TRACE("feature range [%u,%u)\n", start, start + feature_range_lengths[i]);
         for (j = 0; j < features[i]->featureCount; j++)
-            TRACE("feature %s, parameter %u\n", debugstr_tag(features[i]->features[j].nameTag),
+            TRACE("feature %s, parameter %u\n", debugstr_fourcc(features[i]->features[j].nameTag),
                     features[i]->features[j].parameter);
     }
 }
@@ -2188,7 +2188,7 @@ static HRESULT WINAPI dwritetextanalyzer2_CheckTypographicFeature(IDWriteTextAna
     struct dwrite_fontface *font_obj;
     HRESULT hr;
 
-    TRACE("%p, %p, %u, %s, %s, %u, %p, %p.\n", iface, fontface, sa.script, debugstr_w(locale), debugstr_tag(feature),
+    TRACE("%p, %p, %u, %s, %s, %u, %p, %p.\n", iface, fontface, sa.script, debugstr_w(locale), debugstr_fourcc(feature),
             glyph_count, glyphs, feature_applies);
 
     if (sa.script > Script_LastId)

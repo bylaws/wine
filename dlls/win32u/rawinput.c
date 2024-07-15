@@ -96,7 +96,9 @@ static bool rawinput_from_hardware_message( RAWINPUT *rawinput, const struct har
         rawinput->header.hDevice = WINE_MOUSE_HANDLE;
         rawinput->header.wParam  = 0;
 
-        rawinput->data.mouse.usFlags           = MOUSE_MOVE_RELATIVE;
+        rawinput->data.mouse.usFlags = msg_data->flags & MOUSEEVENTF_ABSOLUTE ? MOUSE_MOVE_ABSOLUTE : MOUSE_MOVE_RELATIVE;
+        if (msg_data->flags & MOUSEEVENTF_VIRTUALDESK) rawinput->data.mouse.usFlags |= MOUSE_VIRTUAL_DESKTOP;
+
         rawinput->data.mouse.usButtonFlags = 0;
         rawinput->data.mouse.usButtonData  = 0;
         for (i = 1; i < ARRAY_SIZE(button_flags); ++i)
@@ -419,11 +421,16 @@ static void enumerate_devices( DWORD type, const WCHAR *class )
     NtClose( class_key );
 }
 
-static void rawinput_update_device_list(void)
+static void rawinput_update_device_list( BOOL force )
 {
+    unsigned int ticks = NtGetTickCount();
+    static unsigned int last_check;
     struct device *device, *next;
 
     TRACE( "\n" );
+
+    if (ticks - last_check <= 2000 && !force) return;
+    last_check = ticks;
 
     LIST_FOR_EACH_ENTRY_SAFE( device, next, &devices, struct device, entry )
     {
@@ -438,14 +445,15 @@ static void rawinput_update_device_list(void)
     enumerate_devices( RIM_TYPEHID, guid_devinterface_hidW );
 }
 
-static struct device *find_device_from_handle( HANDLE handle )
+static struct device *find_device_from_handle( HANDLE handle, BOOL refresh )
 {
     struct device *device;
 
     LIST_FOR_EACH_ENTRY( device, &devices, struct device, entry )
         if (device->handle == handle) return device;
+    if (!refresh) return NULL;
 
-    rawinput_update_device_list();
+    rawinput_update_device_list( TRUE );
 
     LIST_FOR_EACH_ENTRY( device, &devices, struct device, entry )
         if (device->handle == handle) return device;
@@ -459,7 +467,7 @@ BOOL rawinput_device_get_usages( HANDLE handle, USAGE *usage_page, USAGE *usage 
 
     pthread_mutex_lock( &rawinput_mutex );
 
-    if (!(device = find_device_from_handle( handle )) || device->info.dwType != RIM_TYPEHID)
+    if (!(device = find_device_from_handle( handle, TRUE )) || device->info.dwType != RIM_TYPEHID)
         *usage_page = *usage = 0;
     else
     {
@@ -477,8 +485,7 @@ BOOL rawinput_device_get_usages( HANDLE handle, USAGE *usage_page, USAGE *usage 
  */
 UINT WINAPI NtUserGetRawInputDeviceList( RAWINPUTDEVICELIST *device_list, UINT *device_count, UINT size )
 {
-    unsigned int count = 0, ticks = NtGetTickCount();
-    static unsigned int last_check;
+    unsigned int count = 0;
     struct device *device;
 
     TRACE( "device_list %p, device_count %p, size %u.\n", device_list, device_count, size );
@@ -497,11 +504,7 @@ UINT WINAPI NtUserGetRawInputDeviceList( RAWINPUTDEVICELIST *device_list, UINT *
 
     pthread_mutex_lock( &rawinput_mutex );
 
-    if (ticks - last_check > 2000)
-    {
-        last_check = ticks;
-        rawinput_update_device_list();
-    }
+    rawinput_update_device_list( FALSE );
 
     LIST_FOR_EACH_ENTRY( device, &devices, struct device, entry )
     {
@@ -527,6 +530,30 @@ UINT WINAPI NtUserGetRawInputDeviceList( RAWINPUTDEVICELIST *device_list, UINT *
     }
 
     return count;
+}
+
+static BOOL steam_input_get_vid_pid( UINT slot, UINT16 *vid, UINT16 *pid )
+{
+    const char *info = getenv( "SteamVirtualGamepadInfo" );
+    char buffer[256];
+    UINT current;
+    FILE *file;
+
+    TRACE( "reading SteamVirtualGamepadInfo %s\n", debugstr_a(info) );
+
+    if (!info || !(file = fopen( info, "r" ))) return FALSE;
+    while (fscanf( file, "%255[^\n]\n", buffer ) == 1)
+    {
+        if (sscanf( buffer, "[slot %d]", &current )) continue;
+        if (current < slot) continue;
+        if (current > slot) break;
+        if (sscanf( buffer, "VID=0x%hx", vid )) continue;
+        if (sscanf( buffer, "PID=0x%hx", pid )) continue;
+    }
+
+    fclose( file );
+
+    return TRUE;
 }
 
 /**********************************************************************
@@ -555,7 +582,7 @@ UINT WINAPI NtUserGetRawInputDeviceInfo( HANDLE handle, UINT command, void *data
 
     pthread_mutex_lock( &rawinput_mutex );
 
-    if (!(device = find_device_from_handle( handle )))
+    if (!(device = find_device_from_handle( handle, TRUE )))
     {
         pthread_mutex_unlock( &rawinput_mutex );
         RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
@@ -566,10 +593,51 @@ UINT WINAPI NtUserGetRawInputDeviceInfo( HANDLE handle, UINT command, void *data
     switch (command)
     {
     case RIDI_DEVICENAME:
-        if ((len = wcslen( device->path ) + 1) <= data_len && data)
-            memcpy( data, device->path, len * sizeof(WCHAR) );
+    {
+        static const WCHAR steam_input_idW[] =
+        {
+            '\\','\\','?','\\','H','I','D','#','V','I','D','_','2','8','D','E','&','P','I','D','_','1','1','F','F','&','I','G','_',0
+        };
+        const WCHAR *device_path;
+        WCHAR bufferW[MAX_PATH];
+
+        /* CW-Bug-Id: #23185 Emulate Steam Input native hooks for native SDL */
+        if (wcsnicmp( device->path, steam_input_idW, 29 )) device_path = device->path;
+        else
+        {
+            char buffer[MAX_PATH];
+            UINT size = 0, slot;
+            const WCHAR *tmpW;
+            UINT16 vid, pid;
+
+            tmpW = device->path + 29;
+            while (*tmpW && *tmpW != '#' && size < ARRAY_SIZE(buffer)) buffer[size++] = *tmpW++;
+            buffer[size] = 0;
+            if (sscanf( buffer, "%02u", &slot ) != 1) slot = 0;
+
+            if (!steam_input_get_vid_pid( slot, &vid, &pid ))
+            {
+                vid = 0x045e;
+                pid = 0x028e;
+            }
+
+            size = snprintf( buffer, ARRAY_SIZE(buffer), "\\\\.\\pipe\\HID#VID_045E&PID_028E&IG_00#%04X&%04X", vid, pid );
+            if ((tmpW = wcschr( device->path + 29, '&' )))
+            {
+                do buffer[size++] = *tmpW++;
+                while (*tmpW != '&' && size < ARRAY_SIZE(buffer));
+            }
+            size += snprintf( buffer + size, ARRAY_SIZE(buffer) - size, "#%d#%u", slot, (UINT)GetCurrentProcessId() );
+
+            ntdll_umbstowcs( buffer, size + 1, bufferW, sizeof(bufferW) );
+            device_path = bufferW;
+        }
+
+        if ((len = wcslen( device_path ) + 1) <= data_len && data)
+            memcpy( data, device_path, len * sizeof(WCHAR) );
         *data_size = len;
         break;
+    }
 
     case RIDI_DEVICEINFO:
         if ((len = sizeof(info)) <= data_len && data)
@@ -609,6 +677,8 @@ UINT WINAPI NtUserGetRawInputDeviceInfo( HANDLE handle, UINT command, void *data
  */
 UINT WINAPI NtUserGetRawInputBuffer( RAWINPUT *data, UINT *data_size, UINT header_size )
 {
+    struct user_thread_info *thread_info;
+    static int cached_clear_qs_rawinput = -1;
     unsigned int count = 0, remaining, rawinput_size, next_size, overhead;
     struct rawinput_thread_data *thread_data;
     struct hardware_msg_data *msg_data;
@@ -641,6 +711,7 @@ UINT WINAPI NtUserGetRawInputBuffer( RAWINPUT *data, UINT *data_size, UINT heade
         {
             req->rawinput_size = rawinput_size;
             req->buffer_size = 0;
+            req->clear_qs_rawinput = 0;
             if (wine_server_call( req )) return ~0u;
             *data_size = reply->next_size;
         }
@@ -651,16 +722,26 @@ UINT WINAPI NtUserGetRawInputBuffer( RAWINPUT *data, UINT *data_size, UINT heade
     if (!(thread_data = get_rawinput_thread_data())) return ~0u;
     rawinput = thread_data->buffer;
 
+    if (cached_clear_qs_rawinput == -1)
+    {
+        const char *sgi;
+
+        cached_clear_qs_rawinput = (sgi = getenv( "SteamGameId" )) && !strcmp( sgi, "1172470" );
+    }
+
+    thread_info = get_user_thread_info();
     /* first RAWINPUT block in the buffer is used for WM_INPUT message data */
     msg_data = (struct hardware_msg_data *)NEXTRAWINPUTBLOCK(rawinput);
     SERVER_START_REQ( get_rawinput_buffer )
     {
         req->rawinput_size = rawinput_size;
         req->buffer_size = *data_size;
+        req->clear_qs_rawinput = cached_clear_qs_rawinput;
         wine_server_set_reply( req, msg_data, RAWINPUT_BUFFER_SIZE - rawinput->header.dwSize );
         if (wine_server_call( req )) return ~0u;
         next_size = reply->next_size;
         count = reply->count;
+        if (count) thread_info->client_info.message_time = reply->last_message_time;
     }
     SERVER_END_REQ;
 
@@ -779,8 +860,20 @@ BOOL process_rawinput_message( MSG *msg, UINT hw_id, const struct hardware_msg_d
 
     if (msg->message == WM_INPUT_DEVICE_CHANGE)
     {
+        BOOL refresh = msg_data->rawinput.hid.param == GIDC_ARRIVAL;
+        struct device *device;
+
         pthread_mutex_lock( &rawinput_mutex );
-        rawinput_update_device_list();
+        if ((device = find_device_from_handle( UlongToHandle( msg_data->rawinput.hid.device ), refresh )))
+        {
+            if (msg_data->rawinput.hid.param == GIDC_REMOVAL)
+            {
+                list_remove( &device->entry );
+                NtClose( device->file );
+                free( device->data );
+                free( device );
+            }
+        }
         pthread_mutex_unlock( &rawinput_mutex );
     }
     else
@@ -793,6 +886,30 @@ BOOL process_rawinput_message( MSG *msg, UINT hw_id, const struct hardware_msg_d
 
     msg->pt = point_phys_to_win_dpi( msg->hwnd, msg->pt );
     return TRUE;
+}
+
+static void post_device_notifications( const RAWINPUTDEVICE *filter )
+{
+    ULONG usages = MAKELONG( filter->usUsagePage, filter->usUsage );
+    struct device *device;
+
+    LIST_FOR_EACH_ENTRY( device, &devices, struct device, entry )
+    {
+        switch (device->info.dwType)
+        {
+        case RIM_TYPEMOUSE:
+            if (usages != MAKELONG( HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE )) continue;
+            break;
+        case RIM_TYPEKEYBOARD:
+            if (usages != MAKELONG( HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD )) continue;
+            break;
+        case RIM_TYPEHID:
+            if (usages != MAKELONG( device->info.hid.usUsagePage, device->info.hid.usUsage )) continue;
+            break;
+        }
+
+        NtUserPostMessage( filter->hwndTarget, WM_INPUT_DEVICE_CHANGE, GIDC_ARRIVAL, (LPARAM)device->handle );
+    }
 }
 
 static void register_rawinput_device( const RAWINPUTDEVICE *device )
@@ -816,6 +933,7 @@ static void register_rawinput_device( const RAWINPUTDEVICE *device )
     }
     else
     {
+        if ((device->dwFlags & RIDEV_DEVNOTIFY) && device->hwndTarget) post_device_notifications( device );
         if (pos == end || pos->usUsagePage != device->usUsagePage || pos->usUsage != device->usUsage)
         {
             memmove( pos + 1, pos, (char *)end - (char *)pos );
@@ -880,6 +998,8 @@ BOOL WINAPI NtUserRegisterRawInputDevices( const RAWINPUTDEVICE *devices, UINT d
         RtlSetLastWin32Error( ERROR_OUTOFMEMORY );
         return FALSE;
     }
+
+    rawinput_update_device_list( TRUE );
 
     registered_devices = new_registered_devices;
     for (i = 0; i < device_count; ++i) register_rawinput_device( devices + i );

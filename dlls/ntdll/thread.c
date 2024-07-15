@@ -35,6 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(thread);
 WINE_DECLARE_DEBUG_CHANNEL(relay);
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
+WINE_DECLARE_DEBUG_CHANNEL(microsecs);
 
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
 
@@ -142,7 +143,14 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
     /* only print header if we are at the beginning of the line */
     if (info->out_pos) return 0;
 
-    if (TRACE_ON(timestamp))
+    if (TRACE_ON(microsecs))
+    {
+        LARGE_INTEGER counter, frequency, microsecs;
+        NtQueryPerformanceCounter(&counter, &frequency);
+        microsecs.QuadPart = counter.QuadPart * 1000000 / frequency.QuadPart;
+        pos += sprintf( pos, "%3u.%06u:", (unsigned int)(microsecs.QuadPart / 1000000), (unsigned int)(microsecs.QuadPart % 1000000) );
+    }
+    else if (TRACE_ON(timestamp))
     {
         ULONG ticks = NtGetTickCount();
         pos += sprintf( pos, "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
@@ -244,64 +252,6 @@ void WINAPI RtlExitUserThread( ULONG status )
     LdrShutdownThread();
     for (;;) NtTerminateThread( GetCurrentThread(), status );
 }
-
-
-/***********************************************************************
- *           RtlUserThreadStart (NTDLL.@)
- */
-#ifdef __i386__
-__ASM_STDCALL_FUNC( RtlUserThreadStart, 8,
-                   "movl %ebx,8(%esp)\n\t"  /* arg */
-                   "movl %eax,4(%esp)\n\t"  /* entry */
-                   "jmp " __ASM_NAME("call_thread_func") )
-
-/* wrapper to call BaseThreadInitThunk */
-extern void DECLSPEC_NORETURN call_thread_func_wrapper( void *thunk, PRTL_THREAD_START_ROUTINE entry, void *arg );
-__ASM_GLOBAL_FUNC( call_thread_func_wrapper,
-                  "pushl %ebp\n\t"
-                  __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
-                  __ASM_CFI(".cfi_rel_offset %ebp,0\n\t")
-                  "movl %esp,%ebp\n\t"
-                  __ASM_CFI(".cfi_def_cfa_register %ebp\n\t")
-                   "subl $4,%esp\n\t"
-                   "andl $~0xf,%esp\n\t"
-                   "xorl %ecx,%ecx\n\t"
-                   "movl 12(%ebp),%edx\n\t"
-                   "movl 16(%ebp),%eax\n\t"
-                   "movl %eax,(%esp)\n\t"
-                   "call *8(%ebp)" )
-
-void DECLSPEC_HIDDEN call_thread_func( PRTL_THREAD_START_ROUTINE entry, void *arg )
-{
-    __TRY
-    {
-        TRACE_(relay)( "\1Starting thread proc %p (arg=%p)\n", entry, arg );
-        call_thread_func_wrapper( pBaseThreadInitThunk, entry, arg );
-    }
-    __EXCEPT(call_unhandled_exception_filter)
-    {
-        NtTerminateProcess( GetCurrentProcess(), GetExceptionCode() );
-    }
-    __ENDTRY
-}
-
-#else  /* __i386__ */
-
-void WINAPI RtlUserThreadStart( PRTL_THREAD_START_ROUTINE entry, void *arg )
-{
-    __TRY
-    {
-        TRACE_(relay)( "\1Starting thread proc %p (arg=%p)\n", entry, arg );
-        pBaseThreadInitThunk( 0, (LPTHREAD_START_ROUTINE)entry, arg );
-    }
-    __EXCEPT(call_unhandled_exception_filter)
-    {
-        NtTerminateProcess( GetCurrentProcess(), GetExceptionCode() );
-    }
-    __ENDTRY
-}
-
-#endif  /* __i386__ */
 
 
 /***********************************************************************
@@ -765,3 +715,26 @@ void WINAPI DECLSPEC_HOTPATCH RtlProcessFlsData( void *teb_fls_data, ULONG flags
         RtlFreeHeap( GetProcessHeap(), 0, fls );
     }
 }
+
+#ifdef _WIN64
+
+/***********************************************************************
+ *              RtlWow64SuspendThread (NTDLL.@)
+ */
+NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
+{
+    THREAD_BASIC_INFORMATION tbi;
+
+    NTSTATUS ret = NtQueryInformationThread( thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
+    if (ret) return ret;
+
+    if (tbi.ClientId.UniqueProcess != NtCurrentTeb()->ClientId.UniqueProcess) {
+        /* TODO: to support this, remote thread creation would need to make a non wow thread */
+        ERR( "Non-local process suspend\n" );
+        return STATUS_SUCCESS;
+    }
+
+    return pWow64SuspendLocalThread( thread, count );
+}
+
+#endif

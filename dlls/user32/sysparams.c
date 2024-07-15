@@ -18,6 +18,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "user_private.h"
 #include "controls.h"
 #include "wine/asm.h"
@@ -746,6 +748,24 @@ DPI_AWARENESS_CONTEXT WINAPI SetThreadDpiAwarenessContext( DPI_AWARENESS_CONTEXT
     return ULongToHandle( prev );
 }
 
+/**********************************************************************
+ *              GetThreadDpiHostingBehavior   (USER32.@)
+ */
+DPI_HOSTING_BEHAVIOR WINAPI GetThreadDpiHostingBehavior( void )
+{
+    FIXME("(): stub\n");
+    return DPI_HOSTING_BEHAVIOR_DEFAULT;
+}
+
+/**********************************************************************
+ *              SetThreadDpiHostingBehavior   (USER32.@)
+ */
+DPI_HOSTING_BEHAVIOR WINAPI SetThreadDpiHostingBehavior( DPI_HOSTING_BEHAVIOR value )
+{
+    FIXME("(%d): stub\n", value);
+    return DPI_HOSTING_BEHAVIOR_DEFAULT;
+}
+
 /***********************************************************************
  *		MonitorFromRect (USER32.@)
  */
@@ -831,14 +851,17 @@ __ASM_GLOBAL_FUNC( enum_mon_callback_wrapper,
     "ret" )
 #endif /* __i386__ */
 
-BOOL WINAPI User32CallEnumDisplayMonitor( struct enum_display_monitor_params *params, ULONG size )
+NTSTATUS WINAPI User32CallEnumDisplayMonitor( void *args, ULONG size )
 {
+    struct enum_display_monitor_params *params = args;
+    BOOL ret;
 #ifdef __i386__
-    return enum_mon_callback_wrapper( params->proc, params->monitor, params->hdc,
-                                      &params->rect, params->lparam );
+    ret = enum_mon_callback_wrapper( params->proc, params->monitor, params->hdc,
+                                     &params->rect, params->lparam );
 #else
-    return params->proc( params->monitor, params->hdc, &params->rect, params->lparam );
+    ret = params->proc( params->monitor, params->hdc, &params->rect, params->lparam );
 #endif
+    return NtCallbackReturn( &ret, sizeof(ret), STATUS_SUCCESS );
 }
 
 /***********************************************************************
@@ -902,12 +925,21 @@ BOOL WINAPI GetAutoRotationState( AR_STATE *state )
 }
 
 /**********************************************************************
- *              GetDisplayAutoRotationPreferences [USER32.@]
+ *              GetDisplayAutoRotationPreferences (USER32.@)
  */
 BOOL WINAPI GetDisplayAutoRotationPreferences( ORIENTATION_PREFERENCE *orientation )
 {
     FIXME("(%p): stub\n", orientation);
     *orientation = ORIENTATION_PREFERENCE_NONE;
+    return TRUE;
+}
+
+/**********************************************************************
+ *              SetDisplayAutoRotationPreferences (USER32.@)
+ */
+BOOL WINAPI SetDisplayAutoRotationPreferences( ORIENTATION_PREFERENCE orientation )
+{
+    FIXME("(%d): stub\n", orientation);
     return TRUE;
 }
 
@@ -971,4 +1003,11 @@ LONG WINAPI SetDisplayConfig(UINT32 path_info_count, DISPLAYCONFIG_PATH_INFO *pa
             path_info_count, path_info, mode_info_count, mode_info, flags);
 
     return ERROR_SUCCESS;
+}
+
+LONG WINAPI GetDisplayConfigBufferSizes( UINT32 flags, UINT32 *num_path_info,
+                                               UINT32 *num_mode_info )
+{
+    flags |= 0x40000000; /* HACK: avoid triggering display updates in NtUserGetDisplayConfigBufferSizes(). */
+    return NtUserGetDisplayConfigBufferSizes(flags, num_path_info, num_mode_info);
 }

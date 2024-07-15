@@ -7,7 +7,7 @@
 #define WINE_GLAPI
 #endif
 
-#define WINE_WGL_DRIVER_VERSION 23
+#define WINE_WGL_DRIVER_VERSION 24
 
 struct wgl_context;
 struct wgl_pbuffer;
@@ -3404,7 +3404,5 @@ struct opengl_funcs
     USE_GL_FUNC(glVertex4sv) \
     USE_GL_FUNC(glVertexPointer) \
     USE_GL_FUNC(glViewport)
-
-extern struct opengl_funcs *__wine_get_wgl_driver( HDC hdc, UINT version );
 
 #endif /* __WINE_WGL_DRIVER_H */

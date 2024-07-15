@@ -46,6 +46,7 @@
 #define CompareString __carbon_CompareString
 #define GetCurrentThread __carbon_GetCurrentThread
 #define GetCurrentProcess __carbon_GetCurrentProcess
+#define GetProcessInformation __carbon_GetProcessInformation
 #define AnimatePalette __carbon_AnimatePalette
 #define DeleteMenu __carbon_DeleteMenu
 #define DrawMenu __carbon_DrawMenu
@@ -72,6 +73,7 @@
 #undef GetCurrentThread
 #undef _CDECL
 #undef GetCurrentProcess
+#undef GetProcessInformation
 #undef AnimatePalette
 #undef CheckMenuItem
 #undef DeleteMenu
@@ -253,6 +255,8 @@ MAKE_FUNCPTR(FcStrSetMember);
 #define GET_BE_WORD(x) RtlUshortByteSwap(x)
 #define GET_BE_DWORD(x) RtlUlongByteSwap(x)
 #endif
+
+#define MS_EBDT_TAG MS_MAKE_TAG('E','B','D','T')
 
 /* 'gasp' flags */
 #define GASP_GRIDFIT 0x01
@@ -551,8 +555,11 @@ static BOOL is_hinting_enabled(void)
 
     if (enabled == -1)
     {
+        const char *sgi;
+
+        if ((sgi = getenv("SteamGameId")) && !strcmp(sgi, "563560")) enabled = FALSE;
         /* Use the >= 2.2.0 function if available */
-        if (pFT_Get_TrueType_Engine_Type)
+        else if (pFT_Get_TrueType_Engine_Type)
         {
             FT_TrueTypeEngineType type = pFT_Get_TrueType_Engine_Type(library);
             enabled = (type == FT_TRUETYPE_ENGINE_TYPE_PATENTED);
@@ -1161,6 +1168,7 @@ struct unix_face
     WCHAR *style_name;
     WCHAR *full_name;
     DWORD ntm_flags;
+    UINT weight;
     DWORD font_version;
     FONTSIGNATURE fs;
     struct bitmap_font_size size;
@@ -1177,6 +1185,8 @@ static struct unix_face *unix_face_create( const char *unix_name, void *data_ptr
     struct stat st;
     DWORD face_count;
     int fd, length;
+    FT_Error error;
+    FT_ULong len;
 
     TRACE( "unix_name %s, face_index %u, data_ptr %p, data_size %u, flags %#x\n",
            unix_name, face_index, data_ptr, data_size, flags );
@@ -1200,7 +1210,7 @@ static struct unix_face *unix_face_create( const char *unix_name, void *data_ptr
     if (opentype_get_ttc_sfnt_v1( data_ptr, data_size, face_index, &face_count, &ttc_sfnt_v1 ) &&
         opentype_get_tt_name_v0( data_ptr, data_size, ttc_sfnt_v1, &tt_name_v0 ) &&
         opentype_get_properties( data_ptr, data_size, ttc_sfnt_v1, &This->font_version,
-                                 &This->fs, &This->ntm_flags ))
+                                 &This->fs, &This->ntm_flags, &This->weight ))
     {
         struct family_names_data family_names;
         struct face_name_data style_name;
@@ -1244,6 +1254,8 @@ static struct unix_face *unix_face_create( const char *unix_name, void *data_ptr
     }
     else if ((This->ft_face = new_ft_face( unix_name, data_ptr, data_size, face_index, flags & ADDFONT_ALLOW_BITMAP )))
     {
+        TT_OS2 *os2;
+
         WARN( "unable to parse font, falling back to FreeType\n" );
         This->scalable = FT_IS_SCALABLE( This->ft_face );
         This->num_faces = This->ft_face->num_faces;
@@ -1265,10 +1277,26 @@ static struct unix_face *unix_face_create( const char *unix_name, void *data_ptr
 
         This->style_name = ft_face_get_style_name( This->ft_face, system_lcid );
         This->full_name = ft_face_get_full_name( This->ft_face, system_lcid );
-
         This->ntm_flags = get_ntm_flags( This->ft_face );
+        if ((os2 = pFT_Get_Sfnt_Table(This->ft_face, ft_sfnt_os2)))
+            This->weight = os2->usWeightClass;
+        else
+            This->weight = This->ntm_flags & NTM_BOLD ? FW_BOLD : FW_NORMAL;
         This->font_version = get_font_version( This->ft_face );
-        if (!This->scalable) get_bitmap_size( This->ft_face, &This->size );
+        if (!This->scalable)
+        {
+            error = pFT_Load_Sfnt_Table( This->ft_face, RtlUlongByteSwap(MS_EBDT_TAG), 0, NULL, &len );
+            if (error == FT_Err_Table_Missing)
+            {
+                WARN( "EBDT table is missing in bitmap only font %s.\n",
+                      debugstr_w(ft_face_get_family_name( This->ft_face, system_lcid )));
+                pFT_Done_Face( This->ft_face );
+                free( This );
+                This = NULL;
+                goto done;
+            }
+            get_bitmap_size( This->ft_face, &This->size );
+        }
         get_fontsig( This->ft_face, &This->fs );
     }
     else
@@ -1313,7 +1341,7 @@ static int add_unix_face( const char *unix_name, const WCHAR *file, void *data_p
     if (!HIWORD( flags )) flags |= ADDFONT_AA_FLAGS( default_aa_flags );
 
     ret = add_gdi_face( unix_face->family_name, unix_face->second_name, unix_face->style_name, unix_face->full_name,
-                        file, data_ptr, data_size, face_index, unix_face->fs, unix_face->ntm_flags,
+                        file, data_ptr, data_size, face_index, unix_face->fs, unix_face->ntm_flags, unix_face->weight,
                         unix_face->font_version, flags, unix_face->scalable ? NULL : &unix_face->size );
 
     TRACE("fsCsb = %08x %08x/%08x %08x %08x %08x\n",
@@ -2058,7 +2086,7 @@ static UINT freetype_get_font_data( struct gdi_font *font, UINT table, UINT offs
     err = pFT_Load_Sfnt_Table(ft_face, RtlUlongByteSwap(table), offset, buf, &len);
     if (err)
     {
-        TRACE("Can't find table %s\n", debugstr_an((char*)&table, 4));
+        TRACE("Can't find table %s\n", debugstr_fourcc(table));
 	return GDI_ERROR;
     }
     return len;
@@ -3401,9 +3429,12 @@ static unsigned int get_bezier_glyph_outline(FT_Outline *outline, unsigned int b
     return needed;
 }
 
-static FT_Int get_load_flags( UINT format )
+static FT_Int get_load_flags( UINT format, BOOL vertical_metrics, BOOL force_no_bitmap )
 {
     FT_Int load_flags = FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH;
+
+    if (vertical_metrics) load_flags |= FT_LOAD_VERTICAL_LAYOUT;
+    if (force_no_bitmap || format != GGO_BITMAP) load_flags |= FT_LOAD_NO_BITMAP;
 
     if (format & GGO_UNHINTED)
         return load_flags | FT_LOAD_NO_HINTING;
@@ -3432,21 +3463,28 @@ static FT_Int get_load_flags( UINT format )
     return load_flags;
 }
 
+static BOOL is_curve_format(UINT format)
+{
+    format &= ~(GGO_GLYPH_INDEX | GGO_UNHINTED);
+    return format == GGO_BEZIER || format == GGO_NATIVE;
+}
+
 /*************************************************************
  * freetype_get_glyph_outline
  */
 static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT format,
                                         GLYPHMETRICS *lpgm, ABC *abc, UINT buflen, void *buf,
-                                        const MAT2 *lpmat, BOOL tategaki )
+                                        const MAT2 *lpmat, BOOL tategaki, UINT aa_flags )
 {
     struct gdi_font *base_font = font->base_font ? font->base_font : font;
     FT_Face ft_face = get_ft_face( font );
     FT_Glyph_Metrics metrics;
     FT_Error err;
     FT_BBox bbox;
-    FT_Int load_flags = get_load_flags(format);
+    FT_Int load_flags;
     FT_Matrix transform_matrices[3], *matrices = NULL;
     BOOL vertical_metrics;
+    UINT effective_format = format;
 
     TRACE("%p, %04x, %08x, %p, %08x, %p, %p\n", font, glyph, format, lpgm, buflen, buf, lpmat);
 
@@ -3454,20 +3492,23 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
           font->matrix.eM11, font->matrix.eM12,
           font->matrix.eM21, font->matrix.eM22);
 
-    format &= ~GGO_UNHINTED;
-
     matrices = get_transform_matrices( font, tategaki, lpmat, transform_matrices );
 
+    if (aa_flags && !is_curve_format( format )) effective_format = aa_flags | (format & GGO_GLYPH_INDEX);
     vertical_metrics = (tategaki && FT_HAS_VERTICAL(ft_face));
     /* there is a freetype bug where vertical metrics are only
        properly scaled and correct in 2.4.0 or greater */
     if (vertical_metrics && FT_SimpleVersion < FT_VERSION_VALUE(2, 4, 0))
         vertical_metrics = FALSE;
+    load_flags = get_load_flags(effective_format, vertical_metrics, !!matrices);
 
-    if (matrices || format != GGO_BITMAP) load_flags |= FT_LOAD_NO_BITMAP;
-    if (vertical_metrics) load_flags |= FT_LOAD_VERTICAL_LAYOUT;
-
-    err = pFT_Load_Glyph(ft_face, glyph, load_flags);
+    err = pFT_Load_Glyph(ft_face, glyph, load_flags & FT_LOAD_NO_HINTING ? load_flags : load_flags | FT_LOAD_PEDANTIC);
+    if (err && format != effective_format)
+    {
+        WARN("Failed to load glyph %#x, retrying with GGO_METRICS. Error %#x.\n", glyph, err);
+        load_flags = get_load_flags(effective_format, vertical_metrics, !!matrices);
+        err = pFT_Load_Glyph(ft_face, glyph, load_flags & FT_LOAD_NO_HINTING ? load_flags : load_flags | FT_LOAD_PEDANTIC);
+    }
     if (err && !(load_flags & FT_LOAD_NO_HINTING))
     {
         WARN("Failed to load glyph %#x, retrying without hinting. Error %#x.\n", glyph, err);
@@ -3479,6 +3520,8 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
         WARN("Failed to load glyph %#x, error %#x.\n", glyph, err);
         return GDI_ERROR;
     }
+
+    format &= ~GGO_UNHINTED;
 
     metrics = ft_face->glyph->metrics;
     if(font->fake_bold) {
@@ -3749,19 +3792,8 @@ static BOOL freetype_set_outline_text_metrics( struct gdi_font *font )
         TM.tmAveCharWidth = 1; 
     }
     TM.tmMaxCharWidth = SCALE_X(ft_face->bbox.xMax - ft_face->bbox.xMin);
-    TM.tmWeight = FW_REGULAR;
-    if (font->fake_bold)
-        TM.tmWeight = FW_BOLD;
-    else
-    {
-        if (ft_face->style_flags & FT_STYLE_FLAG_BOLD)
-        {
-            if (pOS2->usWeightClass > FW_MEDIUM)
-                TM.tmWeight = pOS2->usWeightClass;
-        }
-        else if (pOS2->usWeightClass <= FW_MEDIUM)
-            TM.tmWeight = pOS2->usWeightClass;
-    }
+    TM.tmWeight = font->fake_bold ? FW_BOLD : pOS2->usWeightClass;
+
     TM.tmOverhang = 0;
     TM.tmDigitizedAspectX = 96; /* FIXME */
     TM.tmDigitizedAspectY = 96; /* FIXME */
@@ -4010,7 +4042,7 @@ static UINT freetype_get_unicode_ranges( struct gdi_font *font, GLYPHSET *gs )
     else
     {
         DWORD encoding = RtlUlongByteSwap(ft_face->charmap->encoding);
-        FIXME("encoding %s not supported\n", debugstr_an((char *)&encoding, 4));
+        FIXME("encoding %s not supported\n", debugstr_fourcc(encoding));
     }
 
     return num_ranges;
@@ -4175,7 +4207,7 @@ static UINT freetype_get_kerning_pairs( struct gdi_font *font, KERNINGPAIR **pai
         DWORD encoding = RtlUlongByteSwap(ft_face->charmap->encoding);
         ULONG n;
 
-        FIXME("encoding %s not supported\n", debugstr_an((char *)&encoding, 4));
+        FIXME("encoding %s not supported\n", debugstr_fourcc(encoding));
         for (n = 0; n <= 65535; n++)
             glyph_to_char[n] = (USHORT)n;
     }

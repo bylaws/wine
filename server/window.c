@@ -107,6 +107,8 @@ static const struct object_ops window_ops =
     no_add_queue,             /* add_queue */
     NULL,                     /* remove_queue */
     NULL,                     /* signaled */
+    NULL,                     /* get_esync_fd */
+    NULL,                     /* get_fsync_idx */
     NULL,                     /* satisfied */
     no_signal,                /* signal */
     no_get_fd,                /* get_fd */
@@ -1248,7 +1250,8 @@ static struct region *get_surface_region( struct window *win )
     set_region_rect( clip, &win->client_rect );
     if (win->win_region && !intersect_window_region( clip, win )) goto error;
 
-    if ((win->paint_flags & PAINT_HAS_PIXEL_FORMAT) && !subtract_region( region, region, clip ))
+    if (!(win->ex_style & WS_EX_LAYERED) && (win->paint_flags & PAINT_HAS_PIXEL_FORMAT)
+            && !subtract_region( region, region, clip ))
         goto error;
 
     /* clip children */
@@ -2025,6 +2028,7 @@ void free_window_handle( struct window *win )
     if (win == progman_window) progman_window = NULL;
     if (win == taskman_window) taskman_window = NULL;
     free_hotkeys( win->desktop, win->handle );
+    free_touches( win->desktop, win->handle );
     cleanup_clipboard_window( win->desktop, win->handle );
     destroy_properties( win );
     if (is_desktop_window(win))

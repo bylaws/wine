@@ -602,14 +602,15 @@ static DWORD WINAPI stream_thread(void *arg)
             IMediaSample_SetTime(sample, &start_pts, &end_pts);
 
             TRACE("Sending buffer %p.\n", sample);
-            hr = IMemInputPin_Receive(filter->source.pMemInputPin, sample);
-            IMediaSample_Release(sample);
-            if (FAILED(hr))
+            if (FAILED(hr = IMemInputPin_Receive(filter->source.pMemInputPin, sample)))
             {
                 ERR("IMemInputPin::Receive() returned %#lx.\n", hr);
+                IMediaSample_Release(sample);
                 break;
             }
         }
+
+        IMediaSample_Release(sample);
     }
 
     LeaveCriticalSection(&filter->state_cs);
@@ -755,11 +756,19 @@ static HRESULT WINAPI PPB_Load(IPersistPropertyBag *iface, IPropertyBag *bag, IE
     VARIANT var;
     HRESULT hr;
 
+    char sgi[64];
+
     TRACE("filter %p, bag %p, error_log %p.\n", filter, bag, error_log);
 
     V_VT(&var) = VT_I4;
     if (FAILED(hr = IPropertyBag_Read(bag, L"WaveInID", &var, error_log)))
         return hr;
+
+    if (GetEnvironmentVariableA("SteamGameId", sgi, sizeof(sgi)) && !strcmp(sgi, "470220"))
+    {
+        FIXME("HACK: returning error.\n");
+        return E_FAIL;
+    }
 
     EnterCriticalSection(&filter->filter.filter_cs);
     filter->id = V_I4(&var);

@@ -87,7 +87,7 @@
 @ cdecl wined3d_device_set_software_vertex_processing(ptr long)
 @ cdecl wined3d_device_show_cursor(ptr long)
 @ cdecl wined3d_device_update_texture(ptr ptr ptr)
-@ cdecl wined3d_device_validate_device(ptr ptr)
+@ cdecl wined3d_device_validate_device(ptr ptr ptr)
 
 @ cdecl wined3d_device_context_blt(ptr ptr long ptr ptr long ptr long ptr long)
 @ cdecl wined3d_device_context_clear_rendertarget_view(ptr ptr ptr long ptr float long)
@@ -103,6 +103,7 @@
 @ cdecl wined3d_device_context_draw_indirect(ptr ptr long long)
 @ cdecl wined3d_device_context_execute_command_list(ptr ptr long)
 @ cdecl wined3d_device_context_flush(ptr)
+@ cdecl wined3d_device_context_flush_mapped_buffer(ptr ptr)
 @ cdecl wined3d_device_context_generate_mipmaps(ptr ptr)
 @ cdecl wined3d_device_context_get_blend_state(ptr ptr ptr)
 @ cdecl wined3d_device_context_get_constant_buffer(ptr long long ptr)
@@ -258,6 +259,7 @@
 @ cdecl wined3d_stateblock_set_stream_source(ptr long ptr long long)
 @ cdecl wined3d_stateblock_set_stream_source_freq(ptr long long)
 @ cdecl wined3d_stateblock_set_texture(ptr long ptr)
+@ cdecl wined3d_stateblock_set_texture_lod(ptr ptr long)
 @ cdecl wined3d_stateblock_set_texture_stage_state(ptr long long long)
 @ cdecl wined3d_stateblock_set_transform(ptr long ptr)
 @ cdecl wined3d_stateblock_set_vertex_declaration(ptr ptr)
@@ -266,6 +268,7 @@
 @ cdecl wined3d_stateblock_set_vs_consts_b(ptr long long ptr)
 @ cdecl wined3d_stateblock_set_vs_consts_f(ptr long long ptr)
 @ cdecl wined3d_stateblock_set_vs_consts_i(ptr long long ptr)
+@ cdecl wined3d_stateblock_texture_changed(ptr ptr)
 
 @ cdecl wined3d_streaming_buffer_map(ptr ptr long long ptr ptr)
 @ cdecl wined3d_streaming_buffer_unmap(ptr)
@@ -292,10 +295,12 @@
 
 @ cdecl wined3d_swapchain_state_create(ptr ptr ptr ptr ptr)
 @ cdecl wined3d_swapchain_state_destroy(ptr)
+@ cdecl wined3d_swapchain_state_get_size(ptr ptr ptr)
 @ cdecl wined3d_swapchain_state_is_windowed(ptr)
 @ cdecl wined3d_swapchain_state_resize_target(ptr ptr)
 @ cdecl wined3d_swapchain_state_set_fullscreen(ptr ptr ptr)
 
+@ cdecl wined3d_texture_acquire_identity_srv(ptr)
 @ cdecl wined3d_texture_add_dirty_region(ptr long ptr)
 @ cdecl wined3d_texture_create(ptr ptr long long long ptr ptr ptr ptr)
 @ cdecl wined3d_texture_decref(ptr)

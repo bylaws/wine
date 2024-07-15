@@ -26,6 +26,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "ole2.h"
+#include "activscp.h"
 #include "mshtml.h"
 #include "mshtmdid.h"
 #include "mshtmhst.h"
@@ -34,6 +35,8 @@
 #include "wininet.h"
 #include "shdeprecated.h"
 #include "dispex.h"
+
+extern const IID IID_IActiveScriptSite;
 
 #define DEFINE_EXPECT(func) \
     static BOOL expect_ ## func = FALSE, called_ ## func = FALSE
@@ -98,6 +101,7 @@ DEFINE_EXPECT(submit_onclick_attached_check_cancel);
 DEFINE_EXPECT(submit_onclick_setret);
 DEFINE_EXPECT(elem2_cp_onclick);
 DEFINE_EXPECT(iframe_onload);
+DEFINE_EXPECT(onmessage);
 DEFINE_EXPECT(visibilitychange);
 DEFINE_EXPECT(onbeforeunload);
 DEFINE_EXPECT(iframe_onbeforeunload);
@@ -113,6 +117,15 @@ DEFINE_EXPECT(doc2_onstoragecommit);
 DEFINE_EXPECT(window2_onstorage);
 DEFINE_EXPECT(async_xhr_done);
 DEFINE_EXPECT(sync_xhr_done);
+DEFINE_EXPECT(QS_IActiveScriptSite);
+DEFINE_EXPECT(QS_IActiveScriptSite_parent);
+DEFINE_EXPECT(QS_IActiveScriptSite_parent2);
+DEFINE_EXPECT(QS_IActiveScriptSite_parent3);
+DEFINE_EXPECT(QS_IActiveScriptSite_parent4);
+DEFINE_EXPECT(QS_GetCaller);
+DEFINE_EXPECT(QS_GetCaller_parent2);
+DEFINE_EXPECT(QS_GetCaller_parent3);
+DEFINE_EXPECT(cmdtarget_Exec);
 
 static HWND container_hwnd = NULL;
 static IHTMLWindow2 *window;
@@ -171,18 +184,26 @@ static const char input_doc_str[] =
 static const char iframe_doc_str[] =
     "<html><body><iframe id=\"ifr\">Testing</iframe></body></html>";
 
+static const char iframe_doc_ie9_str[] =
+    "<html><head><meta http-equiv=\"x-ua-compatible\" content=\"IE=9\" /></head>"
+    "<body><iframe id=\"ifr\">Testing</iframe></body></html>";
+
+static const char iframe_doc_ie11_str[] =
+    "<html><head><meta http-equiv=\"x-ua-compatible\" content=\"IE=11\" /></head>"
+    "<body><iframe id=\"ifr\">Testing</iframe></body></html>";
+
 static void navigate(IHTMLDocument2*,const WCHAR*);
 
-static BOOL iface_cmp(IUnknown *iface1, IUnknown *iface2)
+static BOOL iface_cmp(void *iface1, void *iface2)
 {
     IUnknown *unk1, *unk2;
 
     if(iface1 == iface2)
         return TRUE;
 
-    IUnknown_QueryInterface(iface1, &IID_IUnknown, (void**)&unk1);
+    IUnknown_QueryInterface((IUnknown *)iface1, &IID_IUnknown, (void**)&unk1);
     IUnknown_Release(unk1);
-    IUnknown_QueryInterface(iface2, &IID_IUnknown, (void**)&unk2);
+    IUnknown_QueryInterface((IUnknown *)iface2, &IID_IUnknown, (void**)&unk2);
     IUnknown_Release(unk2);
 
     return unk1 == unk2;
@@ -394,6 +415,9 @@ static void _elem_fire_event(unsigned line, IUnknown *unk, const WCHAR *event, V
 static void _test_event_args(unsigned line, const IID *dispiid, DISPID id, WORD wFlags, DISPPARAMS *pdp,
         VARIANT *pvarRes, EXCEPINFO *pei, IServiceProvider *pspCaller)
 {
+    IHTMLEventObj *window_event, *event_obj = NULL;
+    HRESULT hres;
+
     ok_(__FILE__,line) (id == DISPID_VALUE, "id = %ld\n", id);
     ok_(__FILE__,line) (wFlags == DISPATCH_METHOD, "wFlags = %x\n", wFlags);
     ok_(__FILE__,line) (pdp != NULL, "pdp == NULL\n");
@@ -411,10 +435,11 @@ static void _test_event_args(unsigned line, const IID *dispiid, DISPID id, WORD 
     if(dispiid)
         _test_disp(line, (IUnknown*)V_DISPATCH(pdp->rgvarg), dispiid);
 
+    hres = IHTMLWindow2_get_event(window, &window_event);
+    ok(hres == S_OK, "get_event failed: %08lx\n", hres);
+
     if(pdp->cArgs > 1) {
-        IHTMLEventObj *window_event, *event_obj;
         IDOMEvent *event;
-        HRESULT hres;
 
         hres = IDispatch_QueryInterface(V_DISPATCH(pdp->rgvarg+1), &IID_IDOMEvent, (void**)&event);
         if(in_fire_event)
@@ -424,23 +449,61 @@ static void _test_event_args(unsigned line, const IID *dispiid, DISPID id, WORD 
 
         hres = IDispatch_QueryInterface(V_DISPATCH(pdp->rgvarg+1), &IID_IHTMLEventObj, (void**)&event_obj);
         if(in_fire_event)
-            ok(hres == S_OK, "Could not get IDOMEventObj iface: %08lx\n", hres);
+            ok(hres == S_OK, "Could not get IHTMLEventObj iface: %08lx\n", hres);
         else
             ok(hres == E_NOINTERFACE, "QI(IID_IHTMLEventObj) returned %08lx\n", hres);
 
         if(event)
             IDOMEvent_Release(event);
-        if(event_obj)
-            IHTMLEventObj_Release(event_obj);
 
-        hres = IHTMLWindow2_get_event(window, &window_event);
-        ok(hres == S_OK, "get_event failed: %08lx\n", hres);
         if(window_event) {
             todo_wine_if(in_fire_event)
             ok(!iface_cmp((IUnknown*)V_DISPATCH(pdp->rgvarg+1), (IUnknown*)window_event),
                "window_event != event arg\n");
-            IHTMLEventObj_Release(window_event);
         }
+    }
+
+    if(window_event) {
+        if(!event_obj)
+            event_obj = window_event;
+        else
+            IHTMLEventObj_Release(window_event);
+    }
+
+    if(event_obj) {
+        IHTMLEventObj5 *event_obj5;
+        IDispatch *disp;
+        BSTR bstr;
+
+        hres = IHTMLEventObj_QueryInterface(event_obj, &IID_IHTMLEventObj5, (void**)&event_obj5);
+        ok(hres == S_OK, "Could not get IHTMLEventObj5: %08lx\n", hres);
+        IHTMLEventObj_Release(event_obj);
+
+        hres = IHTMLEventObj5_get_data(event_obj5, &bstr);
+        ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+        ok(!bstr, "data = %s\n", wine_dbgstr_w(bstr));
+
+        hres = IHTMLEventObj5_get_origin(event_obj5, &bstr);
+        ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+        ok(!bstr, "origin = %s\n", wine_dbgstr_w(bstr));
+
+        hres = IHTMLEventObj5_get_source(event_obj5, &disp);
+        ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+        ok(!disp, "source != NULL\n");
+
+        hres = IHTMLEventObj5_get_url(event_obj5, &bstr);
+        ok(hres == S_OK, "get_url failed: %08lx\n", hres);
+        ok(!bstr, "url = %s\n", wine_dbgstr_w(bstr));
+
+        bstr = SysAllocString(L"foobar");
+        hres = IHTMLEventObj5_put_origin(event_obj5, bstr);
+        ok(hres == DISP_E_MEMBERNOTFOUND, "put_origin returned: %08lx\n", hres);
+
+        hres = IHTMLEventObj5_put_url(event_obj5, bstr);
+        ok(hres == DISP_E_MEMBERNOTFOUND, "put_url returned: %08lx\n", hres);
+        SysFreeString(bstr);
+
+        IHTMLEventObj5_Release(event_obj5);
     }
 }
 
@@ -1442,11 +1505,105 @@ static HRESULT WINAPI iframe_onreadystatechange(IDispatchEx *iface, DISPID id, L
 
 EVENT_HANDLER_FUNC_OBJ(iframe_onreadystatechange);
 
+static IHTMLWindow2 *onmessage_source;
+
+static HRESULT WINAPI onmessage(IDispatchEx *iface, DISPID id, LCID lcid, WORD wFlags, DISPPARAMS *pdp,
+        VARIANT *pvarRes, EXCEPINFO *pei, IServiceProvider *pspCaller)
+{
+    IHTMLWindow2 *source, *self;
+    HRESULT hres;
+    BSTR bstr;
+
+    CHECK_EXPECT(onmessage);
+
+    if(document_mode < 9) {
+        IHTMLEventObj5 *event_obj5;
+        IHTMLEventObj *event_obj;
+        IDispatch *disp;
+
+        hres = IHTMLWindow2_get_event(window, &event_obj);
+        ok(hres == S_OK, "get_event failed: %08lx\n", hres);
+
+        hres = IHTMLEventObj_get_type(event_obj, &bstr);
+        ok(hres == S_OK, "get_type failed: %08lx\n", hres);
+        ok(!wcscmp(bstr, L"message"), "event type = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IHTMLEventObj_QueryInterface(event_obj, &IID_IHTMLEventObj5, (void**)&event_obj5);
+        ok(hres == S_OK, "Could not get IHTMLEventObj5: %08lx\n", hres);
+        IHTMLEventObj_Release(event_obj);
+
+        hres = IHTMLEventObj5_get_url(event_obj5, &bstr);
+        ok(hres == S_OK, "get_url failed: %08lx\n", hres);
+        ok(!bstr, "url = %s\n", wine_dbgstr_w(bstr));
+
+        hres = IHTMLEventObj5_get_data(event_obj5, &bstr);
+        ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+        ok(!wcscmp(bstr, L"foobar"), "data = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IHTMLEventObj5_get_origin(event_obj5, &bstr);
+        ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+        ok(!wcscmp(bstr, L"about:"), "origin = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IHTMLEventObj5_get_source(event_obj5, &disp);
+        ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+
+        hres = IDispatch_QueryInterface(disp, &IID_IHTMLWindow2, (void**)&source);
+        ok(hres == S_OK, "Could not get IHTMLWindow2: %08lx\n", hres);
+        IDispatch_Release(disp);
+
+        hres = IHTMLWindow2_get_self(onmessage_source, &self);
+        ok(hres == S_OK, "get_self failed: %08lx\n", hres);
+        ok(source == self, "source != onmessage_source.self\n");
+        IHTMLWindow2_Release(source);
+        IHTMLWindow2_Release(self);
+
+        bstr = SysAllocString(L"foobar");
+        hres = IHTMLEventObj5_put_url(event_obj5, bstr);
+        ok(hres == DISP_E_MEMBERNOTFOUND, "put_url returned: %08lx\n", hres);
+
+        hres = IHTMLEventObj5_put_origin(event_obj5, bstr);
+        ok(hres == DISP_E_MEMBERNOTFOUND, "put_origin returned: %08lx\n", hres);
+        SysFreeString(bstr);
+
+        IHTMLEventObj5_Release(event_obj5);
+    }else {
+        IDOMMessageEvent *msg;
+
+        hres = IDispatch_QueryInterface(V_DISPATCH(&pdp->rgvarg[1]), &IID_IDOMMessageEvent, (void**)&msg);
+        ok(hres == S_OK, "Could not get IDOMMessageEvent: %08lx\n", hres);
+
+        hres = IDOMMessageEvent_get_data(msg, &bstr);
+        ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+        ok(!wcscmp(bstr, L"foobar"), "data = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IDOMMessageEvent_get_origin(msg, &bstr);
+        ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+        ok(!wcscmp(bstr, L"about:"), "origin = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IDOMMessageEvent_get_source(msg, &source);
+        ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+        ok(source == onmessage_source, "source != onmessage_source\n");
+        IHTMLWindow2_Release(source);
+
+        IDOMMessageEvent_Release(msg);
+    }
+    return S_OK;
+}
+
+EVENT_HANDLER_FUNC_OBJ(onmessage);
+
 static HRESULT WINAPI onvisibilitychange(IDispatchEx *iface, DISPID id, LCID lcid, WORD wFlags, DISPPARAMS *pdp,
         VARIANT *pvarRes, EXCEPINFO *pei, IServiceProvider *pspCaller)
 {
+    DISPPARAMS dp = {0};
     IDispatchEx *dispex;
     HRESULT hres;
+    VARIANT res;
     BSTR bstr;
 
     CHECK_EXPECT(visibilitychange);
@@ -1457,9 +1614,14 @@ static HRESULT WINAPI onvisibilitychange(IDispatchEx *iface, DISPID id, LCID lci
 
     bstr = SysAllocString(L"toString");
     hres = IDispatchEx_GetDispID(dispex, bstr, 0, &id);
-    todo_wine
     ok(hres == S_OK, "GetDispID(\"toString\") failed: %08lx\n", hres);
     SysFreeString(bstr);
+
+    hres = IDispatchEx_InvokeEx(dispex, id, LOCALE_NEUTRAL, INVOKE_FUNC, &dp, &res, NULL, NULL);
+    ok(hres == S_OK, "InvokeEx(\"toString\") failed: %08lx\n", hres);
+    ok(V_VT(&res) == VT_BSTR, "V_VT(\"toString\") = %d\n", V_VT(&res));
+    ok(!wcscmp(V_BSTR(&res), L"[object Event]"), "toString = %s\n", wine_dbgstr_w(V_BSTR(&res)));
+    VariantClear(&res);
 
     return S_OK;
 }
@@ -1469,8 +1631,26 @@ EVENT_HANDLER_FUNC_OBJ(onvisibilitychange);
 static HRESULT WINAPI onbeforeunload(IDispatchEx *iface, DISPID id, LCID lcid, WORD wFlags, DISPPARAMS *pdp,
         VARIANT *pvarRes, EXCEPINFO *pei, IServiceProvider *pspCaller)
 {
+    IEventTarget *event_target;
+    IHTMLWindow2 *window2;
+    IDOMEvent *event;
+    HRESULT hres;
+
     CHECK_EXPECT(onbeforeunload);
     test_event_args(NULL, id, wFlags, pdp, pvarRes, pei, pspCaller);
+
+    hres = IDispatch_QueryInterface(V_DISPATCH(&pdp->rgvarg[1]), &IID_IDOMEvent, (void**)&event);
+    ok(hres == S_OK, "Could not get IDOMEvent iface: %08lx\n", hres);
+    hres = IDOMEvent_get_target(event, &event_target);
+    ok(hres == S_OK, "get_target failed: %08lx\n", hres);
+    IDOMEvent_Release(event);
+
+    hres = IEventTarget_QueryInterface(event_target, &IID_IHTMLWindow2, (void**)&window2);
+    ok(hres == S_OK, "Could not get IHTMLWindow2 iface: %08lx\n", hres);
+    ok(window2 == window, "event_target's window iface != window\n");
+    IHTMLWindow2_Release(window2);
+
+    IEventTarget_Release(event_target);
     return S_OK;
 }
 
@@ -1828,6 +2008,359 @@ static void pump_msgs(BOOL *b)
         }
     }
 }
+
+static IOleCommandTarget cmdtarget, cmdtarget_stub;
+
+static HRESULT WINAPI cmdtarget_QueryInterface(IOleCommandTarget *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IOleCommandTarget))
+        *ppv = &cmdtarget;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static ULONG WINAPI cmdtarget_AddRef(IOleCommandTarget *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI cmdtarget_Release(IOleCommandTarget *iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI cmdtarget_QueryStatus(IOleCommandTarget *iface, const GUID *pguidCmdGroup,
+        ULONG cCmds, OLECMD prgCmds[], OLECMDTEXT *pCmdText)
+{
+    ok(0, "unexpected call\n");
+    return OLECMDERR_E_UNKNOWNGROUP;
+}
+
+static HRESULT WINAPI cmdtarget_Exec(IOleCommandTarget *iface, const GUID *pguidCmdGroup,
+        DWORD nCmdID, DWORD nCmdexecopt, VARIANT *pvaIn, VARIANT *pvaOut)
+{
+    CHECK_EXPECT2(cmdtarget_Exec);
+    ok(pguidCmdGroup && IsEqualGUID(pguidCmdGroup, &CGID_ScriptSite), "pguidCmdGroup = %s\n", wine_dbgstr_guid(pguidCmdGroup));
+    ok(nCmdID == CMDID_SCRIPTSITE_SECURITY_WINDOW, "nCmdID = %lu\n", nCmdID);
+    ok(!nCmdexecopt, "nCmdexecopt = %lu\n", nCmdexecopt);
+    ok(!pvaIn, "pvaIn != NULL\n");
+    ok(pvaOut != NULL, "pvaOut = NULL\n");
+
+    /* Native ignores the VT and assumes VT_DISPATCH, and releases it
+       without VariantClear, since it crashes without AddRef below... */
+    V_VT(pvaOut) = VT_NULL;
+    V_DISPATCH(pvaOut) = (IDispatch*)onmessage_source;
+    IDispatch_AddRef(V_DISPATCH(pvaOut));
+    return S_OK;
+}
+
+static const IOleCommandTargetVtbl cmdtarget_vtbl = {
+    cmdtarget_QueryInterface,
+    cmdtarget_AddRef,
+    cmdtarget_Release,
+    cmdtarget_QueryStatus,
+    cmdtarget_Exec
+};
+
+static IOleCommandTarget cmdtarget = { &cmdtarget_vtbl };
+
+static HRESULT WINAPI cmdtarget_stub_QueryInterface(IOleCommandTarget *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IOleCommandTarget))
+        *ppv = &cmdtarget_stub;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI cmdtarget_stub_QueryStatus(IOleCommandTarget *iface, const GUID *pguidCmdGroup,
+        ULONG cCmds, OLECMD prgCmds[], OLECMDTEXT *pCmdText)
+{
+    ok(0, "unexpected call\n");
+    return OLECMDERR_E_UNKNOWNGROUP;
+}
+
+static HRESULT WINAPI cmdtarget_stub_Exec(IOleCommandTarget *iface, const GUID *pguidCmdGroup,
+        DWORD nCmdID, DWORD nCmdexecopt, VARIANT *pvaIn, VARIANT *pvaOut)
+{
+    ok(0, "unexpected call\n");
+    return OLECMDERR_E_UNKNOWNGROUP;
+}
+
+static const IOleCommandTargetVtbl cmdtarget_stub_vtbl = {
+    cmdtarget_stub_QueryInterface,
+    cmdtarget_AddRef,
+    cmdtarget_Release,
+    cmdtarget_stub_QueryStatus,
+    cmdtarget_stub_Exec
+};
+
+static IOleCommandTarget cmdtarget_stub = { &cmdtarget_stub_vtbl };
+
+static IServiceProvider caller_sp, caller_sp_parent, caller_sp_stub, caller_sp2, caller_sp2_parent, caller_sp2_parent3;
+
+static HRESULT WINAPI caller_sp_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static ULONG WINAPI caller_sp_AddRef(IServiceProvider *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI caller_sp_Release(IServiceProvider *iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI caller_sp_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT2(QS_IActiveScriptSite);
+        ok(IsEqualGUID(riid, &IID_IOleCommandTarget), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = (document_mode < 9) ? NULL : &cmdtarget;
+        return (document_mode < 9) ? E_NOINTERFACE : S_OK;
+    }
+
+    if(IsEqualGUID(guidService, &SID_GetCaller)) {
+        CHECK_EXPECT(QS_GetCaller);
+        SET_EXPECT(QS_IActiveScriptSite_parent);
+        ok(IsEqualGUID(riid, &IID_IServiceProvider), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = &caller_sp_parent;
+        return S_OK;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp_vtbl = {
+    caller_sp_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp_QueryService
+};
+
+static IServiceProvider caller_sp = { &caller_sp_vtbl };
+
+static HRESULT WINAPI caller_sp_parent_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp_parent;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI caller_sp_parent_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT(QS_IActiveScriptSite_parent);
+        ok(IsEqualGUID(riid, &IID_IOleCommandTarget), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp_parent_vtbl = {
+    caller_sp_parent_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp_parent_QueryService
+};
+
+static IServiceProvider caller_sp_parent = { &caller_sp_parent_vtbl };
+
+static HRESULT WINAPI caller_sp_stub_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp_stub;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI caller_sp_stub_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT2(QS_IActiveScriptSite);
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    if(IsEqualGUID(guidService, &SID_GetCaller)) {
+        CHECK_EXPECT(QS_GetCaller);
+        ok(IsEqualGUID(riid, &IID_IServiceProvider), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return S_OK;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp_stub_vtbl = {
+    caller_sp_stub_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp_stub_QueryService
+};
+
+static IServiceProvider caller_sp_stub = { &caller_sp_stub_vtbl };
+
+static HRESULT WINAPI caller_sp2_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp2;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI caller_sp2_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT2(QS_IActiveScriptSite_parent2);
+        ok(IsEqualGUID(riid, &IID_IOleCommandTarget), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = (document_mode < 9) ? &cmdtarget_stub : &cmdtarget;
+        return S_OK;
+    }
+
+    if(IsEqualGUID(guidService, &SID_GetCaller)) {
+        CHECK_EXPECT(QS_GetCaller_parent2);
+        SET_EXPECT(QS_IActiveScriptSite_parent3);
+        ok(IsEqualGUID(riid, &IID_IServiceProvider), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = &caller_sp2_parent;
+        return S_OK;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp2_vtbl = {
+    caller_sp2_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp2_QueryService
+};
+
+static IServiceProvider caller_sp2 = { &caller_sp2_vtbl };
+
+static HRESULT WINAPI caller_sp2_parent_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp2_parent;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI caller_sp2_parent_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT2(QS_IActiveScriptSite_parent3);
+        ok(IsEqualGUID(riid, &IID_IOleCommandTarget), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = &cmdtarget;
+        return S_OK;
+    }
+
+    if(IsEqualGUID(guidService, &SID_GetCaller)) {
+        CHECK_EXPECT(QS_GetCaller_parent3);
+        SET_EXPECT(QS_IActiveScriptSite_parent4);
+        ok(IsEqualGUID(riid, &IID_IServiceProvider), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = &caller_sp2_parent3;
+        return S_OK;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp2_parent_vtbl = {
+    caller_sp2_parent_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp2_parent_QueryService
+};
+
+static IServiceProvider caller_sp2_parent = { &caller_sp2_parent_vtbl };
+
+static HRESULT WINAPI caller_sp2_parent3_QueryInterface(IServiceProvider *iface, REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IServiceProvider))
+        *ppv = &caller_sp2_parent3;
+    else {
+        ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI caller_sp2_parent3_QueryService(IServiceProvider *iface, REFGUID guidService,
+        REFIID riid, void **ppv)
+{
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        CHECK_EXPECT(QS_IActiveScriptSite_parent4);
+        ok(IsEqualGUID(riid, &IID_IOleCommandTarget), "unexpected riid %s\n", wine_dbgstr_guid(riid));
+        *ppv = NULL;
+        return S_OK;
+    }
+
+    ok(0, "unexpected service %s\n", wine_dbgstr_guid(guidService));
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static const IServiceProviderVtbl caller_sp2_parent3_vtbl = {
+    caller_sp2_parent3_QueryInterface,
+    caller_sp_AddRef,
+    caller_sp_Release,
+    caller_sp2_parent3_QueryService
+};
+
+static IServiceProvider caller_sp2_parent3 = { &caller_sp2_parent3_vtbl };
 
 static IConnectionPoint *get_cp(IUnknown *unk, REFIID riid)
 {
@@ -2666,6 +3199,291 @@ static void test_focus(IHTMLDocument2 *doc)
     IHTMLElement4_Release(div);
 }
 
+static void test_message_event(IHTMLDocument2 *doc)
+{
+    IHTMLFrameBase2 *iframe;
+    DISPPARAMS dp = { 0 };
+    IHTMLWindow6 *window6;
+    IHTMLDocument6 *doc6;
+    IHTMLElement2 *elem;
+    IHTMLWindow2 *child;
+    IDispatchEx *dispex;
+    DISPID dispid;
+    HRESULT hres;
+    VARIANT v[2];
+    BSTR bstr;
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLWindow6, (void**)&window6);
+    ok(hres == S_OK, "Could not get IHTMLWindow6 iface: %08lx\n", hres);
+
+    hres = IHTMLDocument2_QueryInterface(doc, &IID_IHTMLDocument6, (void**)&doc6);
+    ok(hres == S_OK, "Could not get IHTMLDocument6 iface: %08lx\n", hres);
+    bstr = SysAllocString(L"ifr");
+    hres = IHTMLDocument6_getElementById(doc6, bstr, &elem);
+    ok(hres == S_OK, "getElementById failed: %08lx\n", hres);
+    IHTMLDocument6_Release(doc6);
+    SysFreeString(bstr);
+
+    hres = IHTMLElement2_QueryInterface(elem, &IID_IHTMLFrameBase2, (void**)&iframe);
+    ok(hres == S_OK, "Could not get IHTMLFrameBase2 iface: %08lx\n", hres);
+    IHTMLElement2_Release(elem);
+    hres = IHTMLFrameBase2_get_contentWindow(iframe, &child);
+    ok(hres == S_OK, "get_contentWindow failed: %08lx\n", hres);
+    IHTMLFrameBase2_Release(iframe);
+
+    dp.cArgs = 2;
+    dp.rgvarg = v;
+    V_VT(&v[0]) = VT_DISPATCH;
+    V_DISPATCH(&v[0]) = (IDispatch*)&onmessage_obj;
+    hres = IHTMLWindow6_put_onmessage(window6, v[0]);
+    ok(hres == S_OK, "put_onmessage failed: %08lx\n", hres);
+
+    V_VT(&v[0]) = VT_EMPTY;
+    hres = IHTMLWindow6_get_onmessage(window6, &v[0]);
+    ok(hres == S_OK, "get_onmessage failed: %08lx\n", hres);
+    ok(V_VT(&v[0]) == VT_DISPATCH, "V_VT(onmessage) = %d\n", V_VT(&v[0]));
+    ok(V_DISPATCH(&v[0]) == (IDispatch*)&onmessage_obj, "V_DISPATCH(onmessage) = %p\n", V_DISPATCH(&v[0]));
+
+    if(document_mode >= 9)
+        add_event_listener((IUnknown*)doc, L"message", (IDispatch*)&onmessage_obj, VARIANT_TRUE);
+
+    V_VT(&v[1]) = VT_BSTR;
+    V_BSTR(&v[1]) = SysAllocString(L"foobar");
+    V_VT(&v[0]) = VT_BSTR;
+    V_BSTR(&v[0]) = SysAllocString(L"*");
+    bstr = SysAllocString(L"foobar");
+    hres = IHTMLWindow6_postMessage(window6, V_BSTR(&v[1]), v[0]);
+    ok(hres == E_ABORT, "postMessage returned: %08lx\n", hres);
+    IHTMLWindow6_Release(window6);
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IDispatchEx, (void**)&dispex);
+    ok(hres == S_OK, "Could not get IDispatchEx iface: %08lx\n", hres);
+
+    bstr = SysAllocString(L"postMessage");
+    hres = IDispatchEx_GetDispID(dispex, bstr, fdexNameCaseSensitive, &dispid);
+    ok(hres == S_OK, "GetDispID(postMessage) failed: %08lx\n", hres);
+    SysFreeString(bstr);
+
+    onmessage_source = window;
+    hres = IDispatchEx_InvokeEx(dispex, dispid, 0, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
+    ok(hres == (document_mode < 9 ? E_ABORT : S_OK), "InvokeEx(postMessage) returned: %08lx\n", hres);
+    if(hres == S_OK) {
+        SET_EXPECT(onmessage);
+        pump_msgs(&called_onmessage);
+        CHECK_CALLED(onmessage);
+    }
+
+    if(document_mode < 9)
+        SET_EXPECT(QS_GetCaller);
+    SET_EXPECT(QS_IActiveScriptSite);
+    hres = IDispatchEx_InvokeEx(dispex, dispid, 0, DISPATCH_METHOD, &dp, NULL, NULL, &caller_sp_stub);
+    ok(hres == (document_mode < 9 ? E_ABORT : S_OK), "InvokeEx(postMessage) returned: %08lx\n", hres);
+    CHECK_CALLED(QS_IActiveScriptSite);
+    if(document_mode < 9)
+        CHECK_CALLED(QS_GetCaller);
+    else {
+        SET_EXPECT(onmessage);
+        pump_msgs(&called_onmessage);
+        CHECK_CALLED(onmessage);
+    }
+
+    onmessage_source = child;
+    if(document_mode < 9) {
+        SET_EXPECT(QS_GetCaller);
+        SET_EXPECT(QS_IActiveScriptSite_parent);
+    }else {
+        SET_EXPECT(cmdtarget_Exec);
+    }
+    SET_EXPECT(QS_IActiveScriptSite);
+    hres = IDispatchEx_InvokeEx(dispex, dispid, 0, DISPATCH_METHOD, &dp, NULL, NULL, &caller_sp);
+    ok(hres == (document_mode < 9 ? E_ABORT : S_OK), "InvokeEx(postMessage) failed: %08lx\n", hres);
+    CHECK_CALLED(QS_IActiveScriptSite);
+    if(hres == S_OK) {
+        CHECK_CALLED(cmdtarget_Exec);
+        SET_EXPECT(onmessage);
+        pump_msgs(&called_onmessage);
+        CHECK_CALLED(onmessage);
+    }
+
+    if(document_mode < 9) {
+        SET_EXPECT(QS_GetCaller_parent2);
+        SET_EXPECT(onmessage);
+    }
+    SET_EXPECT(QS_IActiveScriptSite_parent2);
+    SET_EXPECT(cmdtarget_Exec);
+    hres = IDispatchEx_InvokeEx(dispex, dispid, 0, DISPATCH_METHOD, &dp, NULL, NULL, &caller_sp2);
+    ok(hres == S_OK, "InvokeEx(postMessage) failed: %08lx\n", hres);
+    CHECK_CALLED(cmdtarget_Exec);
+    CHECK_CALLED(QS_IActiveScriptSite_parent2);
+    if(document_mode < 9) {
+        CHECK_CALLED(QS_IActiveScriptSite_parent3);
+        CHECK_CALLED(QS_GetCaller_parent2);
+        CHECK_CALLED(onmessage);
+        pump_msgs(NULL);
+    }else {
+        SET_EXPECT(onmessage);
+        pump_msgs(&called_onmessage);
+        CHECK_CALLED(onmessage);
+    }
+
+    if(document_mode < 9) {
+        SET_EXPECT(QS_GetCaller_parent3);
+        SET_EXPECT(onmessage);
+    }
+    SET_EXPECT(QS_IActiveScriptSite_parent3);
+    SET_EXPECT(cmdtarget_Exec);
+    hres = IDispatchEx_InvokeEx(dispex, dispid, 0, DISPATCH_METHOD, &dp, NULL, NULL, &caller_sp2_parent);
+    ok(hres == S_OK, "InvokeEx(postMessage) failed: %08lx\n", hres);
+    CHECK_CALLED(cmdtarget_Exec);
+    CHECK_CALLED(QS_IActiveScriptSite_parent3);
+    if(document_mode < 9) {
+        CHECK_CALLED(QS_IActiveScriptSite_parent4);
+        CHECK_CALLED(QS_GetCaller_parent3);
+        CHECK_CALLED(onmessage);
+        pump_msgs(NULL);
+    }else {
+        SET_EXPECT(onmessage);
+        pump_msgs(&called_onmessage);
+        CHECK_CALLED(onmessage);
+    }
+
+    onmessage_source = NULL;
+    VariantClear(&v[0]);
+    VariantClear(&v[1]);
+    IHTMLWindow2_Release(child);
+    IDispatchEx_Release(dispex);
+
+    if(document_mode >= 9) {
+        IDOMMessageEvent *msg_event = NULL;
+        IDocumentEvent *doc_event;
+        IHTMLWindow2 *source;
+        IDOMEvent *event;
+        UINT argerr;
+
+        hres = IHTMLDocument2_QueryInterface(doc, &IID_IDocumentEvent, (void**)&doc_event);
+        ok(hres == S_OK, "Could not get IDocumentEvent iface: %08lx\n", hres);
+
+        bstr = SysAllocString(L"MessageEvent");
+        hres = IDocumentEvent_createEvent(doc_event, bstr, &event);
+        ok(hres == S_OK, "createEvent failed: %08lx\n", hres);
+        IDocumentEvent_Release(doc_event);
+        SysFreeString(bstr);
+
+        hres = IDOMEvent_QueryInterface(event, &IID_IDOMMessageEvent, (void**)&msg_event);
+        ok(hres == S_OK, "Could not get IDOMMessageEvent iface: %08lx\n", hres);
+        ok(msg_event != NULL, "msg_event = NULL\n");
+        IDOMEvent_Release(event);
+
+        hres = IDOMMessageEvent_get_source(msg_event, &source);
+        ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+        ok(source == NULL, "uninitialized source != NULL\n");
+
+        hres = IDOMMessageEvent_get_origin(msg_event, &bstr);
+        ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+        ok(!bstr, "uninitialized origin = %s\n", wine_dbgstr_w(bstr));
+
+        /* IE10+ crash when using the get_data from the interface (because it's not a string yet?) */
+        if(document_mode < 10) {
+            hres = IDOMMessageEvent_get_data(msg_event, &bstr);
+            ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L""), "uninitialized data = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+
+            bstr = SysAllocString(L"foobar");
+            hres = IDOMMessageEvent_initMessageEvent(msg_event, bstr, VARIANT_FALSE, VARIANT_FALSE, bstr, bstr, NULL, window);
+            ok(hres == S_OK, "initMessageEvent failed: %08lx\n", hres);
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_get_data(msg_event, &bstr);
+            ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "data = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_get_source(msg_event, &source);
+            ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+            ok(source == window, "source != window\n");
+            IHTMLWindow2_Release(source);
+
+            hres = IDOMMessageEvent_get_origin(msg_event, &bstr);
+            ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "origin = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+
+            bstr = SysAllocString(L"barfoo");
+            hres = IDOMMessageEvent_initMessageEvent(msg_event, bstr, VARIANT_FALSE, VARIANT_FALSE, NULL, NULL, NULL, NULL);
+            ok(hres == S_OK, "initMessageEvent failed: %08lx\n", hres);
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_get_data(msg_event, &bstr);
+            ok(hres == S_OK, "get_data failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "data = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_get_source(msg_event, &source);
+            ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+            ok(source == NULL, "source != NULL\n");
+
+            hres = IDOMMessageEvent_get_origin(msg_event, &bstr);
+            ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "origin = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+        }else {
+            bstr = SysAllocString(L"data");
+            hres = IDOMMessageEvent_GetIDsOfNames(msg_event, &IID_NULL, &bstr, 1, 0, &dispid);
+            ok(hres == S_OK, "GetIDsOfNames(data) failed: %08lx\n", hres);
+            SysFreeString(bstr);
+
+            dp.cArgs = 0;
+            dp.rgvarg = NULL;
+            hres = IDOMMessageEvent_Invoke(msg_event, dispid, &IID_NULL, 0, DISPATCH_PROPERTYGET, &dp, &v[0], NULL, &argerr);
+            ok(hres == S_OK, "Invoke(data) failed: %08lx\n", hres);
+            ok(V_VT(&v[0]) == VT_EMPTY, "V_VT(uninitialized data) = %d\n", V_VT(&v[0]));
+
+            bstr = SysAllocString(L"foobar");
+            hres = IDOMMessageEvent_initMessageEvent(msg_event, bstr, VARIANT_FALSE, VARIANT_FALSE, bstr, bstr, NULL, window);
+            ok(hres == S_OK, "initMessageEvent failed: %08lx\n", hres);
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_Invoke(msg_event, dispid, &IID_NULL, 0, DISPATCH_PROPERTYGET, &dp, &v[0], NULL, &argerr);
+            ok(hres == S_OK, "Invoke(data) failed: %08lx\n", hres);
+            ok(V_VT(&v[0]) == VT_BSTR, "V_VT(data) = %d\n", V_VT(&v[0]));
+            ok(!wcscmp(V_BSTR(&v[0]), L"foobar"), "V_BSTR(data) = %s\n", wine_dbgstr_w(V_BSTR(&v[0])));
+            VariantClear(&v[0]);
+
+            hres = IDOMMessageEvent_get_source(msg_event, &source);
+            ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+            ok(source == window, "source != window\n");
+            IHTMLWindow2_Release(source);
+
+            hres = IDOMMessageEvent_get_origin(msg_event, &bstr);
+            ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "origin = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+
+            bstr = SysAllocString(L"barfoo");
+            hres = IDOMMessageEvent_initMessageEvent(msg_event, bstr, VARIANT_FALSE, VARIANT_FALSE, NULL, NULL, NULL, NULL);
+            ok(hres == S_OK, "initMessageEvent failed: %08lx\n", hres);
+            SysFreeString(bstr);
+
+            hres = IDOMMessageEvent_Invoke(msg_event, dispid, &IID_NULL, 0, DISPATCH_PROPERTYGET, &dp, &v[0], NULL, &argerr);
+            ok(hres == S_OK, "Invoke(data) failed: %08lx\n", hres);
+            ok(V_VT(&v[0]) == VT_BSTR, "V_VT(data) = %d\n", V_VT(&v[0]));
+            ok(!wcscmp(V_BSTR(&v[0]), L"foobar"), "V_BSTR(data) = %s\n", wine_dbgstr_w(V_BSTR(&v[0])));
+
+            hres = IDOMMessageEvent_get_source(msg_event, &source);
+            ok(hres == S_OK, "get_source failed: %08lx\n", hres);
+            ok(source == NULL, "source != NULL\n");
+
+            hres = IDOMMessageEvent_get_origin(msg_event, &bstr);
+            ok(hres == S_OK, "get_origin failed: %08lx\n", hres);
+            ok(!wcscmp(bstr, L"foobar"), "origin = %s\n", wine_dbgstr_w(bstr));
+            SysFreeString(bstr);
+        }
+
+        IDOMMessageEvent_Release(msg_event);
+    }
+}
+
 static void test_visibilitychange(IHTMLDocument2 *doc)
 {
     if(!winetest_interactive) {
@@ -3152,8 +3970,8 @@ static IHTMLDocument2 *get_iframe_doc(IHTMLIFrameElement *iframe)
 
 static void test_iframe_connections(IHTMLDocument2 *doc)
 {
+    IHTMLDocument2 *iframes_doc, *new_doc;
     IHTMLIFrameElement *iframe;
-    IHTMLDocument2 *iframes_doc;
     DWORD cookie;
     IConnectionPoint *cp;
     IHTMLElement *element;
@@ -3167,7 +3985,6 @@ static void test_iframe_connections(IHTMLDocument2 *doc)
     IHTMLElement_Release(element);
 
     iframes_doc = get_iframe_doc(iframe);
-    IHTMLIFrameElement_Release(iframe);
 
     cookie = register_cp((IUnknown*)iframes_doc, &IID_IDispatch, (IUnknown*)&div_onclick_disp);
 
@@ -3197,23 +4014,131 @@ static void test_iframe_connections(IHTMLDocument2 *doc)
         ok(hres == S_OK, "put_URL failed: %08lx\n", hres);
         SysFreeString(str);
 
+        new_doc = get_iframe_doc(iframe);
+        ok(iface_cmp(new_doc, iframes_doc), "new_doc != iframes_doc\n");
+        IHTMLDocument2_Release(new_doc);
+
         SET_EXPECT(iframe_onload);
         pump_msgs(&called_iframe_onload);
         CHECK_CALLED(iframe_onload);
 
+        new_doc = get_iframe_doc(iframe);
+        todo_wine
+        ok(iface_cmp(new_doc, iframes_doc), "new_doc != iframes_doc\n");
+
         str = SysAllocString(L"about:test");
-        hres = IHTMLDocument2_put_URL(iframes_doc, str);
+        hres = IHTMLDocument2_put_URL(new_doc, str);
         ok(hres == S_OK, "put_URL failed: %08lx\n", hres);
+        IHTMLDocument2_Release(new_doc);
         SysFreeString(str);
 
         SET_EXPECT(iframe_onload);
         pump_msgs(&called_iframe_onload);
         CHECK_CALLED(iframe_onload);
+
+        new_doc = get_iframe_doc(iframe);
+        todo_wine
+        ok(iface_cmp(new_doc, iframes_doc), "new_doc != iframes_doc\n");
+        IHTMLDocument2_Release(new_doc);
     }else {
         win_skip("Skipping iframe onload tests on IE older than 9.\n");
     }
 
     IHTMLDocument2_Release(iframes_doc);
+    IHTMLIFrameElement_Release(iframe);
+}
+
+static void test_window_refs(IHTMLDocument2 *doc)
+{
+    IHTMLOptionElementFactory *option_factory;
+    IHTMLXMLHttpRequestFactory *xhr_factory;
+    IHTMLImageElementFactory *image_factory;
+    IHTMLWindow2 *self, *parent, *child;
+    IHTMLOptionElement *option_elem;
+    IHTMLImgElement *img_elem;
+    IHTMLXMLHttpRequest *xhr;
+    IHTMLFrameBase2 *iframe;
+    IHTMLWindow5 *window5;
+    IHTMLDocument6 *doc6;
+    IHTMLElement2 *elem;
+    IOmHistory *history;
+    VARIANT vempty, var;
+    HRESULT hres;
+    short length;
+    BSTR bstr;
+
+    V_VT(&vempty) = VT_EMPTY;
+
+    hres = IHTMLDocument2_QueryInterface(doc, &IID_IHTMLDocument6, (void**)&doc6);
+    ok(hres == S_OK, "Could not get IHTMLDocument6 iface: %08lx\n", hres);
+    bstr = SysAllocString(L"ifr");
+    hres = IHTMLDocument6_getElementById(doc6, bstr, &elem);
+    ok(hres == S_OK, "getElementById failed: %08lx\n", hres);
+    IHTMLDocument6_Release(doc6);
+    SysFreeString(bstr);
+
+    hres = IHTMLElement2_QueryInterface(elem, &IID_IHTMLFrameBase2, (void**)&iframe);
+    ok(hres == S_OK, "Could not get IHTMLFrameBase2 iface: %08lx\n", hres);
+    IHTMLElement2_Release(elem);
+    hres = IHTMLFrameBase2_get_contentWindow(iframe, &child);
+    ok(hres == S_OK, "get_contentWindow failed: %08lx\n", hres);
+    IHTMLFrameBase2_Release(iframe);
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLWindow5, (void**)&window5);
+    ok(hres == S_OK, "Could not get IHTMLWindow5: %08lx\n", hres);
+    hres = IHTMLWindow5_get_XMLHttpRequest(window5, &var);
+    ok(hres == S_OK, "get_XMLHttpRequest failed: %08lx\n", hres);
+    ok(V_VT(&var) == VT_DISPATCH, "V_VT(XMLHttpRequest) = %d\n", V_VT(&var));
+    hres = IDispatch_QueryInterface(V_DISPATCH(&var), &IID_IHTMLXMLHttpRequestFactory, (void**)&xhr_factory);
+    ok(hres == S_OK, "Could not get IHTMLXMLHttpRequestFactory: %08lx\n", hres);
+    IHTMLWindow5_Release(window5);
+    VariantClear(&var);
+
+    hres = IHTMLWindow2_get_Image(window, &image_factory);
+    ok(hres == S_OK, "get_Image failed: %08lx\n", hres);
+    hres = IHTMLWindow2_get_Option(window, &option_factory);
+    ok(hres == S_OK, "get_Option failed: %08lx\n", hres);
+    hres = IHTMLWindow2_get_history(window, &history);
+    ok(hres == S_OK, "get_history failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_self(window, &self);
+    ok(hres == S_OK, "get_self failed: %08lx\n", hres);
+    hres = IHTMLWindow2_get_parent(child, &parent);
+    ok(hres == S_OK, "get_parent failed: %08lx\n", hres);
+    ok(parent == self, "parent != self\n");
+    IHTMLWindow2_Release(parent);
+    IHTMLWindow2_Release(self);
+
+    navigate(doc, L"blank.html");
+
+    hres = IHTMLWindow2_get_parent(child, &parent);
+    ok(hres == S_OK, "get_parent failed: %08lx\n", hres);
+    ok(parent == child, "parent != child\n");
+    IHTMLWindow2_Release(parent);
+    IHTMLWindow2_Release(child);
+
+    hres = IHTMLXMLHttpRequestFactory_create(xhr_factory, &xhr);
+    ok(hres == S_OK, "create failed: %08lx\n", hres);
+    IHTMLXMLHttpRequestFactory_Release(xhr_factory);
+    IHTMLXMLHttpRequest_Release(xhr);
+
+    hres = IHTMLImageElementFactory_create(image_factory, vempty, vempty, &img_elem);
+    ok(hres == S_OK, "create failed: %08lx\n", hres);
+    ok(img_elem != NULL, "img_elem == NULL\n");
+    IHTMLImageElementFactory_Release(image_factory);
+    IHTMLImgElement_Release(img_elem);
+
+    hres = IHTMLOptionElementFactory_create(option_factory, vempty, vempty, vempty, vempty, &option_elem);
+    ok(hres == S_OK, "create failed: %08lx\n", hres);
+    ok(option_elem != NULL, "option_elem == NULL\n");
+    IHTMLOptionElementFactory_Release(option_factory);
+    IHTMLOptionElement_Release(option_elem);
+
+    hres = IOmHistory_get_length(history, &length);
+    ok(hres == S_OK, "get_length failed: %08lx\n", hres);
+    todo_wine
+    ok(length == 42, "length = %d\n", length);
+    IOmHistory_Release(history);
 }
 
 static void test_doc_obj(IHTMLDocument2 *doc)
@@ -3223,6 +4148,7 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     IHTMLOptionElementFactory *option, *option2;
     IHTMLImageElementFactory *image, *image2;
     IHTMLXMLHttpRequestFactory *xhr, *xhr2;
+    IHTMLXDomainRequestFactory *xdr, *xdr2;
     IHTMLDocument2 *doc_node, *doc_node2;
     IOmNavigator *navigator, *navigator2;
     IHTMLLocation *location, *location2;
@@ -3231,11 +4157,15 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     IHTMLPerformance *perf, *perf2;
     IOmHistory *history, *history2;
     IHTMLScreen *screen, *screen2;
+    IOleCommandTarget *cmdtarget;
+    IHTMLWindow2 *self, *window2;
     IEventTarget *event_target;
+    IUnknown *site, *site2;
     DISPPARAMS dp = { 0 };
     IHTMLWindow7 *window7;
     IHTMLWindow6 *window6;
     IHTMLWindow5 *window5;
+    IServiceProvider *sp;
     IDispatchEx *dispex;
     IHTMLElement *body;
     VARIANT res, arg;
@@ -3278,7 +4208,6 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     bstr = NULL;
     hres = IHTMLDocument2_toString(doc, &bstr);
     ok(hres == S_OK, "toString failed: %08lx\n", hres);
-    todo_wine_if(document_mode >= 9)
     ok(!wcscmp(bstr, (document_mode < 9 ? L"[object]" : L"[object Document]")), "toString returned %s\n", wine_dbgstr_w(bstr));
     SysFreeString(bstr);
 
@@ -3317,7 +4246,6 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     /* jscript prop on prototype chain */
     bstr = SysAllocString(L"hasOwnProperty");
     hres = IHTMLDocument2_GetIDsOfNames(doc, &IID_NULL, &bstr, 1, 0, &has_own_prop_id);
-    todo_wine_if(document_mode >= 9)
     ok(hres == (document_mode < 9 ? DISP_E_UNKNOWNNAME : S_OK), "GetIDsOfNames(hasOwnProperty) returned: %08lx\n", hres);
     SysFreeString(bstr);
 
@@ -3329,7 +4257,6 @@ static void test_doc_obj(IHTMLDocument2 *doc)
         hres = IHTMLDocument2_Invoke(doc, has_own_prop_id, &IID_NULL, 0, DISPATCH_METHOD, &dp, &res, NULL, NULL);
         ok(hres == S_OK, "Invoke(hasOwnProperty(\"createElement\")) failed: %08lx\n", hres);
         ok(V_VT(&res) == VT_BOOL, "VT = %d\n", V_VT(&res));
-        todo_wine
         ok(V_BOOL(&res) == VARIANT_FALSE, "hasOwnProperty(\"createElement\") = %d\n", V_BOOL(&res));
 
         hres = IHTMLDocument2_GetIDsOfNames(doc, &IID_NULL, &V_BSTR(&arg), 1, 0, &dispid);
@@ -3342,6 +4269,23 @@ static void test_doc_obj(IHTMLDocument2 *doc)
         ok(V_VT(&res) == VT_BOOL, "VT = %d\n", V_VT(&res));
         ok(V_BOOL(&res) == VARIANT_TRUE, "hasOwnProperty(\"prop\") = %d\n", V_BOOL(&res));
         SysFreeString(V_BSTR(&arg));
+
+        V_BSTR(&arg) = SysAllocString(L"proto_prop");
+        hres = IHTMLDocument2_Invoke(doc, has_own_prop_id, &IID_NULL, 0, DISPATCH_METHOD, &dp, &res, NULL, NULL);
+        ok(hres == S_OK, "Invoke(hasOwnProperty(\"proto_prop\")) failed: %08lx\n", hres);
+        ok(V_VT(&res) == VT_BOOL, "VT = %d\n", V_VT(&res));
+        ok(V_BOOL(&res) == VARIANT_FALSE, "hasOwnProperty(\"proto_prop\") = %d\n", V_BOOL(&res));
+
+        hres = IHTMLDocument2_GetIDsOfNames(doc, &IID_NULL, &V_BSTR(&arg), 1, 0, &dispid);
+        ok(hres == S_OK, "GetIDsOfNames(proto_prop) returned: %08lx\n", hres);
+        SysFreeString(V_BSTR(&arg));
+
+        dp.cArgs = 0;
+        dp.rgvarg = NULL;
+        hres = IHTMLDocument2_Invoke(doc, dispid, &IID_NULL, 0, DISPATCH_PROPERTYGET, &dp, &res, NULL, NULL);
+        ok(hres == S_OK, "Invoke(proto_prop) failed: %08lx\n", hres);
+        ok(V_VT(&res) == VT_BOOL, "VT(proto_prop) = %d\n", V_VT(&res));
+        ok(V_BOOL(&res) == VARIANT_TRUE, "proto_prop = %d\n", V_BOOL(&res));
     }
 
     /* test window props during navigation */
@@ -3380,7 +4324,14 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     ok(hres == S_OK, "Could not get IHTMLWindow6: %08lx\n", hres);
     hres = IHTMLWindow6_get_sessionStorage(window6, &storage);
     ok(hres == S_OK, "get_sessionStorage failed: %08lx\n", hres);
+
+    hres = IHTMLWindow6_get_XDomainRequest(window6, &res);
+    ok(hres == S_OK, "get_XDomainRequest failed: %08lx\n", hres);
+    ok(V_VT(&res) == VT_DISPATCH, "V_VT(XDomainRequest) = %d\n", V_VT(&res));
+    hres = IDispatch_QueryInterface(V_DISPATCH(&res), &IID_IHTMLXDomainRequestFactory, (void**)&xdr);
+    ok(hres == S_OK, "Could not get IHTMLXDomainRequestFactory: %08lx\n", hres);
     IHTMLWindow6_Release(window6);
+    VariantClear(&res);
 
     hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLWindow7, (void**)&window7);
     ok(hres == S_OK, "Could not get IHTMLWindow7: %08lx\n", hres);
@@ -3391,6 +4342,21 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     ok(hres == S_OK, "Could not get IHTMLPerformance: %08lx\n", hres);
     IHTMLWindow7_Release(window7);
     VariantClear(&res);
+
+    /* Test "proxy" windows as well, they're actually outer window proxies, but not the same */
+    hres = IHTMLWindow2_get_self(window, &self);
+    ok(hres == S_OK, "get_self failed: %08lx\n", hres);
+    ok(self != NULL, "self == NULL\n");
+
+    /* And script sites */
+    hres = IHTMLDocument2_QueryInterface(doc_node, &IID_IServiceProvider, (void**)&sp);
+    ok(hres == S_OK, "Could not get IServiceProvider iface: %08lx\n", hres);
+    hres = IServiceProvider_QueryService(sp, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == S_OK, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) failed: %08lx\n", hres);
+    hres = IOleCommandTarget_QueryInterface(cmdtarget, &IID_IActiveScriptSite, (void**)&site);
+    ok(hres == S_OK, "Command Target QI for IActiveScriptSite failed: %08lx\n", hres);
+    IOleCommandTarget_Release(cmdtarget);
+    IServiceProvider_Release(sp);
 
     /* Add props to location, since it gets lost on navigation, despite being same object */
     bstr = SysAllocString(L"wineTestProp");
@@ -3458,8 +4424,27 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     hres = IHTMLWindow2_get_document(window, &doc_node2);
     ok(hres == S_OK, "get_document failed: %08lx\n", hres);
     ok(doc_node != doc_node2, "doc_node == doc_node2\n");
+
+    hres = IHTMLDocument2_get_parentWindow(doc_node, &window2);
+    todo_wine
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+    todo_wine
+    ok(window == window2, "window != window2\n");
+    if(hres == S_OK) IHTMLWindow2_Release(window2);
+
+    hres = IHTMLDocument2_QueryInterface(doc_node2, &IID_IServiceProvider, (void**)&sp);
+    ok(hres == S_OK, "Could not get IServiceProvider iface: %08lx\n", hres);
+    hres = IServiceProvider_QueryService(sp, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
+    ok(hres == S_OK, "QueryService(IID_IActiveScriptSite->IID_IOleCommandTarget) failed: %08lx\n", hres);
+    hres = IOleCommandTarget_QueryInterface(cmdtarget, &IID_IActiveScriptSite, (void**)&site2);
+    ok(hres == S_OK, "Command Target QI for IActiveScriptSite failed: %08lx\n", hres);
+    ok(site != site2, "site == site2\n");
+    IOleCommandTarget_Release(cmdtarget);
     IHTMLDocument2_Release(doc_node2);
     IHTMLDocument2_Release(doc_node);
+    IServiceProvider_Release(sp);
+    IUnknown_Release(site2);
+    IUnknown_Release(site);
 
     hres = IHTMLWindow2_get_location(window, &location2);
     ok(hres == S_OK, "get_location failed: %08lx\n", hres);
@@ -3532,7 +4517,18 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     ok(storage != storage2, "storage == storage2\n");
     IHTMLStorage_Release(storage2);
     IHTMLStorage_Release(storage);
+
+    ok(hres == S_OK, "Could not get IHTMLWindow6: %08lx\n", hres);
+    hres = IHTMLWindow6_get_XDomainRequest(window6, &res);
+    ok(hres == S_OK, "get_XDomainRequest failed: %08lx\n", hres);
+    ok(V_VT(&res) == VT_DISPATCH, "V_VT(XDomainRequest) = %d\n", V_VT(&res));
+    hres = IDispatch_QueryInterface(V_DISPATCH(&res), &IID_IHTMLXDomainRequestFactory, (void**)&xdr2);
+    ok(hres == S_OK, "Could not get IHTMLXDomainRequestFactory: %08lx\n", hres);
+    ok(xdr != xdr2, "xdr == xdr2\n");
+    IHTMLXDomainRequestFactory_Release(xdr2);
+    IHTMLXDomainRequestFactory_Release(xdr);
     IHTMLWindow6_Release(window6);
+    VariantClear(&res);
 
     hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLWindow7, (void**)&window7);
     ok(hres == S_OK, "Could not get IHTMLWindow7: %08lx\n", hres);
@@ -3546,6 +4542,12 @@ static void test_doc_obj(IHTMLDocument2 *doc)
     IHTMLPerformance_Release(perf);
     IHTMLWindow7_Release(window7);
     VariantClear(&res);
+
+    hres = IHTMLWindow2_get_self(window, &window2);
+    ok(hres == S_OK, "get_self failed: %08lx\n", hres);
+    ok(self == window2, "self != window2\n");
+    IHTMLWindow2_Release(window2);
+    IHTMLWindow2_Release(self);
 }
 
 static void test_create_event(IHTMLDocument2 *doc)
@@ -3686,10 +4688,14 @@ static void test_storage_event(DISPPARAMS *params, BOOL doc_onstorage)
 {
     const WCHAR *expect_key = onstorage_expect_key, *expect_old_value = onstorage_expect_old_value, *expect_new_value = onstorage_expect_new_value;
     unsigned line = onstorage_expect_line;
+    IHTMLEventObj5 *event_obj5;
     IHTMLEventObj *event_obj;
     IDOMStorageEvent *event;
     IDispatchEx *dispex;
+    DISPPARAMS dp = {0};
+    IDispatch *disp;
     HRESULT hres;
+    VARIANT res;
     unsigned i;
     DISPID id;
     BSTR bstr;
@@ -3705,6 +4711,18 @@ static void test_storage_event(DISPPARAMS *params, BOOL doc_onstorage)
     hres = IDispatch_QueryInterface(V_DISPATCH(&params->rgvarg[1]), &IID_IDispatchEx, (void**)&dispex);
     ok_(__FILE__,line)(hres == S_OK, "Could not get IDispatchEx: %08lx\n", hres);
 
+    bstr = SysAllocString(L"toString");
+    hres = IDispatchEx_GetDispID(dispex, bstr, 0, &id);
+    ok_(__FILE__,line)(hres == S_OK, "GetDispID(\"toString\") failed: %08lx\n", hres);
+    SysFreeString(bstr);
+
+    hres = IDispatchEx_InvokeEx(dispex, id, LOCALE_NEUTRAL, INVOKE_FUNC, &dp, &res, NULL, NULL);
+    ok_(__FILE__,line)(hres == S_OK, "InvokeEx(\"toString\") failed: %08lx\n", hres);
+    ok_(__FILE__,line)(V_VT(&res) == VT_BSTR, "V_VT(\"toString\") = %d\n", V_VT(&res));
+    ok_(__FILE__,line)(!wcscmp(V_BSTR(&res), doc_onstorage ? L"[object MSEventObj]" : L"[object StorageEvent]"),
+                       "toString = %s\n", wine_dbgstr_w(V_BSTR(&res)));
+    VariantClear(&res);
+
     hres = IDispatchEx_QueryInterface(dispex, &IID_IDOMStorageEvent, (void**)&event);
     if(doc_onstorage) {
         static const WCHAR *props[] = { L"key", L"oldValue", L"newValue", L"storageArea" };
@@ -3712,6 +4730,8 @@ static void test_storage_event(DISPPARAMS *params, BOOL doc_onstorage)
 
         hres = IDispatchEx_QueryInterface(dispex, &IID_IHTMLEventObj, (void**)&event_obj);
         ok_(__FILE__,line)(hres == S_OK, "Could not get IHTMLEventObj: %08lx\n", hres);
+        hres = IHTMLEventObj_QueryInterface(event_obj, &IID_IHTMLEventObj5, (void**)&event_obj5);
+        ok_(__FILE__,line)(hres == S_OK, "Could not get IHTMLEventObj5: %08lx\n", hres);
         IHTMLEventObj_Release(event_obj);
 
         for(i = 0; i < ARRAY_SIZE(props); i++) {
@@ -3720,8 +4740,39 @@ static void test_storage_event(DISPPARAMS *params, BOOL doc_onstorage)
             ok_(__FILE__,line)(hres == DISP_E_UNKNOWNNAME, "GetDispID(%s) failed: %08lx\n", wine_dbgstr_w(bstr), hres);
             SysFreeString(bstr);
         }
-
         IDispatchEx_Release(dispex);
+
+        hres = IHTMLEventObj5_get_data(event_obj5, &bstr);
+        ok_(__FILE__,line)(hres == S_OK, "get_data failed: %08lx\n", hres);
+        ok_(__FILE__,line)(!bstr, "data = %s\n", wine_dbgstr_w(bstr));
+
+        hres = IHTMLEventObj5_get_origin(event_obj5, &bstr);
+        ok_(__FILE__,line)(hres == S_OK, "get_origin failed: %08lx\n", hres);
+        ok_(__FILE__,line)(!bstr, "origin = %s\n", wine_dbgstr_w(bstr));
+
+        hres = IHTMLEventObj5_get_source(event_obj5, &disp);
+        ok_(__FILE__,line)(hres == S_OK, "get_source failed: %08lx\n", hres);
+        ok_(__FILE__,line)(!disp, "source != NULL\n");
+
+        hres = IHTMLEventObj5_get_url(event_obj5, &bstr);
+        ok_(__FILE__,line)(hres == S_OK, "get_url failed: %08lx\n", hres);
+        ok_(__FILE__,line)(!wcscmp(bstr, L"http://winetest.example.org/"), "url = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        bstr = SysAllocString(L"barfoo");
+        hres = IHTMLEventObj5_put_url(event_obj5, bstr);
+        ok_(__FILE__,line)(hres == S_OK, "put_url failed: %08lx\n", hres);
+        SysFreeString(bstr);
+
+        hres = IHTMLEventObj5_get_url(event_obj5, &bstr);
+        ok_(__FILE__,line)(hres == S_OK, "get_url after put failed: %08lx\n", hres);
+        ok_(__FILE__,line)(!wcscmp(bstr, L"barfoo"), "url after put = %s\n", wine_dbgstr_w(bstr));
+        SysFreeString(bstr);
+
+        hres = IHTMLEventObj5_put_url(event_obj5, NULL);
+        ok_(__FILE__,line)(hres == E_POINTER, "put_url NULL returned: %08lx\n", hres);
+
+        IHTMLEventObj5_Release(event_obj5);
         return;
     }
 
@@ -4294,7 +5345,7 @@ static HRESULT WINAPI TravelLog_Clone(ITravelLog *iface, ITravelLog **pptl)
 
 static DWORD WINAPI TravelLog_CountEntries(ITravelLog *iface, IUnknown *punk)
 {
-    return 0;
+    return 42;
 }
 
 static HRESULT WINAPI TravelLog_Revert(ITravelLog *iface)
@@ -5981,6 +7032,170 @@ static void test_empty_document(void)
     IHTMLDocument2_Release(doc);
 }
 
+static void test_document_close(void)
+{
+    IHTMLPrivateWindow *priv_window;
+    IHTMLDocument2 *doc, *doc_node;
+    IHTMLLocation *location;
+    IHTMLDocument3 *doc3;
+    IHTMLElement *elem;
+    DWORD cookie;
+    BSTR bstr, bstr2;
+    HRESULT hres;
+    VARIANT v;
+    LONG ref;
+    MSG msg;
+
+    doc = create_document_with_origin(input_doc_str);
+    if(!doc)
+        return;
+
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_document(window, &doc_node);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLPrivateWindow, (void**)&priv_window);
+    ok(hres == S_OK, "Could not get IHTMLPrivateWindow) interface: %08lx\n", hres);
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &bstr);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"http://winetest.example.org/"), "unexpected address bar: %s\n", wine_dbgstr_w(bstr));
+    IHTMLPrivateWindow_Release(priv_window);
+    SysFreeString(bstr);
+
+    elem = get_elem_id(doc_node, L"inputid");
+    IHTMLElement_Release(elem);
+
+    set_client_site(doc, FALSE);
+    IHTMLDocument2_Release(doc);
+
+    hres = IHTMLWindow2_get_document(window, &doc);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+    ok(doc != doc_node, "doc == doc_node\n");
+
+    hres = IHTMLDocument2_get_readyState(doc_node, &bstr);
+    ok(hres == S_OK, "get_readyState failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"uninitialized"), "readyState = %s\n", wine_dbgstr_w(bstr));
+    SysFreeString(bstr);
+
+    hres = IHTMLDocument2_get_readyState(doc, &bstr);
+    ok(hres == S_OK, "get_readyState failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"uninitialized"), "readyState = %s\n", wine_dbgstr_w(bstr));
+    SysFreeString(bstr);
+
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLPrivateWindow, (void**)&priv_window);
+    ok(hres == S_OK, "Could not get IHTMLPrivateWindow) interface: %08lx\n", hres);
+    hres = IHTMLPrivateWindow_GetAddressBarUrl(priv_window, &bstr);
+    ok(hres == S_OK, "GetAddressBarUrl failed: %08lx\n", hres);
+    ok(!wcscmp(bstr, L"about:blank"), "unexpected address bar: %s\n", wine_dbgstr_w(bstr));
+    IHTMLPrivateWindow_Release(priv_window);
+    SysFreeString(bstr);
+
+    bstr = SysAllocString(L"inputid");
+    doc3 = get_doc3_iface((IUnknown*)doc);
+    hres = IHTMLDocument3_getElementById(doc3, bstr, &elem);
+    ok(hres == S_OK, "getElementById returned: %08lx\n", hres);
+    ok(elem == NULL, "elem != NULL\n");
+    IHTMLDocument3_Release(doc3);
+    SysFreeString(bstr);
+
+    IHTMLDocument2_Release(doc_node);
+    IHTMLDocument2_Release(doc);
+    IHTMLWindow2_Release(window);
+    window = NULL;
+
+    doc = create_document();
+    if(!doc)
+        return;
+    set_client_site(doc, TRUE);
+
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_document(window, &doc_node);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+
+    set_client_site(doc, FALSE);
+    IHTMLDocument2_Release(doc);
+
+    hres = IHTMLWindow2_get_document(window, &doc);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+    ok(doc != doc_node, "doc == doc_node\n");
+
+    IHTMLDocument2_Release(doc_node);
+    IHTMLDocument2_Release(doc);
+
+    bstr = SysAllocString(L"about:blank");
+    hres = IHTMLWindow2_get_location(window, &location);
+    ok(hres == S_OK, "get_location failed: %08lx\n", hres);
+    hres = IHTMLLocation_put_href(location, bstr);
+    ok(hres == E_UNEXPECTED || broken(hres == E_ABORT), "put_href returned: %08lx\n", hres);
+    IHTMLLocation_Release(location);
+
+    V_VT(&v) = VT_EMPTY;
+    bstr2 = SysAllocString(L"");
+    hres = IHTMLWindow2_QueryInterface(window, &IID_IHTMLPrivateWindow, (void**)&priv_window);
+    ok(hres == S_OK, "Could not get IHTMLPrivateWindow) interface: %08lx\n", hres);
+    hres = IHTMLPrivateWindow_SuperNavigate(priv_window, bstr, bstr2, NULL, NULL, &v, &v, 0);
+    ok(hres == E_FAIL, "SuperNavigate returned: %08lx\n", hres);
+    IHTMLPrivateWindow_Release(priv_window);
+    SysFreeString(bstr2);
+    SysFreeString(bstr);
+
+    IHTMLWindow2_Release(window);
+    window = NULL;
+
+    doc = create_document();
+    if(!doc)
+        return;
+    set_client_site(doc, TRUE);
+
+    hres = IHTMLDocument2_get_parentWindow(doc, &window);
+    ok(hres == S_OK, "get_parentWindow failed: %08lx\n", hres);
+
+    hres = IHTMLWindow2_get_document(window, &doc_node);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+
+    doc_load_string(doc, empty_doc_ie9_str);
+    cookie = register_cp((IUnknown*)doc, &IID_IPropertyNotifySink, (IUnknown*)&PropertyNotifySink);
+    while(!doc_complete && GetMessageA(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+    unregister_cp((IUnknown*)doc, &IID_IPropertyNotifySink, cookie);
+    document_mode = 9;
+
+    V_VT(&v) = VT_DISPATCH;
+    V_DISPATCH(&v) = (IDispatch*)&onunload_obj;
+    hres = IHTMLWindow2_put_onunload(window, v);
+    ok(hres == S_OK, "put_onunload failed: %08lx\n", hres);
+
+    V_VT(&v) = VT_DISPATCH;
+    V_DISPATCH(&v) = (IDispatch*)&onbeforeunload_obj;
+    hres = IHTMLWindow2_put_onbeforeunload(window, v);
+    ok(hres == S_OK, "put_onbeforeunload failed: %08lx\n", hres);
+
+    IOleDocumentView_Release(view);
+    view = NULL;
+
+    ref = IHTMLDocument2_Release(doc);
+    ok(ref == 0, "ref = %ld\n", ref);
+
+    hres = IHTMLWindow2_get_document(window, &doc);
+    ok(hres == S_OK, "get_document failed: %08lx\n", hres);
+    ok(doc != doc_node, "doc == doc_node\n");
+
+    IHTMLDocument2_Release(doc_node);
+    IHTMLDocument2_Release(doc);
+
+    V_VT(&v) = VT_EMPTY;
+    IHTMLWindow2_put_onunload(window, v);
+    IHTMLWindow2_put_onbeforeunload(window, v);
+    IHTMLWindow2_Release(window);
+    window = NULL;
+}
+
 static void test_storage_events(const char *doc_str)
 {
     static struct  {
@@ -6334,13 +7549,17 @@ START_TEST(events)
         run_test(input_doc_str, test_focus);
         run_test(empty_doc_str, test_submit);
         run_test(empty_doc_ie9_str, test_submit);
+        run_test(iframe_doc_str, test_message_event);
         run_test(iframe_doc_str, test_iframe_connections);
         if(is_ie9plus) {
             run_test_from_res(L"doc_with_prop.html", test_doc_obj);
             run_test_from_res(L"doc_with_prop_ie9.html", test_doc_obj);
+            run_test(iframe_doc_ie9_str, test_message_event);
+            run_test(iframe_doc_ie11_str, test_message_event);
             run_test_from_res(L"doc_with_prop_ie9.html", test_visibilitychange);
             run_test_from_res(L"blank_ie10.html", test_visibilitychange);
             run_test_from_res(L"iframe.html", test_unload_event);
+            run_test_from_res(L"iframe.html", test_window_refs);
             run_test(empty_doc_ie9_str, test_create_event);
             run_test(img_doc_ie9_str, test_imgload);
             run_test(input_image_doc_ie9_str, test_inputload);
@@ -6353,6 +7572,9 @@ START_TEST(events)
             test_storage_events(empty_doc_ie9_str);
             test_sync_xhr_events(empty_doc_ie9_str);
         }
+
+        /* Test this last since it doesn't close the view properly. */
+        test_document_close();
 
         DestroyWindow(container_hwnd);
     }else {

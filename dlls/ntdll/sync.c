@@ -205,7 +205,7 @@ static inline NTSTATUS wait_semaphore( RTL_CRITICAL_SECTION *crit, int timeout )
  */
 NTSTATUS WINAPI RtlInitializeCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
-    return RtlInitializeCriticalSectionEx( crit, 0, 0 );
+    return RtlInitializeCriticalSectionEx( crit, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 }
 
 
@@ -214,7 +214,7 @@ NTSTATUS WINAPI RtlInitializeCriticalSection( RTL_CRITICAL_SECTION *crit )
  */
 NTSTATUS WINAPI RtlInitializeCriticalSectionAndSpinCount( RTL_CRITICAL_SECTION *crit, ULONG spincount )
 {
-    return RtlInitializeCriticalSectionEx( crit, spincount, 0 );
+    return RtlInitializeCriticalSectionEx( crit, spincount, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 }
 
 
@@ -232,7 +232,7 @@ NTSTATUS WINAPI RtlInitializeCriticalSectionEx( RTL_CRITICAL_SECTION *crit, ULON
      * is done, then debug info should be managed through Rtlp[Allocate|Free]DebugInfo
      * so (e.g.) MakeCriticalSectionGlobal() doesn't free it using HeapFree().
      */
-    if (flags & RTL_CRITICAL_SECTION_FLAG_NO_DEBUG_INFO)
+    if (!(flags & RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO))
         crit->DebugInfo = no_debug_info_marker;
     else
     {
@@ -288,7 +288,11 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
             crit->DebugInfo = NULL;
         }
     }
-    else NtClose( crit->LockSemaphore );
+    else
+    {
+        NtClose( crit->LockSemaphore );
+        crit->DebugInfo = NULL;
+    }
     crit->LockSemaphore = 0;
     return STATUS_SUCCESS;
 }
@@ -473,9 +477,10 @@ DWORD WINAPI RtlRunOnceExecuteOnce( RTL_RUN_ONCE *once, PRTL_RUN_ONCE_INIT_FN fu
 
 struct srw_lock
 {
+    /* bit 0 - if the lock is held exclusive. bit 1.. - number of exclusive waiters. */
     short exclusive_waiters;
 
-    /* Number of shared owners, or -1 if owned exclusive.
+    /* Number of owners.
      *
      * Sadly Windows has no equivalent to FUTEX_WAIT_BITSET, so in order to wake
      * up *only* exclusive or *only* shared waiters (and thus avoid spurious
@@ -486,7 +491,7 @@ struct srw_lock
      * the latter waits only on the "owners" member. Note then that "owners"
      * must not be the first element in the structure.
      */
-    short owners;
+    unsigned short owners;
 };
 C_ASSERT( sizeof(struct srw_lock) == 4 );
 
@@ -517,7 +522,7 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
 {
     union { RTL_SRWLOCK *rtl; struct srw_lock *s; LONG *l; } u = { lock };
 
-    InterlockedIncrement16( &u.s->exclusive_waiters );
+    InterlockedExchangeAdd16( &u.s->exclusive_waiters, 2 );
 
     for (;;)
     {
@@ -532,8 +537,9 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
             if (!old.s.owners)
             {
                 /* Not locked exclusive or shared. We can try to grab it. */
-                new.s.owners = -1;
-                --new.s.exclusive_waiters;
+                new.s.owners = 1;
+                new.s.exclusive_waiters -= 2;
+                new.s.exclusive_waiters |= 1;
                 wait = FALSE;
             }
             else
@@ -568,7 +574,7 @@ void WINAPI RtlAcquireSRWLockShared( RTL_SRWLOCK *lock )
             old.s = *u.s;
             new = old;
 
-            if (old.s.owners != -1 && !old.s.exclusive_waiters)
+            if (!old.s.exclusive_waiters)
             {
                 /* Not locked exclusive, and no exclusive waiters.
                  * We can try to grab it. */
@@ -599,9 +605,10 @@ void WINAPI RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new = old;
 
-        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
+        if (!(old.s.exclusive_waiters & 1)) ERR("Lock %p is not owned exclusive!\n", lock);
 
         new.s.owners = 0;
+        new.s.exclusive_waiters &= ~1;
     } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 
     if (new.s.exclusive_waiters)
@@ -623,7 +630,7 @@ void WINAPI RtlReleaseSRWLockShared( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new = old;
 
-        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
+        if (old.s.exclusive_waiters & 1) ERR("Lock %p is owned exclusive!\n", lock);
         else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
 
         --new.s.owners;
@@ -654,7 +661,8 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
         if (!old.s.owners)
         {
             /* Not locked exclusive or shared. We can try to grab it. */
-            new.s.owners = -1;
+            new.s.owners = 1;
+            new.s.exclusive_waiters |= 1;
             ret = TRUE;
         }
         else
@@ -680,7 +688,7 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new.s = old.s;
 
-        if (old.s.owners != -1 && !old.s.exclusive_waiters)
+        if (!old.s.exclusive_waiters)
         {
             /* Not locked exclusive, and no exclusive waiters.
              * We can try to grab it. */
@@ -907,11 +915,14 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
 
     ret = NtWaitForAlertByThreadId( NULL, timeout );
 
-    spin_lock( &queue->lock );
-    /* We may have already been removed by a call to RtlWakeAddressSingle(). */
+    /* We may have already been removed by a call to RtlWakeAddressSingle() or RtlWakeAddressAll(). */
     if (entry.addr)
-        list_remove( &entry.entry );
-    spin_unlock( &queue->lock );
+    {
+        spin_lock( &queue->lock );
+        if (entry.addr)
+            list_remove( &entry.entry );
+        spin_unlock( &queue->lock );
+    }
 
     TRACE("returning %#lx\n", ret);
 
@@ -925,8 +936,8 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
 void WINAPI RtlWakeAddressAll( const void *addr )
 {
     struct futex_queue *queue = get_futex_queue( addr );
+    struct futex_entry *entry, *next;
     unsigned int count = 0, i;
-    struct futex_entry *entry;
     DWORD tids[256];
 
     TRACE("%p\n", addr);
@@ -938,10 +949,12 @@ void WINAPI RtlWakeAddressAll( const void *addr )
     if (!queue->queue.next)
         list_init(&queue->queue);
 
-    LIST_FOR_EACH_ENTRY( entry, &queue->queue, struct futex_entry, entry )
+    LIST_FOR_EACH_ENTRY_SAFE( entry, next, &queue->queue, struct futex_entry, entry )
     {
         if (entry->addr == addr)
         {
+            entry->addr = NULL;
+            list_remove( &entry->entry );
             /* Try to buffer wakes, so that we don't make a system call while
              * holding a spinlock. */
             if (count < ARRAY_SIZE(tids))

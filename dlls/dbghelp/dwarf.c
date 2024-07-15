@@ -2892,8 +2892,8 @@ static BOOL dwarf2_parse_compilation_unit_head(dwarf2_parse_context_t* ctx,
     TRACE("- word_size:     %u\n",  ctx->head.word_size);
     TRACE("- offset_size:   %u\n",  ctx->head.offset_size);
 
-    if (ctx->head.version >= 2)
-        ctx->module_ctx->cu_versions |= 1 << (ctx->head.version - 2);
+    if (ctx->head.version >= 2 && ctx->head.version <= 5)
+        ctx->module_ctx->cu_versions |= DHEXT_FORMAT_DWARF2 << (ctx->head.version - 2);
     if (max_supported_dwarf_version == 0)
     {
         char* env = getenv("DBGHELP_DWARF_VERSION");
@@ -3761,7 +3761,7 @@ static void apply_frame_state(const struct module* module, struct cpu_stack_walk
         *cfa = eval_expression(module, csw, (const unsigned char*)state->cfa_offset, context);
         break;
     default:
-        *cfa = get_context_reg(module, csw, context, state->cfa_reg) + state->cfa_offset;
+        *cfa = get_context_reg(module, csw, context, state->cfa_reg) + (LONG_PTR)state->cfa_offset;
         break;
     }
     if (!*cfa) return;
@@ -3775,7 +3775,7 @@ static void apply_frame_state(const struct module* module, struct cpu_stack_walk
         case RULE_SAME:
             break;
         case RULE_CFA_OFFSET:
-            set_context_reg(module, csw, &new_context, i, *cfa + state->regs[i], TRUE);
+            set_context_reg(module, csw, &new_context, i, *cfa + (LONG_PTR)state->regs[i], TRUE);
             break;
         case RULE_OTHER_REG:
             copy_context_reg(module, csw, &new_context, i, context, state->regs[i]);
@@ -4205,6 +4205,11 @@ BOOL dwarf2_parse(struct module* module, ULONG_PTR load_offset,
     struct module_format* dwarf2_modfmt;
     dwarf2_parse_module_context_t module_ctx;
 
+/* Our DWARF parser has been known to crash winedbg in some cases. Since
+ * probably no concerned parties are going to be using plain winedbg, just don't
+ * bother parsing anything. */
+return FALSE;
+
     if (!dwarf2_init_section(&eh_frame,                fmap, ".eh_frame",     NULL,             &eh_frame_sect))
         /* lld produces .eh_fram to avoid generating a long name */
         dwarf2_init_section(&eh_frame,                fmap, ".eh_fram",      NULL,             &eh_frame_sect);
@@ -4259,17 +4264,16 @@ BOOL dwarf2_parse(struct module* module, ULONG_PTR load_offset,
     module_ctx.dwz = dwarf2_load_dwz(fmap, module);
     dwarf2_load_CU_module(&module_ctx, module, section, load_offset, thunks, FALSE);
 
-    dwarf2_modfmt->module->module.SymType = SymDia;
-    /* hide dwarf versions in CVSig
-     * bits 24-31 will be set according to found dwarf version
-     * different CU can have different dwarf version, so use a bit per version (version 2 => b24)
-     */
-    dwarf2_modfmt->module->module.CVSig = 'D' | ('W' << 8) | ('F' << 16) | ((module_ctx.cu_versions & 0xFF) << 24);
-    /* FIXME: we could have a finer grain here */
-    dwarf2_modfmt->module->module.GlobalSymbols = TRUE;
-    dwarf2_modfmt->module->module.TypeInfo = TRUE;
-    dwarf2_modfmt->module->module.SourceIndexed = TRUE;
-    dwarf2_modfmt->module->module.Publics = TRUE;
+    if (module_ctx.cu_versions)
+    {
+        dwarf2_modfmt->module->module.SymType = SymDia;
+        module->debug_format_bitmask |= module_ctx.cu_versions;
+        /* FIXME: we could have a finer grain here */
+        dwarf2_modfmt->module->module.GlobalSymbols = TRUE;
+        dwarf2_modfmt->module->module.TypeInfo = TRUE;
+        dwarf2_modfmt->module->module.SourceIndexed = TRUE;
+        dwarf2_modfmt->module->module.Publics = TRUE;
+    }
 
     dwarf2_unload_CU_module(&module_ctx);
 leave:

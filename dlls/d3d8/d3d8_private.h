@@ -26,14 +26,11 @@
 #include <assert.h>
 #include <stdarg.h>
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 #define COBJMACROS
 #include "windef.h"
 #include "winbase.h"
 #include "wingdi.h"
 #include "wine/debug.h"
-#include "wine/heap.h"
 #include "d3d8.h"
 #include "wine/wined3d.h"
 
@@ -246,7 +243,7 @@ struct d3d8_texture
     IDirect3DBaseTexture8 IDirect3DBaseTexture8_iface;
     struct d3d8_resource resource;
     struct wined3d_texture *wined3d_texture, *draw_texture;
-    IDirect3DDevice8 *parent_device;
+    struct d3d8_device *parent_device;
     struct list rtv_list;
 };
 

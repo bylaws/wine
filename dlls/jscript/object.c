@@ -24,12 +24,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(jscript);
 
-static HRESULT Object_toString(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
+HRESULT Object_toString(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     jsdisp_t *jsdisp;
     const WCHAR *str;
+    BSTR bstr = NULL;
     IDispatch *disp;
+    jsstr_t *ret;
     HRESULT hres;
 
     /* Keep in sync with jsclass_t enum */
@@ -50,12 +52,26 @@ static HRESULT Object_toString(script_ctx_t *ctx, jsval_t vthis, WORD flags, uns
         L"[object Object]",
         L"[object Object]",
         L"[object Object]",
+        L"[object ArrayBuffer]",
+        L"[object Object]",
+        L"[object Int8Array]",
+        L"[object Int16Array]",
+        L"[object Int32Array]",
+        L"[object Uint8Array]",
+        L"[object Uint8ClampedArray]",
+        L"[object Uint16Array]",
+        L"[object Uint32Array]",
+        L"[object Float32Array]",
+        L"[object Float64Array]",
         L"[object Object]",
         L"[object Object]",
         L"[object Object]"
     };
 
     TRACE("\n");
+
+    if(!r)
+        return S_OK;
 
     if(is_undefined(vthis) || is_null(vthis)) {
         if(ctx->version < SCRIPTLANGUAGEVERSION_ES5)
@@ -72,6 +88,9 @@ static HRESULT Object_toString(script_ctx_t *ctx, jsval_t vthis, WORD flags, uns
     jsdisp = to_jsdisp(disp);
     if(!jsdisp) {
         str = L"[object Object]";
+    }else if(jsdisp->proxy) {
+        hres = jsdisp->proxy->lpVtbl->ToString(jsdisp->proxy, &bstr);
+        str = bstr;
     }else if(names[jsdisp->builtin_info->class]) {
         str = names[jsdisp->builtin_info->class];
     }else {
@@ -84,13 +103,11 @@ static HRESULT Object_toString(script_ctx_t *ctx, jsval_t vthis, WORD flags, uns
         return hres;
 
 set_output:
-    if(r) {
-        jsstr_t *ret;
-        ret = jsstr_alloc(str);
-        if(!ret)
-            return E_OUTOFMEMORY;
-        *r = jsval_string(ret);
-    }
+    ret = jsstr_alloc(str);
+    SysFreeString(bstr);
+    if(!ret)
+        return E_OUTOFMEMORY;
+    *r = jsval_string(ret);
 
     return S_OK;
 }

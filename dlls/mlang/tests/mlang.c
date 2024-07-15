@@ -1021,19 +1021,18 @@ static void test_GetCharsetInfo_other(IMultiLanguage *ml)
     WCHAR iso88591_6W[] =    {'-','I','S','O','8','8','5','9','1',0};
     WCHAR iso88591_7W[] =    {' ','I','S','O','-','8','8','5','9','-','1',0};
     struct other {
-        int todo;
         HRESULT hr;
         WCHAR* charset;
         WCHAR* ret_charset;
     } other[] = {
-        { 0, S_OK,   asciiW, asciiW },
-        { 0, S_OK,   iso88591_1W, iso88591_1retW },
-        { 1, S_OK,   iso88591_2W, iso88591_2retW },
-        { 0, E_FAIL, iso88591_3W, 0 },
-        { 0, E_FAIL, iso88591_4W, 0 },
-        { 0, E_FAIL, iso88591_5W, 0 },
-        { 0, E_FAIL, iso88591_6W, 0 },
-        { 0, E_FAIL, iso88591_7W, 0 },
+        { S_OK,   asciiW, asciiW },
+        { S_OK,   iso88591_1W, iso88591_1retW },
+        { S_OK,   iso88591_2W, iso88591_2retW },
+        { E_FAIL, iso88591_3W, 0 },
+        { E_FAIL, iso88591_4W, 0 },
+        { E_FAIL, iso88591_5W, 0 },
+        { E_FAIL, iso88591_6W, 0 },
+        { E_FAIL, iso88591_7W, 0 },
     };
     MIMECSETINFO info;
     HRESULT hr;
@@ -1043,11 +1042,9 @@ static void test_GetCharsetInfo_other(IMultiLanguage *ml)
     {
         hr = IMultiLanguage_GetCharsetInfo(ml, other[i].charset, &info);
 
-        todo_wine_if(other[i].todo)
         ok(hr == other[i].hr, "#%d: got %08lx, expected %08lx\n", i, hr, other[i].hr);
 
         if (hr == S_OK)
-            todo_wine_if(other[i].todo)
             ok(!lstrcmpW(info.wszCharset, other[i].ret_charset), "#%d: got %s, expected %s\n",
                 i, wine_dbgstr_w(info.wszCharset), wine_dbgstr_w(other[i].ret_charset));
     }
@@ -1163,7 +1160,7 @@ static void IMLangFontLink_Test(IMLangFontLink* iMLFL)
     DWORD dwCodePages, dwManyCodePages;
     DWORD dwCmpCodePages;
     UINT CodePage;
-    static const WCHAR str[] = { 'd', 0x0436, 0xff90 };
+    static const WCHAR str[] = { 'd', 0x0436, 0xff90, 0x0160 };
     LONG processed;
     HRESULT ret;
 
@@ -1220,6 +1217,19 @@ static void IMLangFontLink_Test(IMLangFontLink* iMLFL)
     ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
     ok(processed == 1, "expected 1, got %ld\n", processed);
 
+    /* Latin 2 */
+    dwCmpCodePages = FS_LATIN1 | FS_LATIN2 | FS_TURKISH | FS_BALTIC;
+    ret = IMLangFontLink_GetCharCodePages(iMLFL, 0x0160, &dwCodePages);
+    ok(ret == S_OK, "IMLangFontLink_GetCharCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, &str[3], 1, 0, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 1, "expected 1, got %ld\n", processed);
+
     /* Cyrillic */
     dwCmpCodePages = FS_CYRILLIC | FS_JISJAPAN | FS_CHINESESIMP | FS_WANSUNG;
     ret = IMLangFontLink_GetCharCodePages(iMLFL, 0x0436, &dwCodePages);
@@ -1261,6 +1271,66 @@ static void IMLangFontLink_Test(IMLangFontLink* iMLFL)
     ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
     ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
     ok(processed == 3, "expected 3, got %ld\n", processed);
+
+    dwCmpCodePages = FS_JISJAPAN;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, str, 4, 0, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 3, "expected 3, got %ld\n", processed);
+
+    dwCmpCodePages = FS_LATIN1 | FS_LATIN2 | FS_CYRILLIC | FS_GREEK | FS_TURKISH
+        | FS_HEBREW | FS_ARABIC | FS_BALTIC | FS_VIETNAMESE | FS_THAI
+        | FS_JISJAPAN | FS_CHINESESIMP | FS_WANSUNG | FS_CHINESETRAD;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, str, 4, FS_LATIN1, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 1, "expected 1, got %ld\n", processed);
+
+    dwCmpCodePages = FS_CYRILLIC | FS_JISJAPAN | FS_CHINESESIMP | FS_WANSUNG;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, str, 4, FS_CYRILLIC, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 2, "expected 2, got %ld\n", processed);
+
+    dwCmpCodePages = FS_JISJAPAN;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, str, 4, FS_JISJAPAN, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 3, "expected 3, got %ld\n", processed);
+
+    dwCmpCodePages = FS_LATIN1 | FS_LATIN2 | FS_CYRILLIC | FS_GREEK | FS_TURKISH
+        | FS_HEBREW | FS_ARABIC | FS_BALTIC | FS_VIETNAMESE | FS_THAI
+        | FS_JISJAPAN | FS_CHINESESIMP | FS_WANSUNG | FS_CHINESETRAD;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, str, 4, FS_TURKISH, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 1, "expected 1, got %ld\n", processed);
+
+    dwCmpCodePages = FS_JISJAPAN;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, &str[1], 3, FS_TURKISH, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 2, "expected 2, got %ld\n", processed);
+
+    dwCmpCodePages = FS_JISJAPAN;
+    dwCodePages = 0;
+    processed = 0;
+    ret = IMLangFontLink_GetStrCodePages(iMLFL, L"\uff90a", 2, FS_LATIN1, &dwCodePages, &processed);
+    ok(ret == S_OK, "IMLangFontLink_GetStrCodePages error %lx\n", ret);
+    ok(dwCodePages == dwCmpCodePages, "expected %lx, got %lx\n", dwCmpCodePages, dwCodePages);
+    ok(processed == 1, "expected 1, got %ld\n", processed);
 
     dwCodePages = 0xffff;
     processed = -1;
@@ -2233,17 +2303,41 @@ static void test_GetGlobalFontLinkObject(void)
 {
     HRESULT ret;
     void *unknown;
+    LONG refcount;
+    IMLangFontLink2 *IMLFL2;
+    IMLangFontLink *IMLFL;
+    IMLangCodePages *IMLCP;
+    IMultiLanguage *IML;
 
     ret = GetGlobalFontLinkObject(NULL);
     ok(ret == E_INVALIDARG, "expected E_INVALIDARG got %#lx\n", ret);
 
     unknown = (void *)0xdeadbeef;
     ret = GetGlobalFontLinkObject(&unknown);
-todo_wine {
     ok(ret == S_OK, "expected S_OK got %#lx\n", ret);
     ok(unknown != NULL && unknown != (void *)0xdeadbeef,
        "GetGlobalFontLinkObject() returned %p\n", unknown);
-    }
+    if (unknown == (void *)0xdeadbeef || !unknown) return;
+
+    ret = IUnknown_QueryInterface((IUnknown*)unknown, &IID_IMLangFontLink2, (void**)&IMLFL2);
+    todo_wine ok(ret == E_NOINTERFACE, "expected E_NOINTERFACE got %#lx\n", ret);
+    if (ret == S_OK) IMLangFontLink2_Release(IMLFL2);
+
+    ret = IUnknown_QueryInterface((IUnknown*)unknown, &IID_IMultiLanguage, (void**)&IML);
+    todo_wine ok(ret == E_NOINTERFACE, "expected E_NOINTERFACE got %#lx\n", ret);
+    if (ret == S_OK) IMultiLanguage_Release(IML);
+
+    ret = IUnknown_QueryInterface((IUnknown*)unknown, &IID_IMLangFontLink, (void**)&IMLFL);
+    ok(ret == S_OK, "expected S_OK got %#lx\n", ret);
+    IMLangFontLink_Release(IMLFL);
+
+    ret = IUnknown_QueryInterface((IUnknown*)unknown, &IID_IMLangCodePages, (void**)&IMLCP);
+    ok(ret == S_OK, "expected S_OK got %#lx\n", ret);
+    IMLangCodePages_Release(IMLCP);
+
+
+    refcount = IUnknown_Release((IUnknown*)unknown);
+    ok(refcount == 1, "Got refcount %ld\n", refcount);
 }
 
 static void test_IMLangConvertCharset(IMultiLanguage *ml)
@@ -2716,14 +2810,14 @@ START_TEST(mlang)
     if (!init_function_ptrs())
         return;
 
+    test_GetGlobalFontLinkObject();
+
     CoInitialize(NULL);
     test_Rfc1766ToLcid();
     test_LcidToRfc1766();
 
     test_ConvertINetUnicodeToMultiByte();
     test_JapaneseConversion();
-
-    test_GetGlobalFontLinkObject();
 
     trace("IMultiLanguage\n");
     ret = CoCreateInstance(&CLSID_CMultiLanguage, NULL, CLSCTX_INPROC_SERVER,

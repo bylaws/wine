@@ -1370,6 +1370,8 @@ static BOOL test_enum_svc(int attempt)
         goto retry; /* service start race condition */
     ok(ret, "Expected success, got error %lu\n", GetLastError());
     ok(needed == 0, "Expected 0 needed bytes as we are done, got %lu\n", needed);
+    if (returned < missing && strcmp(winetest_platform, "wine") && attempt)
+         goto retry; /* service stop race condition */
     todo_wine ok(returned == missing, "Expected %lu remaining services, got %lu\n", missing, returned);
     ok(resume == 0, "Expected the resume handle to be 0\n");
 
@@ -2930,7 +2932,6 @@ static void test_EventLog(void)
     else
     {
         ok(status.dwCurrentState == SERVICE_RUNNING, "got %#lx\n", status.dwCurrentState);
-        todo_wine
         ok(status.dwControlsAccepted == SERVICE_ACCEPT_SHUTDOWN /* XP */ ||
            status.dwControlsAccepted == (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN) /* 2008 */ ||
            status.dwControlsAccepted == (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_TIMECHANGE | SERVICE_ACCEPT_SHUTDOWN),

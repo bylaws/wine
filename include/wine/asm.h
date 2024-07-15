@@ -45,16 +45,8 @@
 # define __ASM_EHABI(str)
 #endif
 
-#if defined(__SEH__) || (defined(_MSC_VER) && defined(__clang__) && (defined(__x86_64__) || defined(__aarch64__)))
-# if defined(__aarch64__) && defined(__clang_major__) && (__clang_major__ < 12 || defined(__apple_build_version__))
-   /* Clang got support for aarch64 SEH assembly directives in Clang 12,
-    * before that, only .seh_startproc/.seh_endproc but nothing else was
-    * supported. Support for it doesn't exist in any Apple branded version
-    * of Clang yet. */
-#  define __ASM_SEH(str)
-# else
-#  define __ASM_SEH(str) str
-# endif
+#if defined(__WINE_PE_BUILD) && !defined(__i386__)
+# define __ASM_SEH(str) str
 #else
 # define __ASM_SEH(str)
 #endif
@@ -190,5 +182,107 @@
 # define THISCALL_NAME(func) __ASM_NAME(#func)
 
 #endif  /* __i386__ */
+
+/* syscall support */
+
+#ifdef __i386__
+# ifdef __PIC__
+#  define __ASM_SYSCALL_FUNC(id,name,args) \
+    __ASM_STDCALL_FUNC( name, args, \
+                        "call 1f\n" \
+                        "1:\tpopl %eax\n\t" \
+                        "movl " __ASM_NAME("__wine_syscall_dispatcher") "-1b(%eax),%edx\n\t" \
+                        "movl $(" #id "),%eax\n\t" \
+                        "call *%edx\n\t" \
+                        "ret $" #args )
+#  define DEFINE_SYSCALL_HELPER32()
+# else
+#  define __ASM_SYSCALL_FUNC(id,name,args) \
+    __ASM_STDCALL_FUNC( name, args, \
+                        "movl $(" #id "),%eax\n\t" \
+                        "movl $" __ASM_NAME("__wine_syscall") ",%edx\n\t" \
+                        "call *%edx\n\t" \
+                        "ret $" #args )
+#  define DEFINE_SYSCALL_HELPER32() \
+    __ASM_GLOBAL_FUNC( __wine_syscall, "jmp *(" __ASM_NAME("__wine_syscall_dispatcher") ")" )
+# endif
+#elif defined __aarch64__
+# define __ASM_SYSCALL_FUNC(id,name) \
+    __ASM_GLOBAL_FUNC( name, \
+                       ".seh_endprologue\n\t" \
+                       "mov x8, #(" #id ")\n\t" \
+                       "mov x9, x30\n\t" \
+                       "ldr x16, 1f\n\t" \
+                       "ldr x16, [x16]\n\t" \
+                       "blr x16\n\t" \
+                       "ret\n" \
+                       "1:\t.quad " __ASM_NAME("__wine_syscall_dispatcher") )
+#elif defined __arm64ec__
+# define __ASM_SYSCALL_FUNC(id,name) \
+    asm( ".seh_proc " #name "\n\t" \
+         ".seh_endprologue\n\t" \
+         "mov x8, #%0\n\t" \
+         "mov x9, x30\n\t" \
+         "adrp x16, __wine_syscall_dispatcher\n\t" \
+         "ldr x16, [x16, :lo12:__wine_syscall_dispatcher]\n\t" \
+         "blr x16\n\t" \
+         "ret\n\t" \
+         ".seh_endproc" :: "i" (id) )
+#elif defined __x86_64__
+/* Chromium depends on syscall thunks having the same form as on
+ * Windows. For 64-bit systems the only viable form we can emulate is
+ * having an int $0x2e fallback. Since actually using an interrupt is
+ * expensive, and since for some reason Chromium doesn't actually
+ * validate that instruction, we can just put a jmp there instead. */
+# ifdef __WINE_PE_BUILD
+#  define __ASM_SYSCALL_FUNC(id,name) \
+    __ASM_GLOBAL_FUNC( name, \
+                       ".seh_endprologue\n\t" \
+                       ".byte 0x4c,0x8b,0xd1\n\t" /* movq %rcx,%r10 */ \
+                       ".byte 0xb8\n\t"           /* movl $i,%eax */ \
+                       ".long (" #id ")\n\t" \
+                       ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* testb $1,0x7ffe0308 */ \
+                       ".byte 0x75,0x03\n\t"      /* jne 1f */ \
+                       ".byte 0x0f,0x05\n\t"      /* syscall */ \
+                       ".byte 0xc3\n\t"           /* ret */ \
+                       "jmp 1f\n\t" \
+                       ".byte 0xc3\n"             /* ret */ \
+                       "1:\t.byte 0xff,0x14,0x25\n\t" /* 1: callq *(0x7ffe1000) */ \
+                       ".long 0x7ffe1000\n\t" \
+                       "ret" )
+# else
+#  define __ASM_SYSCALL_FUNC(id,name) \
+    __ASM_GLOBAL_FUNC( name, \
+                       ".byte 0x4c,0x8b,0xd1\n\t" /* movq %rcx,%r10 */ \
+                       ".byte 0xb8\n\t"           /* movl $i,%eax */ \
+                       ".long (" #id ")\n\t" \
+                       ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* testb $1,0x7ffe0308 */ \
+                       ".byte 0x75,0x03\n\t"      /* jne 1f */ \
+                       ".byte 0x0f,0x05\n\t"      /* syscall */ \
+                       ".byte 0xc3\n\t"           /* ret */ \
+                       "jmp 1f\n\t" \
+                       ".byte 0xc3\n"             /* ret */ \
+                       "nop\n" \
+                       "1:\tcallq *" __ASM_NAME("__wine_syscall_dispatcher") "(%rip)\n\t" \
+                       "ret" )
+# endif
+#elif defined __arm__
+# define __ASM_SYSCALL_FUNC(id,name,args) \
+    __ASM_GLOBAL_FUNC( name, \
+                       "push {r0-r3}\n\t" \
+                       ".seh_save_regs {r0-r3}\n\t" \
+                       ".seh_endprologue\n\t" \
+                       "movw ip, #(" #id ")\n\t" \
+                       "mov r3, lr\n\t" \
+                       "bl __wine_syscall\n\t" \
+                       "add sp, #16\n\t" \
+                       "bx lr" )
+# define DEFINE_SYSCALL_HELPER32() \
+    __ASM_GLOBAL_FUNC( __wine_syscall, \
+                       "movw r0, :lower16:__wine_syscall_dispatcher\n\t" \
+                       "movt r0, :upper16:__wine_syscall_dispatcher\n\t" \
+                       "ldr r0, [r0]\n\t" \
+                       "bx r0" )
+#endif
 
 #endif  /* __WINE_WINE_ASM_H */

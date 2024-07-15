@@ -178,7 +178,8 @@ static HRESULT WINAPI IDirectSoundNotifyImpl_SetNotificationPositions(IDirectSou
     if (howmuch > 0) {
 	/* Make an internal copy of the caller-supplied array.
 	 * Replace the existing copy if one is already present. */
-        This->notifies = _recalloc(This->notifies, howmuch, sizeof(DSBPOSITIONNOTIFY));
+        free(This->notifies);
+        This->notifies = malloc(howmuch * sizeof(DSBPOSITIONNOTIFY));
         if (!This->notifies) {
 	    WARN("out of memory\n");
 	    return DSERR_OUTOFMEMORY;
@@ -848,10 +849,6 @@ static ULONG DirectSoundCaptureDevice_Release(
     if (!ref) {
         TRACE("deleting object\n");
 
-        EnterCriticalSection(&DSOUND_capturers_lock);
-        list_remove(&device->entry);
-        LeaveCriticalSection(&DSOUND_capturers_lock);
-
         if (device->capture_buffer)
             IDirectSoundCaptureBufferImpl_Release(&device->capture_buffer->IDirectSoundCaptureBuffer8_iface);
 
@@ -1027,12 +1024,9 @@ static HRESULT DirectSoundCaptureDevice_Initialize(
     if(FAILED(hr))
         return hr;
 
-    EnterCriticalSection(&DSOUND_capturers_lock);
-
     hr = DirectSoundCaptureDevice_Create(&device);
     if (hr != DS_OK) {
         WARN("DirectSoundCaptureDevice_Create failed\n");
-        LeaveCriticalSection(&DSOUND_capturers_lock);
         return hr;
     }
 
@@ -1050,7 +1044,6 @@ static HRESULT DirectSoundCaptureDevice_Initialize(
         device->lock.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&device->lock);
         free(device);
-        LeaveCriticalSection(&DSOUND_capturers_lock);
         return DSERR_NODRIVER;
     }
 
@@ -1063,11 +1056,7 @@ static HRESULT DirectSoundCaptureDevice_Initialize(
     }
     IAudioClient_Release(client);
 
-    list_add_tail(&DSOUND_capturers, &device->entry);
-
     *ppDevice = device;
-
-    LeaveCriticalSection(&DSOUND_capturers_lock);
 
     return S_OK;
 }

@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "gst_private.h"
 
 #include "wmcodecdsp.h"
@@ -303,13 +305,6 @@ void wg_sample_queue_destroy(struct wg_sample_queue *queue)
     free(queue);
 }
 
-/* These unixlib entry points should not be used directly, they assume samples
- * to be queued and zero-copy support, use the helpers below instead.
- */
-HRESULT wg_transform_push_data(wg_transform_t transform, struct wg_sample *sample);
-HRESULT wg_transform_read_data(wg_transform_t transform, struct wg_sample *sample,
-        struct wg_format *format);
-
 HRESULT wg_transform_push_mf(wg_transform_t transform, IMFSample *sample,
         struct wg_sample_queue *queue)
 {
@@ -346,23 +341,21 @@ HRESULT wg_transform_push_mf(wg_transform_t transform, IMFSample *sample,
 }
 
 HRESULT wg_transform_read_mf(wg_transform_t transform, IMFSample *sample,
-        DWORD sample_size, struct wg_format *format, DWORD *flags)
+        DWORD sample_size, DWORD *flags)
 {
     struct wg_sample *wg_sample;
     IMFMediaBuffer *buffer;
     HRESULT hr;
 
-    TRACE_(mfplat)("transform %#I64x, sample %p, format %p, flags %p.\n", transform, sample, format, flags);
+    TRACE_(mfplat)("transform %#I64x, sample %p, flags %p.\n", transform, sample, flags);
 
     if (FAILED(hr = wg_sample_create_mf(sample, &wg_sample)))
         return hr;
 
     wg_sample->size = 0;
 
-    if (FAILED(hr = wg_transform_read_data(transform, wg_sample, format)))
+    if (FAILED(hr = wg_transform_read_data(transform, wg_sample)))
     {
-        if (hr == MF_E_TRANSFORM_STREAM_CHANGE && !format)
-            FIXME("Unexpected stream format change!\n");
         wg_sample_release(wg_sample);
         return hr;
     }
@@ -430,7 +423,7 @@ HRESULT wg_transform_read_quartz(wg_transform_t transform, struct wg_sample *wg_
 
     TRACE_(mfplat)("transform %#I64x, wg_sample %p.\n", transform, wg_sample);
 
-    if (FAILED(hr = wg_transform_read_data(transform, wg_sample, NULL)))
+    if (FAILED(hr = wg_transform_read_data(transform, wg_sample)))
     {
         if (hr == MF_E_TRANSFORM_STREAM_CHANGE)
             FIXME("Unexpected stream format change!\n");
@@ -484,7 +477,7 @@ HRESULT wg_transform_push_dmo(wg_transform_t transform, IMediaBuffer *media_buff
     if (flags & DMO_INPUT_DATA_BUFFERF_TIMELENGTH)
     {
         wg_sample->flags |= WG_SAMPLE_FLAG_HAS_DURATION;
-        wg_sample->pts = time_length;
+        wg_sample->duration = time_length;
     }
 
     wg_sample_queue_begin_append(queue, wg_sample);
@@ -505,7 +498,7 @@ HRESULT wg_transform_read_dmo(wg_transform_t transform, DMO_OUTPUT_DATA_BUFFER *
         return hr;
     wg_sample->size = 0;
 
-    if (FAILED(hr = wg_transform_read_data(transform, wg_sample, NULL)))
+    if (FAILED(hr = wg_transform_read_data(transform, wg_sample)))
     {
         if (hr == MF_E_TRANSFORM_STREAM_CHANGE)
             TRACE_(mfplat)("Stream format changed.\n");
@@ -532,5 +525,72 @@ HRESULT wg_transform_read_dmo(wg_transform_t transform, DMO_OUTPUT_DATA_BUFFER *
     IMediaBuffer_SetLength(buffer->pBuffer, wg_sample->size);
 
     wg_sample_release(wg_sample);
+    return hr;
+}
+
+HRESULT wg_source_read_data(wg_source_t source, UINT32 index, IMFSample **out)
+{
+    struct wg_sample wg_sample = {0};
+    struct wg_source_read_data_params params =
+    {
+        .source = source,
+        .index = index,
+        .sample = &wg_sample,
+    };
+    IMFMediaBuffer *buffer;
+    IMFSample *sample;
+    NTSTATUS status;
+    HRESULT hr;
+
+    TRACE("source %#I64x, index %u, out %p\n", source, index, out);
+
+    status = WINE_UNIX_CALL(unix_wg_source_read_data, &params);
+    if (status == STATUS_PENDING) return E_PENDING;
+    if (status == STATUS_END_OF_FILE) return MF_E_END_OF_STREAM;
+    if (status != STATUS_BUFFER_TOO_SMALL) return HRESULT_FROM_NT(status);
+
+    if (FAILED(hr = MFCreateSample(&sample)))
+        return hr;
+    if (SUCCEEDED(hr = MFCreateMemoryBuffer(wg_sample.max_size, &buffer)))
+    {
+        hr = IMFSample_AddBuffer(sample, buffer);
+        IMFMediaBuffer_Release(buffer);
+    }
+
+    if (FAILED(hr) || FAILED(hr = wg_sample_create_mf(sample, &params.sample)))
+        goto error;
+
+    status = WINE_UNIX_CALL(unix_wg_source_read_data, &params);
+    if (FAILED(hr = HRESULT_FROM_NT(status)))
+    {
+        wg_sample_release(params.sample);
+        goto error;
+    }
+
+    if (params.sample->flags & WG_SAMPLE_FLAG_HAS_PTS)
+        IMFSample_SetSampleTime(sample, params.sample->pts);
+    if (params.sample->flags & WG_SAMPLE_FLAG_HAS_DURATION)
+        IMFSample_SetSampleDuration(sample, params.sample->duration);
+    if (params.sample->flags & WG_SAMPLE_FLAG_SYNC_POINT)
+        IMFSample_SetUINT32(sample, &MFSampleExtension_CleanPoint, 1);
+    if (params.sample->flags & WG_SAMPLE_FLAG_DISCONTINUITY)
+        IMFSample_SetUINT32(sample, &MFSampleExtension_Discontinuity, 1);
+
+    if (SUCCEEDED(hr = IMFSample_ConvertToContiguousBuffer(sample, &buffer)))
+    {
+        hr = IMFMediaBuffer_SetCurrentLength(buffer, params.sample->size);
+        IMFMediaBuffer_Release(buffer);
+    }
+    wg_sample_release(params.sample);
+
+    if (FAILED(hr))
+        goto error;
+
+    *out = sample;
+    TRACE("source %#I64x, index %u, out %p\n", source, index, *out);
+    return S_OK;
+
+error:
+    IMFSample_Release(sample);
     return hr;
 }

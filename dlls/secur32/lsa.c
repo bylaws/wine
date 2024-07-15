@@ -32,6 +32,7 @@
 #include "ntsecapi.h"
 #include "ntsecpkg.h"
 #include "winternl.h"
+#include "ddk/ntddk.h"
 #include "rpc.h"
 
 #include "wine/debug.h"
@@ -155,7 +156,8 @@ NTSTATUS WINAPI LsaDeregisterLogonProcess(HANDLE LsaHandle)
     TRACE("%p\n", LsaHandle);
 
     if (!lsa_conn || lsa_conn->magic != LSA_MAGIC_CONNECTION) return STATUS_INVALID_HANDLE;
-    lsa_conn->magic = 0;
+    /* Ensure compiler doesn't optimize out the assignment with 0. */
+    SecureZeroMemory(&lsa_conn->magic, sizeof(lsa_conn->magic));
     free(lsa_conn);
 
     return STATUS_SUCCESS;
@@ -464,7 +466,8 @@ static SECURITY_STATUS WINAPI lsa_FreeCredentialsHandle(CredHandle *credential)
 
     status = lsa_cred->package->lsa_api->FreeCredentialsHandle(lsa_cred->handle);
 
-    lsa_cred->magic = 0;
+    /* Ensure compiler doesn't optimize out the assignment with 0. */
+    SecureZeroMemory(&lsa_cred->magic, sizeof(lsa_cred->magic));
     free(lsa_cred);
     return status;
 }
@@ -906,10 +909,12 @@ static BOOL initialize_package(struct lsa_package *package,
             {
                 status = pSpUserModeInitialize(SECPKG_INTERFACE_VERSION, &package->user_api_version, &package->user_api, &package->user_table_count);
                 if (status == STATUS_SUCCESS)
+                {
                     package->user_api->InstanceInit(SECPKG_INTERFACE_VERSION, &lsa_dll_dispatch, NULL);
+                    return TRUE;
+                }
             }
         }
-        return TRUE;
     }
 
     return FALSE;
@@ -967,10 +972,9 @@ void load_auth_packages(void)
         if (err != ERROR_SUCCESS)
             continue;
 
-        if (!load_package(name, &package, i + 1))
-            continue;
+        if (load_package(name, &package, i + 1))
+            add_package(&package);
 
-        add_package(&package);
         i++;
     }
 

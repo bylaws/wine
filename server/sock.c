@@ -197,6 +197,8 @@ struct bound_addr
 
 #define MAX_ICMP_HISTORY_LENGTH 8
 
+#define MIN_RCVBUF 65536
+
 struct sock
 {
     struct object       obj;         /* object header */
@@ -240,6 +242,8 @@ struct sock
     struct poll_req    *main_poll;   /* main poll */
     union win_sockaddr  addr;        /* socket name */
     int                 addr_len;    /* socket name length */
+    union win_sockaddr  peer_addr;   /* peer name */
+    int                 peer_addr_len; /* peer name length */
     unsigned int        rcvbuf;      /* advisory recv buffer size */
     unsigned int        sndbuf;      /* advisory send buffer size */
     unsigned int        rcvtimeo;    /* receive timeout in ms */
@@ -449,6 +453,8 @@ static const struct object_ops sock_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     sock_get_fd,                  /* get_fd */
@@ -783,18 +789,11 @@ static unsigned int afd_poll_flag_to_win32( unsigned int flags )
     return ret;
 }
 
-/* wake anybody waiting on the socket event or send the associated message */
-static void sock_wake_up( struct sock *sock )
+static void post_sock_messages( struct sock *sock )
 {
     unsigned int events = sock->pending_events & sock->mask;
     int i;
 
-    if (sock->event)
-    {
-        if (debug_level) fprintf(stderr, "signalling events %x ptr %p\n", events, sock->event );
-        if (events)
-            set_event( sock->event );
-    }
     if (sock->window)
     {
         if (debug_level) fprintf(stderr, "signalling events %x win %08x\n", events, sock->window );
@@ -803,7 +802,11 @@ static void sock_wake_up( struct sock *sock )
             enum afd_poll_bit event = event_bitorder[i];
             if (events & (1 << event))
             {
-                lparam_t lparam = afd_poll_flag_to_win32(1 << event) | (sock_get_error( sock->errors[event] ) << 16);
+                lparam_t lparam;
+                if (event == AFD_POLL_BIT_RESET)
+                    lparam = FD_CLOSE | (WSAECONNABORTED << 16);
+                else
+                    lparam = afd_poll_flag_to_win32(1 << event) | (sock_get_error( sock->errors[event] ) << 16);
                 post_message( sock->window, sock->message, sock->wparam, lparam );
             }
         }
@@ -812,7 +815,7 @@ static void sock_wake_up( struct sock *sock )
     }
 }
 
-static inline int sock_error( struct sock *sock )
+static inline int sock_error( struct sock *sock, int *poll_event )
 {
     int error = 0;
     socklen_t len = sizeof(error);
@@ -838,8 +841,14 @@ static inline int sock_error( struct sock *sock )
             error = sock->errors[AFD_POLL_BIT_ACCEPT];
         break;
 
-    case SOCK_CONNECTED:
     case SOCK_CONNECTIONLESS:
+        if (error == ENETUNREACH || error == EHOSTUNREACH || error == ECONNRESET)
+        {
+            if (poll_event) *poll_event &= ~POLLERR;
+            return 0;
+        }
+        /* fallthrough */
+    case SOCK_CONNECTED:
         if (error == ECONNRESET || error == EPIPE)
         {
             sock->reset = 1;
@@ -1230,7 +1239,7 @@ static int sock_dispatch_asyncs( struct sock *sock, int event, int error )
         event &= ~(POLLIN | POLLPRI);
     }
 
-    if ((event & POLLOUT) && async_queued( &sock->write_q ))
+    if ((event & POLLOUT) && async_queue_has_waiting_asyncs( &sock->write_q ))
     {
         if (async_waiting( &sock->write_q ))
         {
@@ -1281,6 +1290,9 @@ static void post_socket_event( struct sock *sock, enum afd_poll_bit event_bit )
     {
         sock->pending_events |= event;
         sock->reported_events |= event;
+
+        if ((sock->mask & event) && sock->event)
+            set_event( sock->event );
     }
 }
 
@@ -1293,7 +1305,10 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs
 
     case SOCK_CONNECTING:
         if (event & POLLOUT)
+        {
             post_socket_event( sock, AFD_POLL_BIT_CONNECT );
+            post_socket_event( sock, AFD_POLL_BIT_WRITE );
+        }
         if (event & (POLLERR | POLLHUP))
             post_socket_event( sock, AFD_POLL_BIT_CONNECT_ERR );
         break;
@@ -1322,7 +1337,7 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs
         break;
     }
 
-    sock_wake_up( sock );
+    post_sock_messages( sock );
 }
 
 static void sock_poll_event( struct fd *fd, int event )
@@ -1333,11 +1348,13 @@ static void sock_poll_event( struct fd *fd, int event )
     int error = 0;
 
     assert( sock->obj.ops == &sock_ops );
+    grab_object( sock );
+
     if (debug_level)
         fprintf(stderr, "socket %p select event: %x\n", sock, event);
 
     if (event & (POLLERR | POLLHUP))
-        error = sock_error( sock );
+        error = sock_error( sock, &event );
 
     switch (sock->state)
     {
@@ -1421,6 +1438,7 @@ static void sock_poll_event( struct fd *fd, int event )
     complete_async_polls( sock, event, error );
 
     sock_reselect( sock );
+    release_object( sock );
 }
 
 static void sock_dump( struct object *obj, int verbose )
@@ -1469,6 +1487,8 @@ static int sock_get_poll_events( struct fd *fd )
     LIST_FOR_EACH_ENTRY( req, &poll_list, struct poll_req, entry )
     {
         unsigned int i;
+
+        if (req->iosb->status != STATUS_PENDING) continue;
 
         for (i = 0; i < req->count; ++i)
         {
@@ -1718,6 +1738,8 @@ static struct sock *create_socket(void)
     sock->main_poll = NULL;
     memset( &sock->addr, 0, sizeof(sock->addr) );
     sock->addr_len = 0;
+    memset( &sock->peer_addr, 0, sizeof(sock->peer_addr) );
+    sock->peer_addr_len = 0;
     sock->rd_shutdown = 0;
     sock->wr_shutdown = 0;
     sock->wr_shutdown_pending = 0;
@@ -1911,7 +1933,14 @@ static int init_socket( struct sock *sock, int family, int type, int protocol )
 
     len = sizeof(value);
     if (!getsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, &value, &len ))
+    {
+        if (value < MIN_RCVBUF)
+        {
+            value = MIN_RCVBUF;
+            setsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value) );
+        }
         sock->rcvbuf = value;
+    }
 
     len = sizeof(value);
     if (!getsockopt( sockfd, SOL_SOCKET, SO_SNDBUF, &value, &len ))
@@ -2020,8 +2049,15 @@ static struct sock *accept_socket( struct sock *sock )
         }
         unix_len = sizeof(unix_addr);
         if (!getsockname( acceptfd, &unix_addr.addr, &unix_len ))
+        {
             acceptsock->addr_len = sockaddr_from_unix( &unix_addr, &acceptsock->addr.addr, sizeof(acceptsock->addr) );
+            if (!getpeername( acceptfd, &unix_addr.addr, &unix_len ))
+                acceptsock->peer_addr_len = sockaddr_from_unix( &unix_addr,
+                                                                &acceptsock->peer_addr.addr,
+                                                                sizeof(acceptsock->peer_addr) );
+        }
     }
+
     clear_error();
     sock->pending_events &= ~AFD_POLL_ACCEPT;
     sock->reported_events &= ~AFD_POLL_ACCEPT;
@@ -2076,7 +2112,13 @@ static int accept_into_socket( struct sock *sock, struct sock *acceptsock )
 
     unix_len = sizeof(unix_addr);
     if (!getsockname( get_unix_fd( newfd ), &unix_addr.addr, &unix_len ))
+    {
         acceptsock->addr_len = sockaddr_from_unix( &unix_addr, &acceptsock->addr.addr, sizeof(acceptsock->addr) );
+        if (!getpeername( get_unix_fd( newfd ), &unix_addr.addr, &unix_len ))
+            acceptsock->peer_addr_len = sockaddr_from_unix( &unix_addr,
+                                                            &acceptsock->peer_addr.addr,
+                                                            sizeof(acceptsock->peer_addr) );
+    }
 
     clear_error();
     sock->pending_events &= ~AFD_POLL_ACCEPT;
@@ -2519,6 +2561,12 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
             return;
         }
 
+        if (sock->type == WS_SOCK_DGRAM)
+        {
+            set_error( STATUS_NOT_SUPPORTED );
+            return;
+        }
+
         if (!sock->bound)
         {
             set_error( STATUS_INVALID_PARAMETER );
@@ -2545,7 +2593,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
     {
         const struct afd_connect_params *params = get_req_data();
         const struct WS_sockaddr *addr;
-        union unix_sockaddr unix_addr;
+        union unix_sockaddr unix_addr, peer_addr;
         struct connect_req *req;
         socklen_t unix_len;
         int send_len, ret;
@@ -2607,6 +2655,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
         if (unix_addr.addr.sa_family == AF_INET && !memcmp( &unix_addr.in.sin_addr, magic_loopback_addr, 4 ))
             unix_addr.in.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
 
+        memcpy( &peer_addr, &unix_addr, sizeof(unix_addr) );
         ret = connect( unix_fd, &unix_addr.addr, unix_len );
         if (ret < 0 && errno == ECONNABORTED)
         {
@@ -2629,8 +2678,10 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
         allow_fd_caching( sock->fd );
 
         unix_len = sizeof(unix_addr);
-        if (!getsockname( unix_fd, &unix_addr.addr, &unix_len ))
-            sock->addr_len = sockaddr_from_unix( &unix_addr, &sock->addr.addr, sizeof(sock->addr) );
+        getsockname( unix_fd, &unix_addr.addr, &unix_len );
+        sock->addr_len = sockaddr_from_unix( &unix_addr, &sock->addr.addr, sizeof(sock->addr) );
+        sock->peer_addr_len = sockaddr_from_unix( &peer_addr, &sock->peer_addr.addr, sizeof(sock->peer_addr));
+
         sock->bound = 1;
 
         if (!ret)
@@ -2815,11 +2866,23 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
         sock->nonblocking = 1;
 
         sock_reselect( sock );
-        /* Explicitly wake the socket up if the mask causes it to become
-         * signaled. Note that reselecting isn't enough, since we might already
-         * have had events recorded in sock->reported_events and we don't want
-         * to select for them again. */
-        sock_wake_up( sock );
+
+        /* Explicitly wake the socket up if the mask matches pending_events.
+         *
+         * The logic here is a bit surprising. We always set the event if the
+         * socket has events that haven't been consumed by
+         * WSAEnumNetworkEvents() yet, including if WSAEventSelect() is called
+         * multiple times without consuming the events.
+         * However, once the events are consumed by WSAEnumNetworkEvents(), we
+         * don't set the event again (even though e.g. data is still available)
+         * until a "reset" call (i.e. that clears reported_events). */
+
+        if (event && (sock->pending_events & mask))
+        {
+            if (debug_level) fprintf( stderr, "signalling pending events %#x due to event select\n",
+                                      sock->pending_events & mask );
+            set_event( event );
+        }
 
         return;
     }
@@ -2921,7 +2984,11 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
         if (check_addr_usage( sock, &bind_addr, v6only ))
             return;
 
-        if (bind( unix_fd, &bind_addr.addr, unix_len ) < 0)
+        /* Quake (and similar family) fails if we can't bind to an IPX address. This often
+         * doesn't work on Linux, so just fake success. */
+        if (unix_addr.addr.sa_family == AF_IPX)
+            fprintf( stderr, "wine: HACK: Faking AF_IPX bind success.\n" );
+        else if (bind( unix_fd, &bind_addr.addr, unix_len ) < 0)
         {
             if (errno == EADDRINUSE && sock->reuseaddr)
                 errno = EACCES;
@@ -2963,6 +3030,41 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
         }
 
         set_reply_data( &sock->addr, sock->addr_len );
+        return;
+
+    case IOCTL_AFD_WINE_GETPEERNAME:
+        if (sock->state != SOCK_CONNECTED &&
+            sock->state != SOCK_CONNECTING &&
+            sock->state != SOCK_CONNECTIONLESS)
+        {
+            set_error( STATUS_INVALID_CONNECTION );
+            return;
+        }
+
+        /* If ConnectEx() hasn't finished connecting (or failing to connect) the provided
+         * socket, getpeername() can't be called on it. This seems to be undocumented
+         * and is *not* the case for connect(), but we do test for it in ws2_32.
+         * connect_req is non-NULL iff ConnectEx() was used and has not finished,
+         * so we can use it as a check for ConnectEx() usage here. */
+        if (sock->connect_req)
+        {
+            set_error( STATUS_INVALID_CONNECTION );
+            return;
+        }
+
+        if (!sock->peer_addr_len && sock->type == WS_SOCK_DGRAM)
+        {
+            set_error( STATUS_INVALID_CONNECTION );
+            return;
+        }
+
+        if (get_reply_max_size() < sock->peer_addr_len)
+        {
+            set_error( STATUS_BUFFER_TOO_SMALL );
+            return;
+        }
+
+        set_reply_data( &sock->peer_addr, sock->peer_addr_len );
         return;
 
     case IOCTL_AFD_WINE_DEFER:
@@ -3025,7 +3127,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
             return;
         }
 
-        error = sock_error( sock );
+        error = sock_error( sock, NULL );
         if (!error)
         {
             for (i = 0; i < ARRAY_SIZE( sock->errors ); ++i)
@@ -3059,7 +3161,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
 
     case IOCTL_AFD_WINE_SET_SO_RCVBUF:
     {
-        DWORD rcvbuf;
+        DWORD rcvbuf, set_rcvbuf;
 
         if (get_req_data_size() < sizeof(rcvbuf))
         {
@@ -3067,8 +3169,9 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
             return;
         }
         rcvbuf = *(DWORD *)get_req_data();
+        set_rcvbuf = max( rcvbuf, MIN_RCVBUF );
 
-        if (!setsockopt( unix_fd, SOL_SOCKET, SO_RCVBUF, (char *)&rcvbuf, sizeof(rcvbuf) ))
+        if (!setsockopt( unix_fd, SOL_SOCKET, SO_RCVBUF, (char *)&set_rcvbuf, sizeof(set_rcvbuf) ))
             sock->rcvbuf = rcvbuf;
         else
             set_error( sock_get_ntstatus( errno ) );
@@ -3418,7 +3521,10 @@ static void poll_socket( struct sock *poll_sock, struct async *async, int exclus
             req->sockets[i].flags |= AFD_POLL_CONNECT_ERR;
             req->sockets[i].status = sock_get_ntstatus( sock->errors[AFD_POLL_BIT_CONNECT_ERR] );
         }
+    }
 
+    for (i = 0; i < count; ++i)
+    {
         if (req->sockets[i].flags)
             signaled = TRUE;
     }
@@ -3460,6 +3566,8 @@ static const struct object_ops ifchange_ops =
     no_add_queue,            /* add_queue */
     NULL,                    /* remove_queue */
     NULL,                    /* signaled */
+    NULL,                    /* get_esync_fd */
+    NULL,                    /* get_fsync_idx */
     no_satisfied,            /* satisfied */
     no_signal,               /* signal */
     ifchange_get_fd,         /* get_fd */
@@ -3681,6 +3789,8 @@ static const struct object_ops socket_device_ops =
     no_add_queue,               /* add_queue */
     NULL,                       /* remove_queue */
     NULL,                       /* signaled */
+    NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -3743,7 +3853,10 @@ DECL_HANDLER(recv_socket)
     if (!req->force_async && !sock->nonblocking && is_fd_overlapped( fd ))
         timeout = (timeout_t)sock->rcvtimeo * -10000;
 
-    if (sock->rd_shutdown) status = STATUS_PIPE_DISCONNECTED;
+    if (sock->rd_shutdown)
+        status = STATUS_PIPE_DISCONNECTED;
+    else if (sock->reset)
+        status = STATUS_CONNECTION_RESET;
     else if (!async_queued( &sock->read_q ))
     {
         /* If read_q is not empty, we cannot really tell if the already queued
@@ -3848,7 +3961,7 @@ DECL_HANDLER(send_socket)
 
     if (bind_errno) status = sock_get_ntstatus( bind_errno );
     else if (sock->wr_shutdown) status = STATUS_PIPE_DISCONNECTED;
-    else if (!async_queued( &sock->write_q ))
+    else if (!async_queue_has_waiting_asyncs( &sock->write_q ))
     {
         /* If write_q is not empty, we cannot really tell if the already queued
          * asyncs will not consume all available space; if there's no space

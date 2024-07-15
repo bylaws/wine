@@ -278,7 +278,14 @@ INT WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd)
                 continue;
             }
         }
-        if (ppfd->dwFlags & PFD_DEPTH_DONTCARE && format.cDepthBits < best.cDepthBits)
+        if (ppfd->dwFlags & PFD_DEPTH_DONTCARE)
+        {
+            if (format.cDepthBits < best.cDepthBits)
+                goto found;
+            continue;
+        }
+
+        if (!ppfd->cDepthBits && format.cDepthBits > best.cDepthBits)
             goto found;
 
         continue;
@@ -1285,19 +1292,163 @@ GLboolean WINAPI glUnmapNamedBufferEXT( GLuint buffer )
     return gl_unmap_named_buffer( unix_glUnmapNamedBufferEXT, buffer );
 }
 
-static BOOL WINAPI call_opengl_debug_message_callback( struct wine_gl_debug_message_params *params, ULONG size )
+static NTSTATUS WINAPI call_opengl_debug_message_callback( void *args, ULONG size )
 {
+    struct wine_gl_debug_message_params *params = args;
     params->user_callback( params->source, params->type, params->id, params->severity,
                            params->length, params->message, params->user_data );
-    return TRUE;
+    return NtCallbackReturn( NULL, 0, STATUS_SUCCESS );
 }
+
+static char *fixup_shader( GLsizei count, const GLchar *const*string, const GLint *length )
+{
+    static int needs_fixup = -1;
+    static unsigned int once;
+
+    static const struct
+    {
+        const char *gameid;
+        const char *add_ext;
+        const char *search_str;
+        const char *prepend_str;
+    }
+    replace[] =
+    {
+        {
+            "333420",
+
+            /* add_ext */
+            "#version 120\r\n"
+            "#extension GL_ARB_explicit_uniform_location : enable\r\n"
+            "#extension GL_ARB_explicit_attrib_location : enable\r\n",
+            /* search_str */
+            "uniform mat4 boneMatrices[NBONES];",
+            /* replace_str */
+            "layout(location = 2) ",
+        },
+        {
+            "242110",
+            /* add_ext */
+            "#version 120\r\n",
+        },
+        {
+            "229890",
+            /* add_ext */
+            "#version 120\r\n",
+        },
+    };
+    static const char *add_ext;
+    static const char *search_str;
+    static const char *prepend_str;
+    static unsigned int add_ext_len, search_len, prepend_len;
+    unsigned int new_len;
+    const char *p, *next;
+    BOOL found = FALSE;
+    char *new, *out;
+
+    if (needs_fixup == -1)
+    {
+        const char *sgi = getenv("SteamGameId");
+        unsigned int i;
+
+        if (!sgi) return NULL;
+
+        for (i = 0; i < ARRAY_SIZE(replace); ++i)
+            if (!strcmp( sgi, replace[i].gameid )) break;
+
+        needs_fixup = i < ARRAY_SIZE(replace);
+        if (needs_fixup)
+        {
+            add_ext = replace[i].add_ext;
+            add_ext_len = add_ext ? strlen(add_ext) : 0;
+            search_str = replace[i].search_str;
+            search_len = search_str ? strlen(search_str) : 0;
+            prepend_str = replace[i].prepend_str;
+            prepend_len = prepend_str ? strlen(prepend_str) : 0;
+        }
+    }
+
+    if (!needs_fixup) return NULL;
+
+    if (length || count != 1) return NULL;
+
+    if (!once++)
+      FIXME( "HACK: Fixing up shader.\n" );
+
+    TRACE( "Appending extension string.\n" );
+    new_len = strlen( *string ) + prepend_len + add_ext_len + 1;
+    new = out = malloc( new_len );
+    memcpy( out, add_ext, add_ext_len );
+    out += add_ext_len;
+
+    if (!search_str) goto skip_search;
+
+    next = *string;
+    while (*(p = next))
+    {
+      while (*next && *next != '\r' && *next != '\n') ++next;
+
+      if (next - p == search_len && !memcmp( p, search_str, search_len ))
+      {
+          TRACE( "Adding explicit location.\n" );
+          memcpy( out, *string, p - *string );
+          out += p - *string;
+          memcpy( out, prepend_str, prepend_len );
+          out += prepend_len;
+          strcpy( out, p );
+          found = TRUE;
+          break;
+      }
+
+      while (*next == '\n' || *next == '\r') ++next;
+    }
+
+skip_search:
+    if (!found)
+      strcpy( out, *string );
+
+    return new;
+}
+
+void WINAPI glShaderSource( GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length )
+{
+    struct glShaderSource_params args = { .teb = NtCurrentTeb(), .shader = shader, .count = count, .string = string, .length = length };
+    NTSTATUS status;
+    char *new;
+    TRACE( "shader %d, count %d, string %p, length %p\n", shader, count, string, length );
+    if ((new = fixup_shader( count, string, length )))
+    {
+        args.string = (const GLchar **)&new;
+        args.count = 1;
+        args.length = NULL;
+    }
+    if ((status = UNIX_CALL( glShaderSource, &args ))) WARN( "glShaderSource returned %#lx\n", status );
+    free( new );
+}
+
+void WINAPI glShaderSourceARB( GLhandleARB shaderObj, GLsizei count, const GLcharARB **string, const GLint *length )
+{
+    struct glShaderSourceARB_params args = { .teb = NtCurrentTeb(), .shaderObj = shaderObj, .count = count, .string = string, .length = length };
+    NTSTATUS status;
+    char *new;
+    TRACE( "shaderObj %d, count %d, string %p, length %p\n", shaderObj, count, string, length );
+    if ((new = fixup_shader( count, string, length )))
+    {
+        args.string = (const GLcharARB **)&new;
+        args.count = 1;
+        args.length = NULL;
+    }
+    if ((status = UNIX_CALL( glShaderSourceARB, &args ))) WARN( "glShaderSourceARB returned %#lx\n", status );
+    free( new );
+}
+
 
 /***********************************************************************
  *           OpenGL initialisation routine
  */
 BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 {
-    void **kernel_callback_table;
+    KERNEL_CALLBACK_PROC *kernel_callback_table;
     NTSTATUS status;
 
     switch(reason)

@@ -27,7 +27,6 @@
 #include "d3d12sdklayers.h"
 #include "winternl.h"
 #include "ddk/d3dkmthk.h"
-#include "wine/heap.h"
 #include "wine/test.h"
 
 enum frame_latency
@@ -67,7 +66,7 @@ static void queue_test(void (*test)(void))
     if (mt_test_count >= mt_tests_size)
     {
         mt_tests_size = max(16, mt_tests_size * 2);
-        mt_tests = heap_realloc(mt_tests, mt_tests_size * sizeof(*mt_tests));
+        mt_tests = realloc(mt_tests, mt_tests_size * sizeof(*mt_tests));
     }
     mt_tests[mt_test_count++].test = test;
 }
@@ -105,7 +104,7 @@ static void run_queued_tests(void)
 
     GetSystemInfo(&si);
     thread_count = si.dwNumberOfProcessors;
-    threads = heap_calloc(thread_count, sizeof(*threads));
+    threads = calloc(thread_count, sizeof(*threads));
     for (i = 0, test_idx = 0; i < thread_count; ++i)
     {
         threads[i] = CreateThread(NULL, 0, thread_func, &test_idx, 0, NULL);
@@ -116,7 +115,7 @@ static void run_queued_tests(void)
     {
         CloseHandle(threads[i]);
     }
-    heap_free(threads);
+    free(threads);
 }
 
 static ULONG get_refcount(void *iface)
@@ -149,7 +148,7 @@ static BOOL save_display_modes(DEVMODEW **original_modes, unsigned int *display_
     DISPLAY_DEVICEW display_device;
     DEVMODEW *modes, *tmp;
 
-    if (!(modes = heap_alloc(size * sizeof(*modes))))
+    if (!(modes = malloc(size * sizeof(*modes))))
         return FALSE;
 
     display_device.cb = sizeof(display_device);
@@ -165,9 +164,9 @@ static BOOL save_display_modes(DEVMODEW **original_modes, unsigned int *display_
         if (count >= size)
         {
             size *= 2;
-            if (!(tmp = heap_realloc(modes, size * sizeof(*modes))))
+            if (!(tmp = realloc(modes, size * sizeof(*modes))))
             {
-                heap_free(modes);
+                free(modes);
                 return FALSE;
             }
             modes = tmp;
@@ -177,7 +176,7 @@ static BOOL save_display_modes(DEVMODEW **original_modes, unsigned int *display_
         modes[count].dmSize = sizeof(modes[count]);
         if (!EnumDisplaySettingsW(display_device.DeviceName, ENUM_CURRENT_SETTINGS, &modes[count]))
         {
-            heap_free(modes);
+            free(modes);
             return FALSE;
         }
 
@@ -1211,8 +1210,8 @@ static void test_check_interface_support(void)
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     trace("UMD version: %u.%u.%u.%u.\n",
-            HIWORD(U(driver_version).HighPart), LOWORD(U(driver_version).HighPart),
-            HIWORD(U(driver_version).LowPart), LOWORD(U(driver_version).LowPart));
+            HIWORD(driver_version.HighPart), LOWORD(driver_version.HighPart),
+            HIWORD(driver_version.LowPart), LOWORD(driver_version.LowPart));
 
     hr = IDXGIDevice_QueryInterface(device, &IID_ID3D10Device1, (void **)&iface);
     if (SUCCEEDED(hr))
@@ -1440,7 +1439,7 @@ static void test_output(void)
     ok(mode_count >= mode_count_comp, "Got unexpected mode_count %u, expected >= %u.\n", mode_count, mode_count_comp);
     mode_count_comp = mode_count;
 
-    modes = heap_calloc(mode_count + 10, sizeof(*modes));
+    modes = calloc(mode_count + 10, sizeof(*modes));
     ok(!!modes, "Failed to allocate memory.\n");
 
     hr = IDXGIOutput_GetDisplayModeList(output, DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -1514,7 +1513,7 @@ static void test_output(void)
         skip("Not enough modes for test.\n");
     }
 
-    heap_free(modes);
+    free(modes);
     IDXGIOutput_Release(output);
     IDXGIAdapter_Release(adapter);
     refcount = IDXGIDevice_Release(device);
@@ -1572,7 +1571,7 @@ static void test_find_closest_matching_mode(void)
     hr = IDXGIOutput_GetDisplayModeList(output, DXGI_FORMAT_R8G8B8A8_UNORM, 0, &mode_count, NULL);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
-    modes = heap_calloc(mode_count, sizeof(*modes));
+    modes = calloc(mode_count, sizeof(*modes));
     ok(!!modes, "Failed to allocate memory.\n");
 
     hr = IDXGIOutput_GetDisplayModeList(output, DXGI_FORMAT_R8G8B8A8_UNORM, 0, &mode_count, modes);
@@ -1703,7 +1702,7 @@ static void test_find_closest_matching_mode(void)
         }
     }
 
-    heap_free(modes);
+    free(modes);
 
 done:
     IDXGIOutput_Release(output);
@@ -2623,7 +2622,7 @@ static void test_swapchain_fullscreen_state(IDXGISwapChain *swapchain,
         ++output_count;
     }
 
-    output_monitor_info = heap_calloc(output_count, sizeof(*output_monitor_info));
+    output_monitor_info = calloc(output_count, sizeof(*output_monitor_info));
     ok(!!output_monitor_info, "Failed to allocate memory.\n");
     for (i = 0; i < output_count; ++i)
     {
@@ -2724,7 +2723,7 @@ static void test_swapchain_fullscreen_state(IDXGISwapChain *swapchain,
         IDXGIOutput_Release(output);
     }
 
-    heap_free(output_monitor_info);
+    free(output_monitor_info);
 }
 
 static void test_set_fullscreen(IUnknown *device, BOOL is_d3d12)
@@ -3159,7 +3158,7 @@ static void test_fullscreen_resize_target(IDXGISwapChain *swapchain,
         return;
     }
 
-    modes = heap_calloc(mode_count, sizeof(*modes));
+    modes = calloc(mode_count, sizeof(*modes));
     ok(!!modes, "Failed to allocate memory.\n");
 
     hr = IDXGIOutput_GetDisplayModeList(target, DXGI_FORMAT_R8G8B8A8_UNORM, 0, &mode_count, modes);
@@ -3196,7 +3195,7 @@ static void test_fullscreen_resize_target(IDXGISwapChain *swapchain,
                 wine_dbgstr_rect(&expected_state.fullscreen_state.monitor_rect));
     }
 
-    heap_free(modes);
+    free(modes);
     IDXGIOutput_Release(target);
 }
 
@@ -3524,12 +3523,6 @@ static void test_resize_target_wndproc(IUnknown *device, BOOL is_d3d12)
     hr = IDXGISwapChain_SetFullscreenState(swapchain, FALSE, NULL);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
-    refcount = IDXGISwapChain_Release(swapchain);
-    ok(!refcount, "IDXGISwapChain has %lu references left.\n", refcount);
-
-    refcount = IDXGIFactory_Release(factory);
-    ok(refcount == !is_d3d12, "Got unexpected refcount %lu.\n", refcount);
-
     ret = SetEvent(thread_data.finished);
     ok(ret, "Failed to set event, last error %#lx.\n", GetLastError());
     ret = WaitForSingleObject(thread, INFINITE);
@@ -3537,6 +3530,12 @@ static void test_resize_target_wndproc(IUnknown *device, BOOL is_d3d12)
     CloseHandle(thread);
     CloseHandle(thread_data.window_created);
     CloseHandle(thread_data.finished);
+
+    refcount = IDXGISwapChain_Release(swapchain);
+    ok(!refcount, "IDXGISwapChain has %lu references left.\n", refcount);
+
+    refcount = IDXGIFactory_Release(factory);
+    ok(refcount == !is_d3d12, "Got unexpected refcount %lu.\n", refcount);
 }
 
 static void test_inexact_modes(void)
@@ -6895,7 +6894,7 @@ static void test_cursor_clipping(IUnknown *device, BOOL is_d3d12)
                 continue;
             }
 
-            modes = heap_calloc(mode_count, sizeof(*modes));
+            modes = calloc(mode_count, sizeof(*modes));
             hr = IDXGIOutput_GetDisplayModeList(output, DXGI_FORMAT_R8G8B8A8_UNORM, 0, &mode_count, modes);
             ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
@@ -6926,7 +6925,7 @@ static void test_cursor_clipping(IUnknown *device, BOOL is_d3d12)
             swapchain_desc.BufferDesc.ScanlineOrdering = modes[mode_idx].ScanlineOrdering;
             swapchain_desc.BufferDesc.Scaling = modes[mode_idx].Scaling;
             swapchain_desc.OutputWindow = create_window();
-            heap_free(modes);
+            free(modes);
             hr = IDXGIFactory_CreateSwapChain(factory, device, &swapchain_desc, &swapchain);
             ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
@@ -7715,7 +7714,7 @@ done:
     ok(refcount == !is_d3d12, "Got unexpected refcount %lu.\n", refcount);
     ret = restore_display_modes(original_modes, display_count);
     ok(ret, "Failed to restore display modes.\n");
-    heap_free(original_modes);
+    free(original_modes);
 }
 
 static void test_swapchain_present_count(IUnknown *device, BOOL is_d3d12)
@@ -7886,6 +7885,75 @@ done:
     ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
+static void test_zero_size(IUnknown *device, BOOL is_d3d12)
+{
+    DXGI_SWAP_CHAIN_DESC swapchain_desc;
+    IDXGISwapChain *swapchain;
+    unsigned int i, expected;
+    IDXGIFactory *factory;
+    HWND window;
+    HRESULT hr;
+    RECT r;
+
+    static const struct
+    {
+        INT w, h;
+    }
+    tests[] =
+    {
+        {0, 0},
+        {200, 0},
+        {0, 200},
+        {200, 200},
+        /* FIXME: How to create a window with a client rect width or height above 0 but less than 8?
+         * If I try to AdjustWindowRect a (100,100)-(104,104) rectangle I get a larger window. I
+         * suspect the decoration style and DPI will play into it too. The size below creates a
+         * 176x4 client rect on my system. */
+        {100, 60}
+    };
+
+    get_factory(device, is_d3d12, &factory);
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        window = CreateWindowA("static", "dxgi_test", WS_VISIBLE, 0, 0, tests[i].w, tests[i].h, 0, 0, 0, 0);
+        swapchain_desc.BufferDesc.Width = 0;
+        swapchain_desc.BufferDesc.Height = 0;
+        swapchain_desc.BufferDesc.RefreshRate.Numerator = 60;
+        swapchain_desc.BufferDesc.RefreshRate.Denominator = 60;
+        swapchain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        swapchain_desc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+        swapchain_desc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+        swapchain_desc.SampleDesc.Count = 1;
+        swapchain_desc.SampleDesc.Quality = 0;
+        swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapchain_desc.BufferCount = is_d3d12 ? 2 : 1;
+        swapchain_desc.OutputWindow = window;
+        swapchain_desc.Windowed = TRUE;
+        swapchain_desc.SwapEffect = is_d3d12 ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_DISCARD;
+        swapchain_desc.Flags = 0;
+
+        hr = IDXGIFactory_CreateSwapChain(factory, device, &swapchain_desc, &swapchain);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+        ok(!swapchain_desc.BufferDesc.Width && !swapchain_desc.BufferDesc.Height, "Input desc was modified.\n");
+
+        hr = IDXGISwapChain_GetDesc(swapchain, &swapchain_desc);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+        GetClientRect(swapchain_desc.OutputWindow, &r);
+        expected = r.right > 0 ? r.right : 8;
+        ok(swapchain_desc.BufferDesc.Width == expected, "Got width %u, expected %u, test %u.\n",
+                swapchain_desc.BufferDesc.Width, expected, i);
+        expected = r.bottom > 0 ? r.bottom : 8;
+        ok(swapchain_desc.BufferDesc.Height == expected, "Got height %u, expected %u, test %u.\n",
+                swapchain_desc.BufferDesc.Height, expected, i);
+
+        IDXGISwapChain_Release(swapchain);
+        DestroyWindow(window);
+    }
+
+    IDXGIFactory_Release(factory);
+}
+
 static void run_on_d3d10(void (*test_func)(IUnknown *device, BOOL is_d3d12))
 {
     IDXGIDevice *device;
@@ -8010,6 +8078,7 @@ START_TEST(dxgi)
     run_on_d3d10(test_swapchain_present_count);
     run_on_d3d10(test_resize_target_wndproc);
     run_on_d3d10(test_swapchain_window_messages);
+    run_on_d3d10(test_zero_size);
 
     if (!(d3d12_module = LoadLibraryA("d3d12.dll")))
     {
@@ -8043,6 +8112,7 @@ START_TEST(dxgi)
     run_on_d3d12(test_swapchain_present_count);
     run_on_d3d12(test_resize_target_wndproc);
     run_on_d3d12(test_swapchain_window_messages);
+    run_on_d3d12(test_zero_size);
 
     FreeLibrary(d3d12_module);
 }

@@ -406,6 +406,24 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
         }
         return status;
 
+    case SystemProcessIdInformation:
+    {
+        SYSTEM_PROCESS_ID_INFORMATION32 *info32 = ptr;
+        SYSTEM_PROCESS_ID_INFORMATION info;
+
+        if (retlen) *retlen = sizeof(*info32);
+        if (len < sizeof(*info32)) return STATUS_INFO_LENGTH_MISMATCH;
+
+        info.ProcessId = ULongToHandle( info32->ProcessId );
+        unicode_str_32to64( &info.ImageName, &info32->ImageName );
+        if (!(status = NtQuerySystemInformation( class, &info, sizeof(info), NULL )))
+        {
+            info32->ImageName.MaximumLength = info.ImageName.MaximumLength;
+            info32->ImageName.Length = info.ImageName.Length;
+        }
+        return status;
+    }
+
     case SystemHandleInformation:  /* SYSTEM_HANDLE_INFORMATION */
         if (len >= sizeof(SYSTEM_HANDLE_INFORMATION32))
         {
@@ -657,7 +675,7 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformationEx( UINT *args )
     }
 
     case SystemCpuSetInformation:  /* SYSTEM_CPU_SET_INFORMATION */
-    case SystemSupportedProcessorArchitectures:  /* ULONG */
+    case SystemSupportedProcessorArchitectures:  /* SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION */
         return NtQuerySystemInformationEx( class, &handle, sizeof(handle), ptr, len, retlen );
 
     default:
@@ -808,4 +826,22 @@ NTSTATUS WINAPI wow64_NtWow64GetNativeSystemInformation( UINT *args )
     default:
         return STATUS_INVALID_INFO_CLASS;
     }
+}
+
+
+/**********************************************************************
+ *           wow64___wine_set_unix_env
+ */
+NTSTATUS WINAPI wow64___wine_set_unix_env( UINT *args )
+{
+    const char *var = get_ptr( &args );
+    const char *val = get_ptr( &args );
+
+    return __wine_set_unix_env( var, val );
+}
+
+BOOL WINAPI __wine_needs_override_large_address_aware(void);
+NTSTATUS WINAPI wow64___wine_needs_override_large_address_aware( UINT * args )
+{
+    return __wine_needs_override_large_address_aware();
 }

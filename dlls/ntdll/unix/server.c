@@ -79,9 +79,13 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
+#include "esync.h"
+#include "fsync.h"
 #include "ddk/wdm.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(server);
+WINE_DECLARE_DEBUG_CHANNEL(client);
+WINE_DECLARE_DEBUG_CHANNEL(ftrace);
 
 #ifndef MSG_CMSG_CLOEXEC
 #define MSG_CMSG_CLOEXEC 0
@@ -103,7 +107,7 @@ sigset_t server_block_set;  /* signals to block during server calls */
 static int fd_socket = -1;  /* socket to exchange file descriptors with the server */
 static int initial_cwd = -1;
 static pid_t server_pid;
-static pthread_mutex_t fd_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t fd_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* atomically exchange a 64-bit value */
 static inline LONG64 interlocked_xchg64( LONG64 *dest, LONG64 val )
@@ -261,8 +265,13 @@ unsigned int server_call_unlocked( void *req_ptr )
     struct __server_request_info * const req = req_ptr;
     unsigned int ret;
 
-    if ((ret = send_request( req ))) return ret;
-    return wait_reply( req );
+    FTRACE_BLOCK_START("req %s", req->name)
+    TRACE_(client)("%s start\n", req->name); \
+    if (!(ret = send_request( req )))
+        ret = wait_reply( req );
+    TRACE_(client)("%s end\n", req->name);
+    FTRACE_BLOCK_END()
+    return ret;
 }
 
 
@@ -745,13 +754,19 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
         if (signaled) break;
 
+        FTRACE_BLOCK_START("select_reply")
         ret = wait_select_reply( &cookie );
+        FTRACE_BLOCK_END()
     }
     while (ret == STATUS_USER_APC || ret == STATUS_KERNEL_APC);
 
     if (ret == STATUS_USER_APC) *user_apc = reply_data.call.user;
     if (reply_size > sizeof(reply_data.call))
+    {
         memcpy( context, reply_data.context, reply_size - sizeof(reply_data.call) );
+        context[0].flags &= ~SERVER_CTX_EXEC_SPACE;
+        context[1].flags &= ~SERVER_CTX_EXEC_SPACE;
+    }
     return ret;
 }
 
@@ -918,7 +933,7 @@ void wine_server_send_fd( int fd )
  *
  * Receive a file descriptor passed from the server.
  */
-static int receive_fd( obj_handle_t *handle )
+int receive_fd( obj_handle_t *handle )
 {
     struct iovec vec;
     struct msghdr msghdr;
@@ -1243,29 +1258,25 @@ int server_pipe( int fd[2] )
  */
 static const char *init_server_dir( dev_t dev, ino_t ino )
 {
-    char *p, *dir;
-    size_t len = sizeof("/server-") + 2 * sizeof(dev) + 2 * sizeof(ino) + 2;
+    char *dir = NULL;
+    int p;
+    char tmp[2 * sizeof(dev) + 2 * sizeof(ino) + 2];
 
-#ifdef __ANDROID__  /* there's no /tmp dir on Android */
-    len += strlen( config_dir ) + sizeof("/.wineserver");
-    dir = malloc( len );
-    strcpy( dir, config_dir );
-    strcat( dir, "/.wineserver/server-" );
-#else
-    len += sizeof("/tmp/.wine-") + 12;
-    dir = malloc( len );
-    sprintf( dir, "/tmp/.wine-%u/server-", getuid() );
-#endif
-    p = dir + strlen( dir );
     if (dev != (unsigned long)dev)
-        p += sprintf( p, "%lx%08lx-", (unsigned long)((unsigned long long)dev >> 32), (unsigned long)dev );
+        p = snprintf( tmp, sizeof(tmp), "%lx%08lx-", (unsigned long)((unsigned long long)dev >> 32), (unsigned long)dev );
     else
-        p += sprintf( p, "%lx-", (unsigned long)dev );
+        p = snprintf( tmp, sizeof(tmp), "%lx-", (unsigned long)dev );
 
     if (ino != (unsigned long)ino)
-        sprintf( p, "%lx%08lx", (unsigned long)((unsigned long long)ino >> 32), (unsigned long)ino );
+        snprintf( tmp + p, sizeof(tmp) - p, "%lx%08lx", (unsigned long)((unsigned long long)ino >> 32), (unsigned long)ino );
     else
-        sprintf( p, "%lx", (unsigned long)ino );
+        snprintf( tmp + p, sizeof(tmp) - p, "%lx", (unsigned long)ino );
+
+#ifdef __ANDROID__  /* there's no /tmp dir on Android */
+    asprintf( &dir, "%s/.wineserver/server-%s", config_dir, tmp );
+#else
+    asprintf( &dir, "/tmp/.wine-%u/server-%s", getuid(), tmp );
+#endif
     return dir;
 }
 
@@ -1569,6 +1580,8 @@ size_t server_init_process(void)
     {
         const char *arch = getenv( "WINEARCH" );
 
+        if (is_win64 && arch && !strcmp( arch, "win32" ))
+            fatal_error( "WINEARCH is set to 'win32' but this is not supported in wow64 mode.\n" );
         if (arch && strcmp( arch, "win32" ) && strcmp( arch, "win64" ))
             fatal_error( "WINEARCH set to invalid value '%s', it must be either win32 or win64.\n", arch );
 
@@ -1606,7 +1619,7 @@ size_t server_init_process(void)
                                (version > SERVER_PROTOCOL_VERSION) ? "wine" : "wineserver" );
 #if defined(__linux__) && defined(HAVE_PRCTL)
     /* work around Ubuntu's ptrace breakage */
-    if (server_pid != -1) prctl( 0x59616d61 /* PR_SET_PTRACER */, server_pid );
+    if (server_pid != -1) prctl( 0x59616d61 /* PR_SET_PTRACER */, PR_SET_PTRACER_ANY );
 #endif
 
     /* ignore SIGPIPE so that we get an EPIPE error instead  */
@@ -1675,7 +1688,8 @@ size_t server_init_process(void)
  */
 void server_init_process_done(void)
 {
-    void *entry, *teb;
+    struct cpu_topology_override *cpu_override = get_cpu_topology_override();
+    void *teb;
     unsigned int status;
     int suspend;
     FILE_FS_DEVICE_INFORMATION info;
@@ -1687,8 +1701,6 @@ void server_init_process_done(void)
 #ifdef __APPLE__
     send_server_task_port();
 #endif
-    if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
-        virtual_set_large_address_space();
 
     /* Install signal handlers; this cannot be done earlier, since we cannot
      * send exceptions to the debugger before the create process event that
@@ -1701,6 +1713,8 @@ void server_init_process_done(void)
     /* Signal the parent process to continue */
     SERVER_START_REQ( init_process_done )
     {
+        if (cpu_override)
+            wine_server_add_data( req, cpu_override, sizeof(*cpu_override) );
         req->teb      = wine_server_client_ptr( teb );
         req->peb      = NtCurrentTeb64() ? NtCurrentTeb64()->Peb : wine_server_client_ptr( peb );
 #ifdef __i386__
@@ -1708,12 +1722,11 @@ void server_init_process_done(void)
 #endif
         status = wine_server_call( req );
         suspend = reply->suspend;
-        entry = wine_server_get_ptr( reply->entry );
     }
     SERVER_END_REQ;
 
     assert( !status );
-    signal_start_thread( entry, peb, suspend, NtCurrentTeb() );
+    signal_start_thread( main_image_info.TransferAddress, peb, suspend, NtCurrentTeb() );
 }
 
 
@@ -1844,6 +1857,12 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
     /* always remove the cached fd; if the server request fails we'll just
      * retrieve it again */
     fd = remove_fd_from_cache( handle );
+
+    if (do_fsync())
+        fsync_close( handle );
+
+    if (do_esync())
+        esync_close( handle );
 
     SERVER_START_REQ( close_handle )
     {

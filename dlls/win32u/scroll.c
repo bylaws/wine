@@ -165,6 +165,16 @@ static BOOL show_scroll_bar( HWND hwnd, int bar, BOOL show_horz, BOOL show_vert 
         /* frame has been changed, let the window redraw itself */
         NtUserSetWindowPos( hwnd, 0, 0, 0, 0, 0,
                             SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED );
+
+        if ((set_bits & WS_HSCROLL) && !(old_style & WS_HSCROLL))
+            NtUserNotifyWinEvent( EVENT_OBJECT_SHOW, hwnd, OBJID_HSCROLL, 0 );
+        if ((set_bits & WS_VSCROLL) && !(old_style & WS_VSCROLL))
+            NtUserNotifyWinEvent( EVENT_OBJECT_SHOW, hwnd, OBJID_VSCROLL, 0 );
+        if ((clear_bits & WS_HSCROLL) && (old_style & WS_HSCROLL))
+            NtUserNotifyWinEvent( EVENT_OBJECT_HIDE, hwnd, OBJID_HSCROLL, 0 );
+        if ((clear_bits & WS_VSCROLL) && (old_style & WS_VSCROLL))
+            NtUserNotifyWinEvent( EVENT_OBJECT_HIDE, hwnd, OBJID_VSCROLL, 0 );
+
         return TRUE;
     }
     return FALSE; /* no frame changes */
@@ -892,7 +902,13 @@ BOOL get_scroll_info( HWND hwnd, int bar, SCROLLINFO *info )
     struct scroll_info *scroll;
 
     /* handle invalid data structure */
-    if (!validate_scroll_info( info ) || !(scroll = get_scroll_info_ptr( hwnd, bar, FALSE )))
+    if (!validate_scroll_info( info ))
+        return FALSE;
+
+    if (bar != SB_CTL && !is_current_thread_window( hwnd ))
+        return send_message( hwnd, WM_WINE_GETSCROLLINFO, (WPARAM)bar, (LPARAM)info );
+
+    if (!(scroll = get_scroll_info_ptr( hwnd, bar, FALSE )))
         return FALSE;
 
     /* fill in the desired scroll info structure */
@@ -1043,12 +1059,25 @@ done:
             refresh_scroll_bar( hwnd, bar, TRUE, TRUE );
         else if (action & SA_SSI_REPAINT_ARROWS)
             refresh_scroll_bar( hwnd, bar, TRUE, FALSE );
+
+        switch (bar)
+        {
+            case SB_CTL:
+                NtUserNotifyWinEvent( EVENT_OBJECT_VALUECHANGE, hwnd, OBJID_CLIENT, 0 );
+                break;
+            case SB_HORZ:
+                NtUserNotifyWinEvent( EVENT_OBJECT_VALUECHANGE, hwnd, OBJID_HSCROLL, 0 );
+                break;
+            case SB_VERT:
+                NtUserNotifyWinEvent( EVENT_OBJECT_VALUECHANGE, hwnd, OBJID_VSCROLL, 0 );
+                break;
+        }
     }
 
     return ret; /* Return current position */
 }
 
-static BOOL get_scroll_bar_info( HWND hwnd, LONG id, SCROLLBARINFO *info )
+BOOL get_scroll_bar_info( HWND hwnd, LONG id, SCROLLBARINFO *info )
 {
     struct scroll_info *scroll;
     int bar, dummy;
@@ -1066,6 +1095,9 @@ static BOOL get_scroll_bar_info( HWND hwnd, LONG id, SCROLLBARINFO *info )
 
     /* handle invalid data structure */
     if (info->cbSize != sizeof(*info)) return FALSE;
+
+    if (bar != SB_CTL && !is_current_thread_window( hwnd ))
+        return send_message( hwnd, WM_WINE_GETSCROLLBARINFO, (WPARAM)id, (LPARAM)info );
 
     get_scroll_bar_rect( hwnd, bar, &info->rcScrollBar, &dummy,
                          &info->dxyLineButton, &info->xyThumbTop );

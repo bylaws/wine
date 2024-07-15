@@ -427,28 +427,11 @@ NTSTATUS WINAPI wow64_NtDebugActiveProcess( UINT *args )
 
 
 /**********************************************************************
- *           wow64_NtFlushInstructionCache
- */
-NTSTATUS WINAPI wow64_NtFlushInstructionCache( UINT *args )
-{
-    HANDLE process = get_handle( &args );
-    const void *addr = get_ptr( &args );
-    SIZE_T size = get_ulong( &args );
-
-    if (pBTCpuNotifyFlushInstructionCache2 && RtlIsCurrentProcess( process ))
-        pBTCpuNotifyFlushInstructionCache2( addr, size );
-
-    return NtFlushInstructionCache( process, addr, size );
-}
-
-
-/**********************************************************************
  *           wow64_NtFlushProcessWriteBuffers
  */
 NTSTATUS WINAPI wow64_NtFlushProcessWriteBuffers( UINT *args )
 {
-    NtFlushProcessWriteBuffers();
-    return STATUS_SUCCESS;
+    return NtFlushProcessWriteBuffers();
 }
 
 
@@ -705,6 +688,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
     case ThreadEnableAlignmentFaultFixup:  /* set only */
     case ThreadAmILastThread:  /* ULONG */
     case ThreadIsIoPending:  /* ULONG */
+    case ThreadIsTerminated: /* ULONG */
     case ThreadHideFromDebugger:  /* BOOLEAN */
     case ThreadSuspendCount:  /* ULONG */
     case ThreadPriorityBoost:   /* ULONG */
@@ -1015,7 +999,7 @@ NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )
     HANDLE handle = get_handle( &args );
     ULONG *count = get_ptr( &args );
 
-    return NtSuspendThread( handle, count );
+    return RtlWow64SuspendThread( handle, count );
 }
 
 
@@ -1038,6 +1022,8 @@ NTSTATUS WINAPI wow64_NtTerminateThread( UINT *args )
 {
     HANDLE handle = get_handle( &args );
     LONG exit_code = get_ulong( &args );
+
+    if (pBTCpuThreadTerm) pBTCpuThreadTerm( handle );
 
     return NtTerminateThread( handle, exit_code );
 }

@@ -4116,9 +4116,11 @@ TREEVIEW_EndEditLabelNow(TREEVIEW_INFO *infoPtr, BOOL bCancel)
 static LRESULT
 TREEVIEW_HandleTimer(TREEVIEW_INFO *infoPtr, WPARAM wParam)
 {
+    static unsigned int once;
+
     if (wParam != TV_EDIT_TIMER)
     {
-	ERR("got unknown timer\n");
+	if (!once++) ERR("got unknown timer %Id\n", wParam);
 	return 1;
     }
 
@@ -4664,7 +4666,7 @@ static INT TREEVIEW_ProcessLetterKeys(TREEVIEW_INFO *infoPtr, WPARAM charCode, L
     if (!charCode || !keyData) return 0;
 
     /* only allow the valid WM_CHARs through */
-    if (!isalnum(charCode) &&
+    if (!iswalnum(charCode) &&
         charCode != '.' && charCode != '`' && charCode != '!' &&
         charCode != '@' && charCode != '#' && charCode != '$' &&
         charCode != '%' && charCode != '^' && charCode != '&' &&

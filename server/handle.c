@@ -126,6 +126,8 @@ static const struct object_ops handle_table_ops =
     no_add_queue,                    /* add_queue */
     NULL,                            /* remove_queue */
     NULL,                            /* signaled */
+    NULL,                            /* get_esync_fd */
+    NULL,                            /* get_fsync_idx */
     NULL,                            /* satisfied */
     no_signal,                       /* signal */
     no_get_fd,                       /* get_fd */
@@ -853,6 +855,7 @@ static int enum_handles( struct process *process, void *user )
         handle->access     = entry->access & ~RESERVED_ALL;
         handle->type       = entry->ptr->ops->type->index;
         handle->attributes = 0;
+        handle->object     = (client_ptr_t)(ULONG_PTR)entry->ptr | (client_ptr_t)0xffff800000000000;
         if (entry->access & RESERVED_INHERIT) handle->attributes |= OBJ_INHERIT;
         if (entry->access & RESERVED_CLOSE_PROTECT) handle->attributes |= OBJ_PROTECT_CLOSE;
         info->count--;

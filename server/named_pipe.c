@@ -119,6 +119,8 @@ static const struct object_ops named_pipe_ops =
     no_add_queue,                 /* add_queue */
     NULL,                         /* remove_queue */
     NULL,                         /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     NULL,                         /* satisfied */
     no_signal,                    /* signal */
     no_get_fd,                    /* get_fd */
@@ -167,6 +169,8 @@ static const struct object_ops pipe_server_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_fsync_idx,     /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     pipe_end_get_fd,              /* get_fd */
@@ -211,6 +215,8 @@ static const struct object_ops pipe_client_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_fsync_idx,     /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     pipe_end_get_fd,              /* get_fd */
@@ -258,6 +264,8 @@ static const struct object_ops named_pipe_device_ops =
     no_add_queue,                     /* add_queue */
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
+    NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     no_get_fd,                        /* get_fd */
@@ -289,6 +297,8 @@ static const struct object_ops named_pipe_device_file_ops =
     add_queue,                               /* add_queue */
     remove_queue,                            /* remove_queue */
     default_fd_signaled,                     /* signaled */
+    NULL,                                    /* get_esync_fd */
+    NULL,                                    /* get_fsync_idx */
     no_satisfied,                            /* satisfied */
     no_signal,                               /* signal */
     named_pipe_device_file_get_fd,           /* get_fd */
@@ -598,6 +608,17 @@ static void pipe_end_flush( struct fd *fd, struct async *async )
     }
 }
 
+static data_size_t pipe_end_get_avail( struct pipe_end *pipe_end )
+{
+    struct pipe_message *message;
+    data_size_t avail = 0;
+
+    LIST_FOR_EACH_ENTRY( message, &pipe_end->message_queue, struct pipe_message, entry )
+        avail += message->iosb->in_size - message->read_pos;
+
+    return avail;
+}
+
 static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
 {
     struct pipe_end *pipe_end = get_fd_user( fd );
@@ -670,8 +691,6 @@ static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned
     case FilePipeLocalInformation:
         {
             FILE_PIPE_LOCAL_INFORMATION *pipe_info;
-            struct pipe_message *message;
-            data_size_t avail = 0;
 
             if (!(get_handle_access( current->process, handle) & FILE_READ_ATTRIBUTES))
             {
@@ -709,15 +728,43 @@ static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned
             pipe_info->CurrentInstances    = pipe->instances;
             pipe_info->InboundQuota        = pipe->insize;
 
-            LIST_FOR_EACH_ENTRY( message, &pipe_end->message_queue, struct pipe_message, entry )
-                avail += message->iosb->in_size - message->read_pos;
-            pipe_info->ReadDataAvailable   = avail;
+            pipe_info->ReadDataAvailable   = pipe_end_get_avail( pipe_end );
 
             pipe_info->OutboundQuota       = pipe->outsize;
             pipe_info->WriteQuotaAvailable = 0; /* FIXME */
             pipe_info->NamedPipeState      = pipe_end->state;
             pipe_info->NamedPipeEnd        = pipe_end->obj.ops == &pipe_server_ops
                 ? FILE_PIPE_SERVER_END : FILE_PIPE_CLIENT_END;
+            break;
+        }
+    case FileStandardInformation:
+        {
+            FILE_STANDARD_INFORMATION *std_info;
+
+            if (!(get_handle_access( current->process, handle) & FILE_READ_ATTRIBUTES))
+            {
+                set_error( STATUS_ACCESS_DENIED );
+                return;
+            }
+
+            if (get_reply_max_size() < sizeof(*std_info))
+            {
+                set_error( STATUS_INFO_LENGTH_MISMATCH );
+                return;
+            }
+
+            if (!pipe)
+            {
+                set_error( STATUS_PIPE_DISCONNECTED );
+                return;
+            }
+
+            if (!(std_info = set_reply_data_size( sizeof(*std_info) ))) return;
+            std_info->AllocationSize.QuadPart = pipe->outsize + pipe->insize;
+            std_info->EndOfFile.QuadPart      = pipe_end_get_avail( pipe_end );
+            std_info->NumberOfLinks           = 1; /* FIXME */
+            std_info->DeletePending           = 0; /* FIXME */
+            std_info->Directory               = 0;
             break;
         }
     default:

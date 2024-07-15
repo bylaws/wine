@@ -412,9 +412,7 @@ static void set_stdio_fd( int stdin_fd, int stdout_fd )
  */
 static BOOL is_unix_console_handle( HANDLE handle )
 {
-    IO_STATUS_BLOCK io = {{0}};
-    return !NtDeviceIoControlFile( handle, NULL, NULL, NULL, &io, IOCTL_CONDRV_IS_UNIX,
-                                   NULL, 0, NULL, 0 );
+    return !sync_ioctl( handle, IOCTL_CONDRV_IS_UNIX, NULL, 0, NULL, 0 );
 }
 
 
@@ -441,7 +439,7 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
     {
         if (!(pid = fork()))  /* grandchild */
         {
-            if (params->ConsoleFlags ||
+            if ((peb->ProcessParameters && params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC ||
                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC_NO_WINDOW ||
                 (params->hStdInput == INVALID_HANDLE_VALUE && params->hStdOutput == INVALID_HANDLE_VALUE))
@@ -620,7 +618,7 @@ static NTSTATUS fork_and_exec( OBJECT_ATTRIBUTES *attr, int unixdir,
         {
             close( fd[0] );
 
-            if (params->ConsoleFlags ||
+            if ((peb->ProcessParameters && params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC ||
                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC_NO_WINDOW ||
                 (params->hStdInput == INVALID_HANDLE_VALUE && params->hStdOutput == INVALID_HANDLE_VALUE))
@@ -801,8 +799,13 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
         }
         goto done;
     }
-    if (!machine) machine = pe_info.machine;
-    if (!(startup_info = create_startup_info( attr.ObjectName, params, &pe_info, &startup_info_size )))
+    if (!machine)
+    {
+        machine = pe_info.machine;
+        if (is_arm64ec() && pe_info.is_hybrid && machine == IMAGE_FILE_MACHINE_ARM64)
+            machine = main_image_info.Machine;
+    }
+    if (!(startup_info = create_startup_info( attr.ObjectName, process_flags, params, &pe_info, &startup_info_size )))
         goto done;
     env_size = get_env_size( params, &winedebug );
 
@@ -983,6 +986,8 @@ done:
     return status;
 }
 
+BOOL terminate_process_running;
+LONG terminate_process_exit_code;
 
 /******************************************************************************
  *              NtTerminateProcess  (NTDLL.@)
@@ -992,6 +997,14 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
     unsigned int ret;
     BOOL self;
 
+    TRACE("handle %p, exit_code %d, process_exiting %d.\n", handle, (int)exit_code, process_exiting);
+
+    if (handle == GetCurrentProcess())
+    {
+        terminate_process_running = TRUE;
+        terminate_process_exit_code = exit_code;
+    }
+
     SERVER_START_REQ( terminate_process )
     {
         req->handle    = wine_server_obj_handle( handle );
@@ -1000,6 +1013,8 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
         self = reply->self;
     }
     SERVER_END_REQ;
+
+    TRACE("handle %p, self %d, process_exiting %d.\n", handle, self, process_exiting);
     if (self)
     {
         if (!handle) process_exiting = TRUE;
@@ -1042,7 +1057,7 @@ void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid )
     if (unix_pid == -1)
         strcpy( path, "/proc/self/status" );
     else
-        sprintf( path, "/proc/%u/status", unix_pid);
+        snprintf( path, sizeof(path), "/proc/%u/status", unix_pid);
     f = fopen( path, "r" );
     if (!f) return;
 

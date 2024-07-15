@@ -31,8 +31,12 @@
 #include "dmoreg.h"
 #include "gst_guids.h"
 #include "wmcodecdsp.h"
+#include "mferror.h"
+#include "mfapi.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(quartz);
+WINE_DECLARE_DEBUG_CHANNEL(mfplat);
+WINE_DECLARE_DEBUG_CHANNEL(wmvcore);
 
 DEFINE_GUID(GUID_NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 DEFINE_GUID(MEDIASUBTYPE_VC1S,MAKEFOURCC('V','C','1','S'),0x0000,0x0010,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71);
@@ -66,16 +70,113 @@ bool array_reserve(void **elements, size_t *capacity, size_t count, size_t size)
     return TRUE;
 }
 
-wg_parser_t wg_parser_create(enum wg_parser_type type)
+static HRESULT video_format_from_media_type(IMFMediaType *media_type, MFVIDEOFORMAT **format, UINT32 *format_size)
+{
+    GUID subtype;
+    HRESULT hr;
+
+    if (FAILED(hr = IMFMediaType_GetGUID(media_type, &MF_MT_SUBTYPE, &subtype)))
+        return hr;
+    if (FAILED(hr = MFCreateMFVideoFormatFromMFMediaType(media_type, format, format_size)))
+        return hr;
+
+    /* fixup MPEG video formats here, so we can consistently use MFVIDEOFORMAT internally */
+    if (IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG1Payload)
+            || IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG1Packet)
+            || IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG2_VIDEO))
+    {
+        struct mpeg_video_format *mpeg;
+        UINT32 mpeg_size, len;
+
+        if (FAILED(IMFMediaType_GetBlobSize(media_type, &MF_MT_MPEG_SEQUENCE_HEADER, &len)))
+            len = 0;
+        mpeg_size = offsetof(struct mpeg_video_format, sequence_header[len]);
+
+        if ((mpeg = CoTaskMemAlloc(mpeg_size)))
+        {
+            memset(mpeg, 0, mpeg_size);
+            mpeg->hdr = **format;
+
+            IMFMediaType_GetBlob(media_type, &MF_MT_MPEG_SEQUENCE_HEADER, mpeg->sequence_header, len, NULL);
+            IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG_START_TIME_CODE, (UINT32 *)&mpeg->start_time_code);
+            IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_PROFILE, &mpeg->profile);
+            IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_LEVEL, &mpeg->level);
+            IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_FLAGS, &mpeg->flags);
+
+            CoTaskMemFree(*format);
+            *format = &mpeg->hdr;
+            *format_size = mpeg_size;
+        }
+    }
+
+    return hr;
+}
+
+static HRESULT wg_media_type_from_mf(IMFMediaType *media_type, struct wg_media_type *wg_media_type)
+{
+    HRESULT hr;
+
+    if (FAILED(hr = IMFMediaType_GetMajorType(media_type, &wg_media_type->major)))
+        return hr;
+
+    if (IsEqualGUID(&wg_media_type->major, &MFMediaType_Video))
+        return video_format_from_media_type(media_type, &wg_media_type->u.video,
+                &wg_media_type->format_size);
+    if (IsEqualGUID(&wg_media_type->major, &MFMediaType_Audio))
+        return MFCreateWaveFormatExFromMFMediaType(media_type, &wg_media_type->u.audio,
+                &wg_media_type->format_size, 0);
+
+    FIXME("Unsupported major type %s\n", debugstr_guid(&wg_media_type->major));
+    return E_NOTIMPL;
+}
+
+static HRESULT media_type_from_video_format(const MFVIDEOFORMAT *format, IMFMediaType **media_type)
+{
+    HRESULT hr;
+
+    if (FAILED(hr = MFCreateVideoMediaType(format, (IMFVideoMediaType **)media_type)) || format->dwSize <= sizeof(*format))
+        return hr;
+
+    /* fixup MPEG video formats here, so we can consistently use MFVIDEOFORMAT internally */
+    if (IsEqualGUID(&format->guidFormat, &MEDIASUBTYPE_MPEG1Payload)
+            || IsEqualGUID(&format->guidFormat, &MEDIASUBTYPE_MPEG1Packet)
+            || IsEqualGUID(&format->guidFormat, &MEDIASUBTYPE_MPEG2_VIDEO))
+    {
+        struct mpeg_video_format *mpeg = (struct mpeg_video_format *)format;
+        IMFMediaType_SetBlob(*media_type, &MF_MT_MPEG_SEQUENCE_HEADER, mpeg->sequence_header, mpeg->sequence_header_count);
+        IMFMediaType_SetUINT32(*media_type, &MF_MT_MPEG_START_TIME_CODE, mpeg->start_time_code);
+        IMFMediaType_SetUINT32(*media_type, &MF_MT_MPEG2_PROFILE, mpeg->profile);
+        IMFMediaType_SetUINT32(*media_type, &MF_MT_MPEG2_LEVEL, mpeg->level);
+        IMFMediaType_SetUINT32(*media_type, &MF_MT_MPEG2_FLAGS, mpeg->flags);
+        IMFMediaType_DeleteItem(*media_type, &MF_MT_USER_DATA);
+    }
+
+    return hr;
+}
+
+static HRESULT wg_media_type_to_mf(const struct wg_media_type *wg_media_type, IMFMediaType **media_type)
+{
+    if (IsEqualGUID(&wg_media_type->major, &MFMediaType_Video))
+        return media_type_from_video_format(wg_media_type->u.video, media_type);
+    if (IsEqualGUID(&wg_media_type->major, &MFMediaType_Audio))
+        return MFCreateAudioMediaType(wg_media_type->u.audio, (IMFAudioMediaType **)media_type);
+
+    FIXME("Unsupported major type %s\n", debugstr_guid(&wg_media_type->major));
+    return E_NOTIMPL;
+}
+
+wg_parser_t wg_parser_create(enum wg_parser_type type, bool output_compressed, bool use_opengl)
 {
     struct wg_parser_create_params params =
     {
         .type = type,
+        .output_compressed = output_compressed,
+        .use_opengl = use_opengl,
         .err_on = ERR_ON(quartz),
         .warn_on = WARN_ON(quartz),
     };
 
-    TRACE("type %#x.\n", type);
+    TRACE("type %#x, use_opengl %u.\n", type, use_opengl);
 
     if (WINE_UNIX_CALL(unix_wg_parser_create, &params))
         return 0;
@@ -92,12 +193,13 @@ void wg_parser_destroy(wg_parser_t parser)
     WINE_UNIX_CALL(unix_wg_parser_destroy, &parser);
 }
 
-HRESULT wg_parser_connect(wg_parser_t parser, uint64_t file_size)
+HRESULT wg_parser_connect(wg_parser_t parser, uint64_t file_size, const WCHAR *uri)
 {
     struct wg_parser_connect_params params =
     {
         .parser = parser,
         .file_size = file_size,
+        .uri = uri,
     };
 
     TRACE("parser %#I64x, file_size %I64u.\n", parser, file_size);
@@ -171,9 +273,48 @@ wg_parser_stream_t wg_parser_get_stream(wg_parser_t parser, uint32_t index)
     return params.stream;
 }
 
-void wg_parser_stream_get_preferred_format(wg_parser_stream_t stream, struct wg_format *format)
+static HRESULT wg_get_media_type_mf(enum unix_funcs unix_func, void *params,
+        struct wg_media_type *wg_media_type, IMFMediaType **media_type)
 {
-    struct wg_parser_stream_get_preferred_format_params params =
+    NTSTATUS status;
+    HRESULT hr;
+
+    if ((status = WINE_UNIX_CALL(unix_func, params))
+            && status == STATUS_BUFFER_TOO_SMALL)
+    {
+        if (!(wg_media_type->u.format = CoTaskMemAlloc(wg_media_type->format_size)))
+            return E_OUTOFMEMORY;
+        status = WINE_UNIX_CALL(unix_func, params);
+    }
+
+    if (status)
+    {
+        CoTaskMemFree(wg_media_type->u.format);
+        WARN("Failed to get output media type, status %#lx\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    hr = wg_media_type_to_mf(wg_media_type, media_type);
+    CoTaskMemFree(wg_media_type->u.format);
+    return hr;
+}
+
+HRESULT wg_parser_stream_get_current_type_mf(wg_parser_stream_t stream, IMFMediaType **media_type)
+{
+    struct wg_parser_stream_get_current_type_params params =
+    {
+        .stream = stream,
+    };
+
+    TRACE("stream %#I64x, media_type %p.\n", stream, media_type);
+
+    return wg_get_media_type_mf(unix_wg_parser_stream_get_current_type, &params,
+            &params.media_type, media_type);
+}
+
+void wg_parser_stream_get_current_format(wg_parser_stream_t stream, struct wg_format *format)
+{
+    struct wg_parser_stream_get_current_format_params params =
     {
         .stream = stream,
         .format = format,
@@ -181,7 +322,7 @@ void wg_parser_stream_get_preferred_format(wg_parser_stream_t stream, struct wg_
 
     TRACE("stream %#I64x, format %p.\n", stream, format);
 
-    WINE_UNIX_CALL(unix_wg_parser_stream_get_preferred_format, &params);
+    WINE_UNIX_CALL(unix_wg_parser_stream_get_current_format, &params);
 }
 
 void wg_parser_stream_get_codec_format(wg_parser_stream_t stream, struct wg_format *format)
@@ -208,6 +349,29 @@ void wg_parser_stream_enable(wg_parser_stream_t stream, const struct wg_format *
     TRACE("stream %#I64x, format %p.\n", stream, format);
 
     WINE_UNIX_CALL(unix_wg_parser_stream_enable, &params);
+}
+
+HRESULT wg_parser_stream_enable_mf(wg_parser_stream_t stream, IMFMediaType *media_type)
+{
+    struct wg_parser_stream_enable_type_params params =
+    {
+        .stream = stream,
+    };
+    NTSTATUS status;
+    HRESULT hr;
+
+    TRACE("stream %#I64x, media_type %p.\n", stream, media_type);
+
+    if (FAILED(hr = wg_media_type_from_mf(media_type, &params.media_type)))
+        return hr;
+    if ((status = WINE_UNIX_CALL(unix_wg_parser_stream_enable_type, &params)))
+    {
+        WARN("Failed to enable stream, status %#lx.\n", status);
+        hr = HRESULT_FROM_NT(status);
+    }
+
+    CoTaskMemFree(params.media_type.u.format);
+    return hr;
 }
 
 void wg_parser_stream_disable(wg_parser_stream_t stream)
@@ -335,23 +499,245 @@ void wg_parser_stream_seek(wg_parser_stream_t stream, double rate,
     WINE_UNIX_CALL(unix_wg_parser_stream_seek, &params);
 }
 
-wg_transform_t wg_transform_create(const struct wg_format *input_format,
-        const struct wg_format *output_format, const struct wg_transform_attrs *attrs)
+HRESULT wg_source_create(const WCHAR *url, uint64_t file_size,
+        const void *data, uint32_t size, WCHAR mime_type[256],
+        wg_source_t *out)
+{
+    struct wg_source_create_params params =
+    {
+        .file_size = file_size,
+        .data = data, .size = size,
+    };
+    UINT len = url ? WideCharToMultiByte(CP_ACP, 0, url, -1, NULL, 0, NULL, NULL) : 0;
+    char *tmp = url ? malloc(len) : NULL;
+    NTSTATUS status;
+
+    TRACE("url %s, file_size %#I64x, data %p, size %#x, mime_type %p\n", debugstr_w(url),
+            file_size, data, size, mime_type);
+
+    if ((params.url = tmp))
+        WideCharToMultiByte(CP_ACP, 0, url, -1, tmp, len, NULL, NULL);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_source_create, &params)))
+        WARN("wg_source_create returned status %#lx\n", status);
+    else
+    {
+        TRACE("Returning source %#I64x.\n", params.source);
+        MultiByteToWideChar(CP_ACP, 0, params.mime_type, -1, mime_type, 256);
+        *out = params.source;
+    }
+
+    free(tmp);
+    return HRESULT_FROM_NT(status);
+}
+
+void wg_source_destroy(wg_source_t source)
+{
+    TRACE("source %#I64x.\n", source);
+
+    WINE_UNIX_CALL(unix_wg_source_destroy, &source);
+}
+
+HRESULT wg_source_get_stream_count(wg_source_t source, uint32_t *stream_count)
+{
+    struct wg_source_get_stream_count_params params =
+    {
+        .source = source,
+    };
+    NTSTATUS status;
+
+    TRACE("source %#I64x, stream_count %p\n", source, stream_count);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_source_get_stream_count, &params))
+            && status != STATUS_PENDING)
+    {
+        WARN("wg_source_get_stream_count returned status %#lx\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    *stream_count = params.stream_count;
+    TRACE("source %#I64x, stream_count %u\n", source, *stream_count);
+    return S_OK;
+}
+
+HRESULT wg_source_get_duration(wg_source_t source, uint64_t *duration)
+{
+    struct wg_source_get_duration_params params =
+    {
+        .source = source,
+    };
+    NTSTATUS status;
+
+    TRACE("source %#I64x, duration %p\n", source, duration);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_source_get_duration, &params))
+            && status != STATUS_PENDING)
+    {
+        WARN("wg_source_get_duration returned status %#lx\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    *duration = params.duration;
+    TRACE("source %#I64x, duration %s\n", source, debugstr_time(*duration));
+    return S_OK;
+}
+
+HRESULT wg_source_get_position(wg_source_t source, uint64_t *read_offset)
+{
+    struct wg_source_get_position_params params =
+    {
+        .source = source,
+    };
+    NTSTATUS status;
+
+    TRACE("source %#I64x, read_offset %p\n", source, read_offset);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_source_get_position, &params))
+            && status != STATUS_PENDING)
+    {
+        WARN("wg_source_get_position returned status %#lx\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    *read_offset = params.read_offset;
+    TRACE("source %#I64x, read_offset %#I64x\n", source, *read_offset);
+    return S_OK;
+}
+
+HRESULT wg_source_set_position(wg_source_t source, uint64_t time)
+{
+    struct wg_source_set_position_params params = {.source = source, .time = time};
+
+    TRACE("source %#I64x, time %s\n", source, debugstr_time(time));
+
+    return HRESULT_FROM_NT(WINE_UNIX_CALL(unix_wg_source_set_position, &params));
+}
+
+HRESULT wg_source_push_data(wg_source_t source, UINT64 offset, const void *data, uint32_t size)
+{
+    struct wg_source_push_data_params params =
+    {
+        .source = source,
+        .offset = offset,
+        .data = data,
+        .size = size,
+    };
+
+    TRACE("source %#I64x, offset %#I64x, data %p, size %#x\n", source, offset, data, size);
+
+    return HRESULT_FROM_NT(WINE_UNIX_CALL(unix_wg_source_push_data, &params));
+}
+
+HRESULT wg_source_get_stream_type(wg_source_t source, UINT32 index, IMFMediaType **media_type)
+{
+    struct wg_source_get_stream_type_params params =
+    {
+        .source = source,
+        .index = index,
+    };
+
+    TRACE("source %#I64x, index %u, media_type %p\n", source, index, media_type);
+
+    return wg_get_media_type_mf(unix_wg_source_get_stream_type, &params,
+            &params.media_type, media_type);
+}
+
+char *wg_source_get_stream_tag(wg_source_t source, UINT32 index, wg_parser_tag tag)
+{
+    struct wg_source_get_stream_tag_params params =
+    {
+        .source = source,
+        .index = index,
+        .tag = tag,
+    };
+    char *buffer;
+
+    TRACE("source %#I64x, index %u, tag %#I64x\n", source, index, tag);
+
+    if (WINE_UNIX_CALL(unix_wg_source_get_stream_tag, &params) != STATUS_BUFFER_TOO_SMALL)
+        return NULL;
+    if (!(buffer = malloc(params.size)))
+    {
+        ERR("No memory.\n");
+        return NULL;
+    }
+    params.buffer = buffer;
+    if (WINE_UNIX_CALL(unix_wg_source_get_stream_tag, &params))
+    {
+        ERR("wg_source_get_stream_tag failed unexpectedly.\n");
+        free(buffer);
+        return NULL;
+    }
+    return buffer;
+}
+
+void wg_source_set_stream_flags(wg_source_t source, UINT32 index, BOOL select)
+{
+    struct wg_source_set_stream_flags_params params =
+    {
+        .source = source,
+        .index = index,
+        .select = select,
+    };
+
+    TRACE("source %#I64x, index %u, select %u\n", source, index, select);
+
+    WINE_UNIX_CALL(unix_wg_source_set_stream_flags, &params);
+}
+
+HRESULT wg_transform_create_mf(IMFMediaType *input_type, IMFMediaType *output_type,
+        const struct wg_transform_attrs *attrs, wg_transform_t *transform)
 {
     struct wg_transform_create_params params =
     {
-        .input_format = input_format,
-        .output_format = output_format,
-        .attrs = attrs,
+        .attrs = *attrs,
     };
+    NTSTATUS status;
+    HRESULT hr;
+
+    TRACE("input_type %p, output_type %p.\n", input_type, output_type);
+
+    if (FAILED(hr = wg_media_type_from_mf(input_type, &params.input_type)))
+        return hr;
+    if (FAILED(hr = wg_media_type_from_mf(output_type, &params.output_type)))
+    {
+        CoTaskMemFree(params.input_type.u.format);
+        return hr;
+    }
+
+    if ((status = WINE_UNIX_CALL(unix_wg_transform_create, &params)))
+    {
+        WARN("Failed to create transform, status %#lx\n", status);
+        hr = HRESULT_FROM_NT(status);
+    }
+
+    CoTaskMemFree(params.output_type.u.format);
+    CoTaskMemFree(params.input_type.u.format);
+    *transform = params.transform;
+    return hr;
+}
+
+HRESULT wg_transform_create_quartz(const AM_MEDIA_TYPE *input_format, const AM_MEDIA_TYPE *output_format,
+        const struct wg_transform_attrs *attrs, wg_transform_t *transform)
+{
+    IMFMediaType *input_type, *output_type;
+    HRESULT hr;
 
     TRACE("input_format %p, output_format %p.\n", input_format, output_format);
 
-    if (WINE_UNIX_CALL(unix_wg_transform_create, &params))
+    /* through IMFMediaType to normalize representation to MFVIDEOFORMAT / WAVEFORMATEX */
+    if (FAILED(hr = MFCreateMediaTypeFromRepresentation(AM_MEDIA_TYPE_REPRESENTATION, (void *)input_format, &input_type)))
         return 0;
+    if (FAILED(hr = MFCreateMediaTypeFromRepresentation(AM_MEDIA_TYPE_REPRESENTATION, (void *)output_format, &output_type)))
+    {
+        IMFMediaType_Release(input_type);
+        return 0;
+    }
 
-    TRACE("Returning transform %#I64x.\n", params.transform);
-    return params.transform;
+    hr = wg_transform_create_mf(input_type, output_type, attrs, transform);
+    IMFMediaType_Release(output_type);
+    IMFMediaType_Release(input_type);
+    return hr;
 }
 
 void wg_transform_destroy(wg_transform_t transform)
@@ -378,18 +764,16 @@ HRESULT wg_transform_push_data(wg_transform_t transform, struct wg_sample *sampl
     return params.result;
 }
 
-HRESULT wg_transform_read_data(wg_transform_t transform, struct wg_sample *sample,
-        struct wg_format *format)
+HRESULT wg_transform_read_data(wg_transform_t transform, struct wg_sample *sample)
 {
     struct wg_transform_read_data_params params =
     {
         .transform = transform,
         .sample = sample,
-        .format = format,
     };
     NTSTATUS status;
 
-    TRACE("transform %#I64x, sample %p, format %p.\n", transform, sample, format);
+    TRACE("transform %#I64x, sample %p.\n", transform, sample);
 
     if ((status = WINE_UNIX_CALL(unix_wg_transform_read_data, &params)))
         return HRESULT_FROM_NT(status);
@@ -413,17 +797,43 @@ bool wg_transform_get_status(wg_transform_t transform, bool *accepts_input)
     return true;
 }
 
-bool wg_transform_set_output_format(wg_transform_t transform, struct wg_format *format)
+HRESULT wg_transform_get_output_type(wg_transform_t transform, IMFMediaType **media_type)
 {
-    struct wg_transform_set_output_format_params params =
+    struct wg_transform_get_output_type_params params =
     {
         .transform = transform,
-        .format = format,
     };
 
-    TRACE("transform %#I64x, format %p.\n", transform, format);
+    TRACE("transform %#I64x, media_type %p.\n", transform, media_type);
 
-    return !WINE_UNIX_CALL(unix_wg_transform_set_output_format, &params);
+    return wg_get_media_type_mf(unix_wg_transform_get_output_type, &params,
+            &params.media_type, media_type);
+}
+
+HRESULT wg_transform_set_output_type(wg_transform_t transform, IMFMediaType *media_type)
+{
+    struct wg_transform_set_output_type_params params =
+    {
+        .transform = transform,
+    };
+    NTSTATUS status;
+    HRESULT hr;
+
+    TRACE("transform %#I64x, media_type %p.\n", transform, media_type);
+
+    if (FAILED(hr = wg_media_type_from_mf(media_type, &params.media_type)))
+    {
+        WARN("Failed to initialize media type, hr %#lx\n", hr);
+        return hr;
+    }
+    if ((status = WINE_UNIX_CALL(unix_wg_transform_set_output_type, &params)))
+    {
+       WARN("Failed to set transform output type, status %#lx\n", status);
+       hr = HRESULT_FROM_NT(status);
+    }
+
+    CoTaskMemFree(params.media_type.u.format);
+    return hr;
 }
 
 HRESULT wg_transform_drain(wg_transform_t transform)
@@ -456,6 +866,206 @@ HRESULT wg_transform_flush(wg_transform_t transform)
     return S_OK;
 }
 
+void wg_transform_notify_qos(wg_transform_t transform,
+        bool underflow, double proportion, int64_t diff, uint64_t timestamp)
+{
+    struct wg_transform_notify_qos_params params =
+    {
+        .transform = transform,
+        .underflow = underflow,
+        .proportion = proportion,
+        .diff = diff,
+        .timestamp = timestamp,
+    };
+
+    TRACE("transform %#I64x, underflow %d, proportion %.16e, diff %I64d, timestamp %I64u.\n",
+            transform, underflow, proportion, diff, timestamp);
+
+    WINE_UNIX_CALL(unix_wg_transform_notify_qos, &params);
+}
+
+HRESULT wg_muxer_create(const char *format, wg_muxer_t *muxer)
+{
+    struct wg_muxer_create_params params =
+    {
+        .format = format,
+    };
+    NTSTATUS status;
+
+    TRACE("format %p, muxer %p.\n", format, muxer);
+
+    if (!(status = WINE_UNIX_CALL(unix_wg_muxer_create, &params)))
+    {
+        *muxer = params.muxer;
+        TRACE("Created wg_muxer %#I64x.\n", params.muxer);
+    }
+    else
+    {
+        WARN("Failed to create muxer, status %#lx.\n", status);
+    }
+
+    return HRESULT_FROM_NT(status);
+}
+
+void wg_muxer_destroy(wg_muxer_t muxer)
+{
+    TRACE("muxer %#I64x.\n", muxer);
+
+    WINE_UNIX_CALL(unix_wg_muxer_destroy, &muxer);
+}
+
+HRESULT wg_muxer_add_stream(wg_muxer_t muxer, UINT32 stream_id, const struct wg_format *format)
+{
+    struct wg_muxer_add_stream_params params =
+    {
+        .muxer = muxer,
+        .stream_id = stream_id,
+        .format = format,
+    };
+    NTSTATUS status;
+
+    TRACE("muxer %#I64x, stream_id %u, format %p.\n", muxer, stream_id, format);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_muxer_add_stream, &params)))
+    {
+        WARN("Failed to add stream, status %#lx.\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    return S_OK;
+}
+
+HRESULT wg_muxer_start(wg_muxer_t muxer)
+{
+    NTSTATUS status;
+
+    TRACE("muxer %#I64x.\n",  muxer);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_muxer_start, &muxer)))
+    {
+        WARN("Failed to start muxer, status %#lx.\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    return S_OK;
+}
+
+HRESULT wg_muxer_push_sample(wg_muxer_t muxer, struct wg_sample *sample, UINT32 steam_id)
+{
+    struct wg_muxer_push_sample_params params =
+    {
+        .muxer = muxer,
+        .sample = sample,
+        .stream_id = steam_id,
+    };
+    NTSTATUS status;
+
+    TRACE("muxer %#I64x, sample %p.\n", muxer, sample);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_muxer_push_sample, &params)))
+    {
+        WARN("Failed to push sample, status %#lx.\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    return S_OK;
+}
+
+HRESULT wg_muxer_read_data(wg_muxer_t muxer, void *buffer, UINT32 *size, UINT64 *offset)
+{
+    struct wg_muxer_read_data_params params =
+    {
+        .muxer = muxer,
+        .buffer = buffer,
+        .size = *size,
+        .offset = UINT64_MAX,
+    };
+    NTSTATUS status;
+
+    TRACE("muxer %#I64x, buffer %p, size %u.\n", muxer, buffer, *size);
+
+    if (SUCCEEDED(status = WINE_UNIX_CALL(unix_wg_muxer_read_data, &params)))
+    {
+        *size = params.size;
+        *offset = params.offset;
+        TRACE("Read %u bytes, offset %#I64x.\n", *size, *offset);
+    }
+
+    return HRESULT_FROM_NT(status);
+}
+
+HRESULT wg_muxer_finalize(wg_muxer_t muxer)
+{
+    NTSTATUS status;
+
+    TRACE("muxer %#I64x.\n", muxer);
+
+    if ((status = WINE_UNIX_CALL(unix_wg_muxer_finalize, &muxer)))
+    {
+        WARN("Failed to finalize, status %#lx.\n", status);
+        return HRESULT_FROM_NT(status);
+    }
+
+    return S_OK;
+}
+
+static HRESULT check_transform_support(const struct wg_media_type *input, const struct wg_media_type *output)
+{
+    IMFMediaType *input_type, *output_type;
+    struct wg_transform_attrs attrs = {0};
+    wg_transform_t transform;
+    HRESULT hr;
+
+    if (FAILED(hr = wg_media_type_to_mf(input, &input_type)))
+        return hr;
+    if (FAILED(hr = wg_media_type_to_mf(output, &output_type)))
+    {
+        IMFMediaType_Release(input_type);
+        return hr;
+    }
+
+    if (SUCCEEDED(hr = wg_transform_create_mf(input_type, output_type, &attrs, &transform)))
+        wg_transform_destroy(transform);
+
+    IMFMediaType_Release(output_type);
+    IMFMediaType_Release(input_type);
+    return hr;
+}
+
+HRESULT check_audio_transform_support(const WAVEFORMATEX *input, const WAVEFORMATEX *output)
+{
+    const struct wg_media_type input_type =
+    {
+        .major = MFMediaType_Audio,
+        .format_size = sizeof(*input) + input->cbSize,
+        .u.audio = (WAVEFORMATEX *)input,
+    };
+    const struct wg_media_type output_type =
+    {
+        .major = MFMediaType_Audio,
+        .format_size = sizeof(*output) + output->cbSize,
+        .u.audio = (WAVEFORMATEX *)output,
+    };
+    return check_transform_support(&input_type, &output_type);
+}
+
+HRESULT check_video_transform_support(const MFVIDEOFORMAT *input, const MFVIDEOFORMAT *output)
+{
+    const struct wg_media_type input_type =
+    {
+        .major = MFMediaType_Video,
+        .format_size = input->dwSize,
+        .u.video = (MFVIDEOFORMAT *)input,
+    };
+    const struct wg_media_type output_type =
+    {
+        .major = MFMediaType_Video,
+        .format_size = output->dwSize,
+        .u.video = (MFVIDEOFORMAT *)output,
+    };
+    return check_transform_support(&input_type, &output_type);
+}
+
 #define ALIGN(n, alignment) (((n) + (alignment) - 1) & ~((alignment) - 1))
 
 unsigned int wg_format_get_stride(const struct wg_format *format)
@@ -469,6 +1079,7 @@ unsigned int wg_format_get_stride(const struct wg_format *format)
 
         case WG_VIDEO_FORMAT_BGRA:
         case WG_VIDEO_FORMAT_BGRx:
+        case WG_VIDEO_FORMAT_RGBA:
             return width * 4;
 
         case WG_VIDEO_FORMAT_BGR:
@@ -504,16 +1115,10 @@ bool wg_video_format_is_rgb(enum wg_video_format format)
         case WG_VIDEO_FORMAT_BGR:
         case WG_VIDEO_FORMAT_RGB15:
         case WG_VIDEO_FORMAT_RGB16:
+        case WG_VIDEO_FORMAT_RGBA:
             return true;
 
-        case WG_VIDEO_FORMAT_AYUV:
-        case WG_VIDEO_FORMAT_I420:
-        case WG_VIDEO_FORMAT_NV12:
-        case WG_VIDEO_FORMAT_UYVY:
-        case WG_VIDEO_FORMAT_YUY2:
-        case WG_VIDEO_FORMAT_YV12:
-        case WG_VIDEO_FORMAT_YVYU:
-        case WG_VIDEO_FORMAT_UNKNOWN:
+        default:
             break;
     }
 
@@ -605,6 +1210,7 @@ static const IClassFactoryVtbl class_factory_vtbl =
 static struct class_factory avi_splitter_cf = {{&class_factory_vtbl}, avi_splitter_create};
 static struct class_factory decodebin_parser_cf = {{&class_factory_vtbl}, decodebin_parser_create};
 static struct class_factory mpeg_audio_codec_cf = {{&class_factory_vtbl}, mpeg_audio_codec_create};
+static struct class_factory mpeg_video_codec_cf = {{&class_factory_vtbl}, mpeg_video_codec_create};
 static struct class_factory mpeg_layer3_decoder_cf = {{&class_factory_vtbl}, mpeg_layer3_decoder_create};
 static struct class_factory mpeg_splitter_cf = {{&class_factory_vtbl}, mpeg_splitter_create};
 static struct class_factory wave_parser_cf = {{&class_factory_vtbl}, wave_parser_create};
@@ -612,6 +1218,8 @@ static struct class_factory wma_decoder_cf = {{&class_factory_vtbl}, wma_decoder
 static struct class_factory wmv_decoder_cf = {{&class_factory_vtbl}, wmv_decoder_create};
 static struct class_factory resampler_cf = {{&class_factory_vtbl}, resampler_create};
 static struct class_factory color_convert_cf = {{&class_factory_vtbl}, color_convert_create};
+static struct class_factory mp3_sink_class_factory_cf = {{&class_factory_vtbl}, mp3_sink_class_factory_create};
+static struct class_factory mpeg4_sink_class_factory_cf = {{&class_factory_vtbl}, mpeg4_sink_class_factory_create};
 
 HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
 {
@@ -632,6 +1240,8 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &decodebin_parser_cf;
     else if (IsEqualGUID(clsid, &CLSID_CMpegAudioCodec))
         factory = &mpeg_audio_codec_cf;
+    else if (IsEqualGUID(clsid, &CLSID_CMpegVideoCodec))
+        factory = &mpeg_video_codec_cf;
     else if (IsEqualGUID(clsid, &CLSID_mpeg_layer3_decoder))
         factory = &mpeg_layer3_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_MPEG1Splitter))
@@ -646,6 +1256,10 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &resampler_cf;
     else if (IsEqualGUID(clsid, &CLSID_CColorConvertDMO))
         factory = &color_convert_cf;
+    else if (IsEqualGUID(clsid, &CLSID_MFMP3SinkClassFactory))
+        factory = &mp3_sink_class_factory_cf;
+    else if (IsEqualGUID(clsid, &CLSID_MFMPEG4SinkClassFactory))
+        factory = &mpeg4_sink_class_factory_cf;
     else
     {
         FIXME("%s not implemented, returning CLASS_E_CLASSNOTAVAILABLE.\n", debugstr_guid(clsid));
@@ -657,9 +1271,15 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
 
 static BOOL CALLBACK init_gstreamer_proc(INIT_ONCE *once, void *param, void **ctx)
 {
+    struct wg_init_gstreamer_params params =
+    {
+        .trace_on = TRACE_ON(mfplat) || TRACE_ON(quartz) || TRACE_ON(wmvcore),
+        .warn_on = WARN_ON(mfplat) || WARN_ON(quartz) || WARN_ON(wmvcore),
+        .err_on = ERR_ON(mfplat) || ERR_ON(quartz) || ERR_ON(wmvcore),
+    };
     HINSTANCE handle;
 
-    if (WINE_UNIX_CALL(unix_wg_init_gstreamer, NULL))
+    if (WINE_UNIX_CALL(unix_wg_init_gstreamer, &params))
         return FALSE;
 
     /* Unloading glib is a bad idea.. it installs atexit handlers,
@@ -739,6 +1359,38 @@ static const REGFILTER2 reg_mpeg_audio_codec =
     .dwMerit = 0x03680001,
     .u.s2.cPins2 = 2,
     .u.s2.rgPins2 = reg_mpeg_audio_codec_pins,
+};
+
+static const REGPINTYPES reg_mpeg_video_codec_sink_mts[2] =
+{
+    {&MEDIATYPE_Video, &MEDIASUBTYPE_MPEG1Packet},
+    {&MEDIATYPE_Video, &MEDIASUBTYPE_MPEG1Payload},
+};
+
+static const REGPINTYPES reg_mpeg_video_codec_source_mts[1] =
+{
+    {&MEDIATYPE_Video, &GUID_NULL},
+};
+
+static const REGFILTERPINS2 reg_mpeg_video_codec_pins[2] =
+{
+    {
+        .nMediaTypes = 2,
+        .lpMediaType = reg_mpeg_video_codec_sink_mts,
+    },
+    {
+        .dwFlags = REG_PINFLAG_B_OUTPUT,
+        .nMediaTypes = 1,
+        .lpMediaType = reg_mpeg_video_codec_source_mts,
+    },
+};
+
+static const REGFILTER2 reg_mpeg_video_codec =
+{
+    .dwVersion = 2,
+    .dwMerit = 0x40000001,
+    .u.s2.cPins2 = 2,
+    .u.s2.rgPins2 = reg_mpeg_video_codec_pins,
 };
 
 static const REGPINTYPES reg_mpeg_layer3_decoder_sink_mts[1] =
@@ -976,6 +1628,8 @@ HRESULT WINAPI DllRegisterServer(void)
             L"GStreamer splitter filter", NULL, NULL, NULL, &reg_decodebin_parser);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_CMpegAudioCodec,
             L"MPEG Audio Decoder", NULL, NULL, NULL, &reg_mpeg_audio_codec);
+    IFilterMapper2_RegisterFilter(mapper, &CLSID_CMpegVideoCodec,
+            L"MPEG Video Decoder", NULL, NULL, NULL, &reg_mpeg_video_codec);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_mpeg_layer3_decoder,
             L"MPEG Layer-3 Decoder", NULL, NULL, NULL, &reg_mpeg_layer3_decoder);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_MPEG1Splitter,
@@ -1017,6 +1671,7 @@ HRESULT WINAPI DllUnregisterServer(void)
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_AviSplitter);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_decodebin_parser);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegAudioCodec);
+    IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegVideoCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_mpeg_layer3_decoder);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_MPEG1Splitter);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_WAVEParser);

@@ -57,6 +57,8 @@
 #  define strcasecmp _stricmp
 # endif
 #else
+extern char **environ;
+# include <spawn.h>
 # include <sys/wait.h>
 # include <unistd.h>
 # ifndef O_BINARY
@@ -88,7 +90,7 @@
 
 struct target
 {
-    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64 } cpu;
+    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64, CPU_ARM64EC } cpu;
 
     enum
     {
@@ -283,13 +285,9 @@ static inline int strarray_spawn( struct strarray args )
     pid_t pid, wret;
     int status;
 
-    if (!(pid = fork()))
-    {
-        strarray_add( &args, NULL );
-        execvp( args.str[0], (char **)args.str );
-        _exit(1);
-    }
-    if (pid == -1) return -1;
+    strarray_add( &args, NULL );
+    if (posix_spawnp( &pid, args.str[0], NULL, NULL, (char **)args.str, environ ))
+        return -1;
 
     while (pid != (wret = waitpid( pid, &status, 0 )))
         if (wret == -1 && errno != EINTR) break;
@@ -483,6 +481,7 @@ static inline unsigned int get_target_ptr_size( struct target target )
         [CPU_x86_64]    = 8,
         [CPU_ARM]       = 4,
         [CPU_ARM64]     = 8,
+        [CPU_ARM64EC]   = 8,
     };
     return sizes[target.cpu];
 }
@@ -502,6 +501,7 @@ static inline void set_target_ptr_size( struct target *target, unsigned int size
         if (size == 8) target->cpu = CPU_ARM64;
         break;
     case CPU_ARM64:
+    case CPU_ARM64EC:
         if (size == 4) target->cpu = CPU_ARM;
         break;
     }
@@ -524,6 +524,7 @@ static inline int get_cpu_from_name( const char *name )
         { "x86_64",    CPU_x86_64 },
         { "amd64",     CPU_x86_64 },
         { "aarch64",   CPU_ARM64 },
+        { "arm64ec",   CPU_ARM64EC },
         { "arm64",     CPU_ARM64 },
         { "arm",       CPU_ARM },
     };
@@ -568,10 +569,11 @@ static inline const char *get_arch_dir( struct target target )
 {
     static const char *cpu_names[] =
     {
-        [CPU_i386]   = "i386",
-        [CPU_x86_64] = "x86_64",
-        [CPU_ARM]    = "arm",
-        [CPU_ARM64]  = "aarch64"
+        [CPU_i386]    = "i386",
+        [CPU_x86_64]  = "x86_64",
+        [CPU_ARM]     = "arm",
+        [CPU_ARM64]   = "aarch64",
+        [CPU_ARM64EC] = "aarch64",
     };
 
     if (!cpu_names[target.cpu]) return "";
@@ -771,7 +773,7 @@ static inline struct strarray parse_options( int argc, char **argv, const char *
     char *start, *end;
     int i;
 
-#define OPT_ERR(fmt) { callback( '?', strmake( fmt, argv[1] )); continue; }
+#define OPT_ERR(fmt) { callback( '?', strmake( fmt, argv[i] )); continue; }
 
     for (i = 1; i < argc; i++)
     {

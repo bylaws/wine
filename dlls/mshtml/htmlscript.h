@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "activscp.h"
+
 struct HTMLScriptElement {
     HTMLElement element;
 
@@ -39,6 +41,7 @@ HRESULT script_elem_from_nsscript(nsIDOMHTMLScriptElement*,HTMLScriptElement**);
 void bind_event_scripts(HTMLDocumentNode*);
 HRESULT load_script(HTMLScriptElement*,const WCHAR*,BOOL);
 
+void move_script_hosts(HTMLInnerWindow*,HTMLInnerWindow*);
 void release_script_hosts(HTMLInnerWindow*);
 void connect_scripts(HTMLInnerWindow*);
 void doc_insert_script(HTMLInnerWindow*,HTMLScriptElement*,BOOL);
@@ -47,3 +50,4 @@ HRESULT exec_script(HTMLInnerWindow*,const WCHAR*,const WCHAR*,VARIANT*);
 void update_browser_script_mode(GeckoBrowser*,IUri*);
 BOOL find_global_prop(HTMLInnerWindow*,BSTR,DWORD,ScriptHost**,DISPID*);
 IDispatch *get_script_disp(ScriptHost*);
+IActiveScriptSite *get_first_script_site(HTMLInnerWindow*);

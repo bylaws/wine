@@ -1121,6 +1121,7 @@ static WORD EVENT_event_to_vkey( XIC xic, XKeyEvent *e)
  */
 static void X11DRV_send_keyboard_input( HWND hwnd, WORD vkey, WORD scan, UINT flags, UINT time )
 {
+    RAWINPUT rawinput;
     INPUT input;
 
     TRACE_(key)( "hwnd %p vkey=%04x scan=%04x flags=%04x\n", hwnd, vkey, scan, flags );
@@ -1132,7 +1133,7 @@ static void X11DRV_send_keyboard_input( HWND hwnd, WORD vkey, WORD scan, UINT fl
     input.ki.time        = time;
     input.ki.dwExtraInfo = 0;
 
-    __wine_send_input( hwnd, &input, NULL );
+    __wine_send_input( hwnd, &input, &rawinput );
 }
 
 
@@ -1192,11 +1193,19 @@ BOOL X11DRV_KeymapNotify( HWND hwnd, XEvent *event )
     int i, j;
     BYTE keystate[256];
     WORD vkey;
+    DWORD flags;
+    KeyCode keycode;
+    HWND keymapnotify_hwnd;
     BOOL changed = FALSE;
     struct {
         WORD vkey;
+        WORD scan;
         WORD pressed;
     } keys[256];
+    struct x11drv_thread_data *thread_data = x11drv_thread_data();
+
+    keymapnotify_hwnd = thread_data->keymapnotify_hwnd;
+    thread_data->keymapnotify_hwnd = NULL;
 
     if (!get_async_key_state( keystate )) return FALSE;
 
@@ -1211,11 +1220,17 @@ BOOL X11DRV_KeymapNotify( HWND hwnd, XEvent *event )
     {
         for (j = 0; j < 8; j++)
         {
-            vkey = keyc2vkey[(i * 8) + j];
+            keycode = (i * 8) + j;
+            vkey = keyc2vkey[keycode];
 
             /* If multiple keys map to the same vkey, we want to report it as
              * pressed iff any of them are pressed. */
-            if (!keys[vkey & 0xff].vkey) keys[vkey & 0xff].vkey = vkey;
+            if (!keys[vkey & 0xff].vkey)
+            {
+                keys[vkey & 0xff].vkey = vkey;
+                keys[vkey & 0xff].scan = keyc2scan[keycode] & 0xff;
+            }
+
             if (event->xkeymap.key_vector[i] & (1<<j)) keys[vkey & 0xff].pressed = TRUE;
         }
     }
@@ -1226,6 +1241,31 @@ BOOL X11DRV_KeymapNotify( HWND hwnd, XEvent *event )
         {
             TRACE( "Adjusting state for vkey %#.2x. State before %#.2x\n",
                    keys[vkey].vkey, keystate[vkey]);
+
+            /* This KeymapNotify follows a FocusIn(mode=NotifyUngrab) event,
+             * which is caused by a keyboard grab being released.
+             * See XGrabKeyboard().
+             *
+             * We might have missed some key press/release events while the
+             * keyboard was grabbed, but keyboard grab doesn't generate focus
+             * lost / focus gained events on the Windows side, so the affected
+             * program is not aware that it needs to resync the keyboard state.
+             *
+             * This, for example, may cause Alt being stuck after using Alt+Tab.
+             *
+             * To work around that problem we sync any possible key releases.
+             *
+             * Syncing key presses is not feasible as window managers differ in
+             * event sequences, e.g. KDE performs two keyboard grabs for
+             * Alt+Tab, which would sync the Tab press.
+             */
+            if (keymapnotify_hwnd && !keys[vkey].pressed)
+            {
+                TRACE( "Sending KEYUP for a modifier %#.2x\n", vkey);
+                flags = KEYEVENTF_KEYUP;
+                if (keys[vkey].vkey & 0x1000) flags |= KEYEVENTF_EXTENDEDKEY;
+                X11DRV_send_keyboard_input( keymapnotify_hwnd, vkey, keys[vkey].scan, flags, NtGetTickCount() );
+            }
 
             update_key_state( keystate, vkey, keys[vkey].pressed );
             changed = TRUE;
@@ -1314,7 +1354,7 @@ BOOL X11DRV_KeyEvent( HWND hwnd, XEvent *xev )
     DWORD dwFlags;
     int ascii_chars;
     XIC xic = X11DRV_get_ic( hwnd );
-    DWORD event_time = EVENT_x11_time_to_win32_time(event->time);
+    DWORD event_time = x11drv_time_to_ticks( event->time );
     Status status = 0;
 
     TRACE_(key)("type %d, window %lx, state 0x%04x, keycode %u\n",
@@ -1400,6 +1440,35 @@ BOOL X11DRV_KeyEvent( HWND hwnd, XEvent *xev )
     return TRUE;
 }
 
+/* From the point of view of this function there are two types of
+ * keys: those for which the mapping to vkey and scancode depends on
+ * the keyboard layout (i.e., letters, numbers, punctuation) and those
+ * for which it doesn't (control keys); since this function is used to
+ * recognize the keyboard layout and map keysyms to vkeys and
+ * scancodes, we are only concerned about the first type, and map
+ * everything in the second type to zero.
+ */
+static char keysym_to_char( KeySym keysym )
+{
+    /* Dead keys */
+    if (0xfe50 <= keysym && keysym < 0xfed0)
+        return KEYBOARD_MapDeadKeysym( keysym );
+
+    /* Control keys (there is nothing allocated below 0xfc00, but I
+       take some margin in case something is added in the future) */
+    if (0xf000 <= keysym && keysym < 0x10000)
+        return 0;
+
+    /* XFree86 vendor keys */
+    if (0x10000000 <= keysym)
+        return 0;
+
+    /* "Normal" keys: return last octet, because our tables don't have
+       more than that; it would be better to extend the tables and
+       compare the whole keysym, but it's a lot of work... */
+    return keysym & 0xff;
+}
+
 /**********************************************************************
  *		X11DRV_KEYBOARD_DetectLayout
  *
@@ -1430,22 +1499,20 @@ X11DRV_KEYBOARD_DetectLayout( Display *display )
       /* get data for keycode from X server */
       for (i = 0; i < syms; i++) {
         if (!(keysym = XkbKeycodeToKeysym( display, keyc, 0, i ))) continue;
-	/* Allow both one-byte and two-byte national keysyms */
-	if ((keysym < 0x8000) && (keysym != ' '))
+        ckey[keyc][i] = keysym_to_char(keysym);
+        if (TRACE_ON(keyboard))
         {
-            if (!XkbTranslateKeySym(display, &keysym, 0, &ckey[keyc][i], 1, NULL))
-            {
-                TRACE("XKB could not translate keysym %04lx\n", keysym);
-                /* FIXME: query what keysym is used as Mode_switch, fill XKeyEvent
-                 * with appropriate ShiftMask and Mode_switch, use XLookupString
-                 * to get character in the local encoding.
-                 */
-                ckey[keyc][i] = keysym & 0xFF;
-            }
+            char buf[32];
+            WCHAR bufW[32];
+            int len, lenW;
+            KeySym orig_keysym = keysym;
+            len = XkbTranslateKeySym(display, &keysym, 0, buf, sizeof(buf), NULL);
+            lenW = ntdll_umbstowcs(buf, len, bufW, ARRAY_SIZE(bufW));
+            if (lenW < ARRAY_SIZE(bufW))
+                bufW[lenW] = 0;
+            TRACE("keycode %u, index %d, orig_keysym 0x%04lx, keysym 0x%04lx, buf %s, bufW %s\n",
+                    keyc, i, orig_keysym, keysym, debugstr_a(buf), debugstr_w(bufW));
         }
-	else {
-	  ckey[keyc][i] = KEYBOARD_MapDeadKeysym(keysym);
-	}
       }
   }
 
@@ -1620,20 +1687,8 @@ void X11DRV_InitKeyboard( Display *display )
 	      /* we seem to need to search the layout-dependent scancodes */
 	      int maxlen=0,maxval=-1,ok;
 	      for (i=0; i<syms; i++) {
-		keysym = XkbKeycodeToKeysym( display, keyc, 0, i );
-		if ((keysym<0x8000) && (keysym!=' '))
-                {
-                    if (!XkbTranslateKeySym(display, &keysym, 0, &ckey[i], 1, NULL))
-                    {
-                        /* FIXME: query what keysym is used as Mode_switch, fill XKeyEvent
-                         * with appropriate ShiftMask and Mode_switch, use XLookupString
-                         * to get character in the local encoding.
-                         */
-                        ckey[i] = (keysym <= 0x7F) ? keysym : 0;
-                    }
-		} else {
-		  ckey[i] = KEYBOARD_MapDeadKeysym(keysym);
-		}
+    keysym = XkbKeycodeToKeysym( display, keyc, 0, i );
+                ckey[i] = keysym_to_char(keysym);
 	      }
 	      /* find key with longest match streak */
 	      for (keyn=0; keyn<MAIN_LEN; keyn++) {
@@ -1809,13 +1864,24 @@ BOOL X11DRV_MappingNotify( HWND dummy, XEvent *event )
 {
     HWND hwnd;
 
-    XRefreshKeyboardMapping(&event->xmapping);
-    X11DRV_InitKeyboard( event->xmapping.display );
+    switch (event->xmapping.request)
+    {
+    case MappingModifier:
+    case MappingKeyboard:
+        XRefreshKeyboardMapping( &event->xmapping );
+        X11DRV_InitKeyboard( event->xmapping.display );
 
-    hwnd = get_focus();
-    if (!hwnd) hwnd = get_active_window();
-    NtUserPostMessage( hwnd, WM_INPUTLANGCHANGEREQUEST,
-                       0 /*FIXME*/, (LPARAM)NtUserGetKeyboardLayout(0) );
+        hwnd = get_focus();
+        if (!hwnd) hwnd = get_active_window();
+        NtUserPostMessage( hwnd, WM_INPUTLANGCHANGEREQUEST,
+                           0 /*FIXME*/, (LPARAM)NtUserGetKeyboardLayout(0) );
+        break;
+
+    case MappingPointer:
+        X11DRV_InitMouse( event->xmapping.display );
+        break;
+    }
+
     return TRUE;
 }
 

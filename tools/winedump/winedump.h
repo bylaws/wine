@@ -168,7 +168,7 @@ BOOL  dll_next_symbol (parsed_symbol * sym);
 /* Symbol functions */
 void  symbol_init(parsed_symbol* symbol, const char* name);
 
-BOOL  symbol_demangle (parsed_symbol *symbol);
+char *demangle( const char *name );
 
 BOOL  symbol_search (parsed_symbol *symbol);
 
@@ -224,6 +224,7 @@ unsigned long	Offset(const void* ptr);
 typedef void (*file_dumper)(void);
 BOOL            dump_analysis(const char*, file_dumper, enum FileSig);
 
+void            dump_data_offset( const unsigned char *ptr, unsigned int size, unsigned int offset, const char *prefix );
 void            dump_data( const unsigned char *ptr, unsigned int size, const char *prefix );
 const char*	get_time_str( unsigned long );
 unsigned int    strlenW( const unsigned short *str );
@@ -233,7 +234,7 @@ const char*     get_unicode_str( const WCHAR *str, int len );
 const char*     get_symbol_str(const char* symname);
 void            print_fake_dll(void);
 void            dump_file_header(const IMAGE_FILE_HEADER *, BOOL);
-void            dump_optional_header(const IMAGE_OPTIONAL_HEADER32 *, UINT);
+void            dump_optional_header(const IMAGE_OPTIONAL_HEADER32 *);
 void            dump_section(const IMAGE_SECTION_HEADER *, const char* strtable);
 void            dump_section_characteristics(DWORD characteristics, const char* sep);
 

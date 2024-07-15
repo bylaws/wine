@@ -131,6 +131,13 @@ typedef enum _MF_VIDEO_PROCESSOR_ALGORITHM_TYPE
     MF_VIDEO_PROCESSOR_ALGORITHM_MRF_CRF_444 = 1,
 } MF_VIDEO_PROCESSOR_ALGORITHM_TYPE;
 
+typedef enum MFTOPOLOGY_DXVA_MODE
+{
+    MFTOPOLOGY_DXVA_DEFAULT = 0,
+    MFTOPOLOGY_DXVA_NONE = 1,
+    MFTOPOLOGY_DXVA_FULL = 2,
+} MFTOPOLOGY_DXVA_MODE;
+
 [
     object,
     uuid(2eb1e945-18b8-4139-9b1a-d5d584818530),
@@ -709,6 +716,7 @@ cpp_quote("HRESULT WINAPI MFCreateSimpleTypeHandler(IMFMediaTypeHandler **handle
 cpp_quote("HRESULT WINAPI MFCreateSampleCopierMFT(IMFTransform **transform);")
 cpp_quote("HRESULT WINAPI MFCreateSampleGrabberSinkActivate(IMFMediaType *media_type,")
 cpp_quote("        IMFSampleGrabberSinkCallback *callback, IMFActivate **activate);")
+cpp_quote("HRESULT WINAPI MFCreateSequencerSegmentOffset(MFSequencerElementId id, MFTIME offset, PROPVARIANT *segment_offset);")
 cpp_quote("HRESULT WINAPI MFCreateSequencerSource(IUnknown *reserved, IMFSequencerSource **seq_source);" )
 cpp_quote("HRESULT WINAPI MFCreateSourceResolver(IMFSourceResolver **resolver);")
 cpp_quote("HRESULT WINAPI MFCreateStandardQualityManager(IMFQualityManager **manager);")

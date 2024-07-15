@@ -19,6 +19,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "user_private.h"
 #include "controls.h"
 #include "dbt.h"
@@ -738,8 +740,7 @@ static size_t string_size( const void *str, BOOL ansi )
  *
  * Unpack a message received from win32u.
  */
-void unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lparam,
-                     void *buffer, size_t size, BOOL ansi )
+void unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lparam, void *buffer, BOOL ansi )
 {
     switch(message)
     {
@@ -803,8 +804,9 @@ void unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lparam,
     *lparam = (LPARAM)buffer;
 }
 
-BOOL WINAPI User32CallWindowProc( struct win_proc_params *params, ULONG size )
+NTSTATUS WINAPI User32CallWindowProc( void *args, ULONG size )
 {
+    struct win_proc_params *params = args;
     size_t packed_size = 0;
     void *buffer = NULL;
     LRESULT result;
@@ -816,7 +818,7 @@ BOOL WINAPI User32CallWindowProc( struct win_proc_params *params, ULONG size )
         buffer = (char *)params + offset;
 
         unpack_message( params->hwnd, params->msg, &params->wparam, &params->lparam,
-                        buffer, packed_size, params->ansi );
+                        buffer, params->ansi );
     }
 
     result = dispatch_win_proc_params( params );
@@ -825,15 +827,16 @@ BOOL WINAPI User32CallWindowProc( struct win_proc_params *params, ULONG size )
     {
         LRESULT *result_ptr = (LRESULT *)buffer - 1;
         *result_ptr = result;
-        return NtCallbackReturn( result_ptr, sizeof(*result_ptr) + packed_size, TRUE );
+        return NtCallbackReturn( result_ptr, sizeof(*result_ptr) + packed_size, STATUS_SUCCESS );
     }
-    return NtCallbackReturn( &result, sizeof(result), TRUE );
+    return NtCallbackReturn( &result, sizeof(result), STATUS_SUCCESS );
 }
 
-BOOL WINAPI User32CallSendAsyncCallback( const struct send_async_params *params, ULONG size )
+NTSTATUS WINAPI User32CallSendAsyncCallback( void *args, ULONG size )
 {
+    const struct send_async_params *params = args;
     params->callback( params->hwnd, params->msg, params->data, params->result );
-    return TRUE;
+    return STATUS_SUCCESS;
 }
 
 /**********************************************************************
@@ -860,7 +863,7 @@ BOOL WINAPI User32CallSendAsyncCallback( const struct send_async_params *params,
  *
  *   ECMA-234, Win32
  */
-LRESULT WINAPI CallWindowProcA( WNDPROC func, HWND hwnd, UINT msg, WPARAM wParam,  LPARAM lParam )
+LRESULT WINAPI DECLSPEC_HOTPATCH CallWindowProcA( WNDPROC func, HWND hwnd, UINT msg, WPARAM wParam,  LPARAM lParam )
 {
     struct win_proc_params params;
 

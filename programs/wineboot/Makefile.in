@@ -1,13 +1,11 @@
 MODULE    = wineboot.exe
 IMPORTS   = uuid advapi32 ws2_32 kernelbase
-DELAYIMPORTS = shell32 shlwapi version user32 setupapi newdev
+DELAYIMPORTS = shell32 shlwapi version user32 setupapi newdev crypt32
 
 EXTRADLLFLAGS = -mconsole
 
-C_SRCS = \
+SOURCES = \
 	shutdown.c \
-	wineboot.c
-
-RC_SRCS = wineboot.rc
-
-MANPAGES = wineboot.man.in
+	wineboot.c \
+	wineboot.man.in \
+	wineboot.rc

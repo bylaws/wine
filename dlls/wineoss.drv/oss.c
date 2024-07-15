@@ -1704,7 +1704,7 @@ static NTSTATUS oss_aux_message(void *args)
     return STATUS_SUCCESS;
 }
 
-unixlib_entry_t __wine_unix_call_funcs[] =
+const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     oss_process_attach,
     oss_not_implemented,
@@ -1721,6 +1721,7 @@ unixlib_entry_t __wine_unix_call_funcs[] =
     oss_get_capture_buffer,
     oss_release_capture_buffer,
     oss_is_format_supported,
+    oss_not_implemented,
     oss_get_mix_format,
     oss_get_device_period,
     oss_get_buffer_size,
@@ -1731,6 +1732,7 @@ unixlib_entry_t __wine_unix_call_funcs[] =
     oss_get_position,
     oss_set_volumes,
     oss_set_event_handle,
+    NULL,
     oss_test_connect,
     oss_is_started,
     oss_get_prop_value,
@@ -1741,6 +1743,8 @@ unixlib_entry_t __wine_unix_call_funcs[] =
     oss_midi_notify_wait,
     oss_aux_message,
 };
+
+C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);
 
 #ifdef _WIN64
 
@@ -2197,7 +2201,7 @@ static NTSTATUS oss_wow64_aux_message(void *args)
     return oss_aux_message(&params);
 }
 
-unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
     oss_process_attach,
     oss_not_implemented,
@@ -2214,6 +2218,7 @@ unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     oss_wow64_get_capture_buffer,
     oss_release_capture_buffer,
     oss_wow64_is_format_supported,
+    oss_not_implemented,
     oss_wow64_get_mix_format,
     oss_wow64_get_device_period,
     oss_wow64_get_buffer_size,
@@ -2224,6 +2229,7 @@ unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     oss_wow64_get_position,
     oss_wow64_set_volumes,
     oss_wow64_set_event_handle,
+    oss_not_implemented,
     oss_wow64_test_connect,
     oss_is_started,
     oss_wow64_get_prop_value,
@@ -2234,5 +2240,7 @@ unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     oss_wow64_midi_notify_wait,
     oss_wow64_aux_message,
 };
+
+C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == funcs_count);
 
 #endif /* _WIN64 */

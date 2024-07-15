@@ -208,6 +208,7 @@ typedef struct
     unsigned int attribute;
     unsigned int flags;
     unsigned int show;
+    process_id_t process_group_id;
     data_size_t  curdir_len;
     data_size_t  dllpath_len;
     data_size_t  imagepath_len;
@@ -826,6 +827,7 @@ typedef union
 typedef struct
 {
     client_ptr_t   base;
+    client_ptr_t   map_addr;
     mem_size_t     stack_size;
     mem_size_t     stack_commit;
     unsigned int   entry_point;
@@ -842,6 +844,8 @@ typedef struct
     unsigned char  contains_code : 1;
     unsigned char  wine_builtin : 1;
     unsigned char  wine_fakedll : 1;
+    unsigned char  is_hybrid : 1;
+    unsigned char  padding : 4;
     unsigned char  image_flags;
     unsigned int   loader_flags;
     unsigned int   header_size;
@@ -971,9 +975,8 @@ struct init_process_done_request
 struct init_process_done_reply
 {
     struct reply_header __header;
-    client_ptr_t entry;
     int          suspend;
-    char __pad_20[4];
+    char __pad_12[4];
 };
 
 
@@ -1160,10 +1163,12 @@ struct get_thread_info_reply
     int          priority;
     int          last;
     int          suspend_count;
-    int          dbg_hidden;
+    unsigned int flags;
     data_size_t  desc_len;
     /* VARARG(desc,unicode_str); */
 };
+#define GET_THREAD_INFO_FLAG_DBG_HIDDEN 0x01
+#define GET_THREAD_INFO_FLAG_TERMINATED 0x02
 
 
 
@@ -1992,6 +1997,19 @@ struct get_mapping_info_reply
     /* VARARG(image,pe_image_info); */
     /* VARARG(name,unicode_str); */
     char __pad_28[4];
+};
+
+
+
+struct get_image_map_address_request
+{
+    struct request_header __header;
+    obj_handle_t handle;
+};
+struct get_image_map_address_reply
+{
+    struct reply_header __header;
+    client_ptr_t addr;
 };
 
 
@@ -4481,6 +4499,33 @@ struct remove_clipboard_listener_reply
 
 
 
+struct create_token_request
+{
+    struct request_header __header;
+    struct luid    token_id;
+    unsigned int   access;
+    int            primary;
+    int            impersonation_level;
+    abstime_t      expire;
+    int            group_count;
+    int            primary_group;
+    int            priv_count;
+
+
+
+
+
+    char __pad_52[4];
+};
+struct create_token_reply
+{
+    struct reply_header __header;
+    obj_handle_t   token;
+    char __pad_12[4];
+};
+
+
+
 struct open_token_request
 {
     struct request_header __header;
@@ -5279,7 +5324,7 @@ struct set_fd_name_info_request
     obj_handle_t rootdir;
     data_size_t  namelen;
     int          link;
-    int          replace;
+    unsigned int flags;
     /* VARARG(name,unicode_str,namelen); */
     /* VARARG(filename,string); */
 };
@@ -5659,6 +5704,7 @@ enum request
     REQ_create_mapping,
     REQ_open_mapping,
     REQ_get_mapping_info,
+    REQ_get_image_map_address,
     REQ_map_view,
     REQ_map_image_view,
     REQ_map_builtin_view,
@@ -5806,6 +5852,7 @@ enum request
     REQ_set_clipboard_viewer,
     REQ_add_clipboard_listener,
     REQ_remove_clipboard_listener,
+    REQ_create_token,
     REQ_open_token,
     REQ_set_global_windows,
     REQ_adjust_token_privileges,
@@ -5948,6 +5995,7 @@ union generic_request
     struct create_mapping_request create_mapping_request;
     struct open_mapping_request open_mapping_request;
     struct get_mapping_info_request get_mapping_info_request;
+    struct get_image_map_address_request get_image_map_address_request;
     struct map_view_request map_view_request;
     struct map_image_view_request map_image_view_request;
     struct map_builtin_view_request map_builtin_view_request;
@@ -6095,6 +6143,7 @@ union generic_request
     struct set_clipboard_viewer_request set_clipboard_viewer_request;
     struct add_clipboard_listener_request add_clipboard_listener_request;
     struct remove_clipboard_listener_request remove_clipboard_listener_request;
+    struct create_token_request create_token_request;
     struct open_token_request open_token_request;
     struct set_global_windows_request set_global_windows_request;
     struct adjust_token_privileges_request adjust_token_privileges_request;
@@ -6235,6 +6284,7 @@ union generic_reply
     struct create_mapping_reply create_mapping_reply;
     struct open_mapping_reply open_mapping_reply;
     struct get_mapping_info_reply get_mapping_info_reply;
+    struct get_image_map_address_reply get_image_map_address_reply;
     struct map_view_reply map_view_reply;
     struct map_image_view_reply map_image_view_reply;
     struct map_builtin_view_reply map_builtin_view_reply;
@@ -6382,6 +6432,7 @@ union generic_reply
     struct set_clipboard_viewer_reply set_clipboard_viewer_reply;
     struct add_clipboard_listener_reply add_clipboard_listener_reply;
     struct remove_clipboard_listener_reply remove_clipboard_listener_reply;
+    struct create_token_reply create_token_reply;
     struct open_token_reply open_token_reply;
     struct set_global_windows_reply set_global_windows_reply;
     struct adjust_token_privileges_reply adjust_token_privileges_reply;
@@ -6456,7 +6507,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 780
+#define SERVER_PROTOCOL_VERSION 788
 
 /* ### protocol_version end ### */
 

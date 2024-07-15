@@ -223,6 +223,7 @@ static void hid_device_queue_input( DEVICE_OBJECT *device, HID_XFER_PACKET *pack
     const BOOL polled = ext->u.pdo.information.Polled;
     ULONG size, report_len = polled ? packet->reportBufferLen : desc->InputLength;
     struct hid_report *last_report, *report;
+    BOOL steam_overlay_open = FALSE;
     struct hid_queue *queue;
     LIST_ENTRY completed, *entry;
     RAWINPUT *rawinput;
@@ -231,7 +232,11 @@ static void hid_device_queue_input( DEVICE_OBJECT *device, HID_XFER_PACKET *pack
 
     TRACE("device %p, packet %p\n", device, packet);
 
-    if (IsEqualGUID( ext->class_guid, &GUID_DEVINTERFACE_HID ))
+    if (WaitForSingleObject(ext->steam_overlay_event, 0) == WAIT_OBJECT_0 || /* steam overlay is open */
+        WaitForSingleObject(ext->steam_keyboard_event, 0) == WAIT_OBJECT_0) /* steam keyboard is open */
+        steam_overlay_open = TRUE;
+
+    if (IsEqualGUID( ext->class_guid, &GUID_DEVINTERFACE_HID ) && !steam_overlay_open)
     {
         size = offsetof( RAWINPUT, data.hid.bRawData[report_len] );
         if (!(rawinput = malloc( size ))) ERR( "Failed to allocate rawinput data!\n" );
@@ -385,6 +390,8 @@ struct device_strings
 
 static const struct device_strings device_strings[] =
 {
+    /* CW-Bug-Id: #23185 Emulate Steam Input native hooks for native SDL */
+    { .id = L"VID_28DE&PID_11FF", .product = L"Controller (XBOX 360 For Windows)" },
     /* Microsoft controllers */
     { .id = L"VID_045E&PID_028E", .product = L"Controller (XBOX 360 For Windows)" },
     { .id = L"VID_045E&PID_028F", .product = L"Controller (XBOX 360 For Windows)" },
@@ -403,6 +410,7 @@ static const struct device_strings device_strings[] =
     { .id = L"VID_054C&PID_09CC", .product = L"Wireless Controller" },
     { .id = L"VID_054C&PID_0BA0", .product = L"Wireless Controller" },
     { .id = L"VID_054C&PID_0CE6", .product = L"Wireless Controller" },
+    { .id = L"VID_054C&PID_0DF2", .product = L"Wireless Controller" },
 };
 
 static const WCHAR *find_device_string( const WCHAR *device_id, ULONG index )

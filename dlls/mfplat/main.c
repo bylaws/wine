@@ -22,8 +22,6 @@
 #include <limits.h>
 
 #define COBJMACROS
-#define NONAMELESSUNION
-
 #include "windef.h"
 #include "winbase.h"
 #include "winuser.h"
@@ -3811,7 +3809,7 @@ static HRESULT bytestream_create_io_request(struct bytestream *stream, enum asyn
             &stream->write_callback, NULL, &request)))
         goto failed;
 
-    RtwqPutWorkItem(MFASYNC_CALLBACK_QUEUE_STANDARD, 0, request);
+    RtwqPutWorkItem(MFASYNC_CALLBACK_QUEUE_IO, 0, request);
     IRtwqAsyncResult_Release(request);
 
 failed:
@@ -6298,7 +6296,13 @@ static HRESULT resolver_get_bytestream_url_hint(IMFByteStream *stream, WCHAR con
 static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
 {
     static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
-    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+    static const GUID CLSID_GStreamerByteStreamHandler2 = {0x317df619, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
+
+    /* CW-Bug-Id: 20833 keep old media source around if we need a comparison point */
+    const char *env = getenv("WINE_NEW_MEDIA_SOURCE");
+    if (env && !atoi(env)) return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+
+    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler2, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
 }
 
 static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
@@ -9213,8 +9217,15 @@ static const IMFDXGIDeviceManagerVtbl dxgi_device_manager_vtbl =
 HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
 {
     struct dxgi_device_manager *object;
+    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
 
     TRACE("%p, %p.\n", token, manager);
+
+    if (do_not_create && do_not_create[0] != '\0')
+    {
+        FIXME("stubbing out\n");
+        return E_NOTIMPL;
+    }
 
     if (!token || !manager)
         return E_POINTER;

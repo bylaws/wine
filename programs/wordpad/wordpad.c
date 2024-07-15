@@ -627,8 +627,7 @@ static void add_font(struct font_array *fonts, LPCWSTR fontName, DWORD fontType,
         fontHeight = ntmc->ntmTm.tmHeight - ntmc->ntmTm.tmInternalLeading;
 
     idx = fonts->count;
-    fonts->fonts[idx].name = malloc((lstrlenW(fontName) + 1)*sizeof(WCHAR) );
-    lstrcpyW( fonts->fonts[idx].name, fontName );
+    fonts->fonts[idx].name = wcsdup(fontName);
     fonts->fonts[idx].lParam = MAKELONG(fontType, fontHeight);
 
     fonts->count++;
@@ -2012,12 +2011,7 @@ static LRESULT OnCreate( HWND hWnd )
       |ES_WANTRETURN|WS_VSCROLL|ES_NOHIDESEL|WS_HSCROLL,
       0, 0, 1000, 100, hWnd, (HMENU)IDC_EDITOR, hInstance, NULL);
 
-    if (!hEditorWnd)
-    {
-        fprintf(stderr, "Error code %lu\n", GetLastError());
-        return -1;
-    }
-    assert(hEditorWnd);
+    if (!hEditorWnd) return -1;
 
     setup_richedit_olecallback(hEditorWnd);
     SetFocus(hEditorWnd);

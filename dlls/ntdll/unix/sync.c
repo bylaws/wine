@@ -43,16 +43,19 @@
 #ifdef HAVE_SCHED_H
 # include <sched.h>
 #endif
+#ifdef HAVE_SYS_RESOURCE_H
+# include <sys/resource.h>
+#endif
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #ifdef __APPLE__
-# include <mach/mach.h>
-# include <mach/task.h>
-# include <mach/semaphore.h>
 # include <mach/mach_time.h>
+#endif
+#ifdef HAVE_KQUEUE
+# include <sys/event.h>
 #endif
 
 #include "ntstatus.h"
@@ -63,6 +66,8 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
+#include "esync.h"
+#include "fsync.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
@@ -270,6 +275,13 @@ NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJ
 
     *handle = 0;
     if (max <= 0 || initial < 0 || initial > max) return STATUS_INVALID_PARAMETER;
+
+    if (do_fsync())
+        return fsync_create_semaphore( handle, access, attr, initial, max );
+
+    if (do_esync())
+        return esync_create_semaphore( handle, access, attr, initial, max );
+
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
 
     SERVER_START_REQ( create_semaphore )
@@ -296,6 +308,13 @@ NTSTATUS WINAPI NtOpenSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJEC
     unsigned int ret;
 
     *handle = 0;
+
+    if (do_fsync())
+        return fsync_open_semaphore( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_semaphore( handle, access, attr );
+
     if ((ret = validate_open_object_attributes( attr ))) return ret;
 
     SERVER_START_REQ( open_semaphore )
@@ -332,6 +351,12 @@ NTSTATUS WINAPI NtQuerySemaphore( HANDLE handle, SEMAPHORE_INFORMATION_CLASS cla
 
     if (len != sizeof(SEMAPHORE_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
 
+    if (do_fsync())
+        return fsync_query_semaphore( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_semaphore( handle, info, ret_len );
+
     SERVER_START_REQ( query_semaphore )
     {
         req->handle = wine_server_obj_handle( handle );
@@ -353,6 +378,12 @@ NTSTATUS WINAPI NtQuerySemaphore( HANDLE handle, SEMAPHORE_INFORMATION_CLASS cla
 NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, ULONG count, ULONG *previous )
 {
     unsigned int ret;
+
+    if (do_fsync())
+        return fsync_release_semaphore( handle, count, previous );
+
+    if (do_esync())
+        return esync_release_semaphore( handle, count, previous );
 
     SERVER_START_REQ( release_semaphore )
     {
@@ -380,6 +411,13 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
 
     *handle = 0;
     if (type != NotificationEvent && type != SynchronizationEvent) return STATUS_INVALID_PARAMETER;
+
+    if (do_fsync())
+        return fsync_create_event( handle, access, attr, type, state );
+
+    if (do_esync())
+        return esync_create_event( handle, access, attr, type, state );
+
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
 
     SERVER_START_REQ( create_event )
@@ -408,6 +446,12 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
     *handle = 0;
     if ((ret = validate_open_object_attributes( attr ))) return ret;
 
+    if (do_fsync())
+        return fsync_open_event( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_event( handle, access, attr );
+
     SERVER_START_REQ( open_event )
     {
         req->access     = access;
@@ -428,7 +472,14 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
  */
 NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
 {
+    /* This comment is a dummy to make sure this patch applies in the right place. */
     unsigned int ret;
+
+    if (do_fsync())
+        return fsync_set_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_set_event( handle );
 
     SERVER_START_REQ( event_op )
     {
@@ -447,7 +498,15 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
  */
 NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
 {
+    /* This comment is a dummy to make sure this patch applies in the right place. */
     unsigned int ret;
+
+    if (do_fsync())
+        return fsync_reset_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_reset_event( handle );
+
 
     SERVER_START_REQ( event_op )
     {
@@ -477,6 +536,12 @@ NTSTATUS WINAPI NtClearEvent( HANDLE handle )
 NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
 {
     unsigned int ret;
+
+    if (do_fsync())
+        return fsync_pulse_event( handle, prev_state );
+
+    if (do_esync())
+        return esync_pulse_event( handle );
 
     SERVER_START_REQ( event_op )
     {
@@ -509,6 +574,12 @@ NTSTATUS WINAPI NtQueryEvent( HANDLE handle, EVENT_INFORMATION_CLASS class,
 
     if (len != sizeof(EVENT_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
 
+    if (do_fsync())
+        return fsync_query_event( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_event( handle, info, ret_len );
+
     SERVER_START_REQ( query_event )
     {
         req->handle = wine_server_obj_handle( handle );
@@ -535,6 +606,13 @@ NTSTATUS WINAPI NtCreateMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT
     struct object_attributes *objattr;
 
     *handle = 0;
+
+    if (do_fsync())
+        return fsync_create_mutex( handle, access, attr, owned );
+
+    if (do_esync())
+        return esync_create_mutex( handle, access, attr, owned );
+
     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
 
     SERVER_START_REQ( create_mutex )
@@ -562,6 +640,12 @@ NTSTATUS WINAPI NtOpenMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT_A
     *handle = 0;
     if ((ret = validate_open_object_attributes( attr ))) return ret;
 
+    if (do_fsync())
+        return fsync_open_mutex( handle, access, attr );
+
+    if (do_esync())
+        return esync_open_mutex( handle, access, attr );
+
     SERVER_START_REQ( open_mutex )
     {
         req->access  = access;
@@ -583,6 +667,12 @@ NTSTATUS WINAPI NtOpenMutant( HANDLE *handle, ACCESS_MASK access, const OBJECT_A
 NTSTATUS WINAPI NtReleaseMutant( HANDLE handle, LONG *prev_count )
 {
     unsigned int ret;
+
+    if (do_fsync())
+        return fsync_release_mutex( handle, prev_count );
+
+    if (do_esync())
+        return esync_release_mutex( handle, prev_count );
 
     SERVER_START_REQ( release_mutex )
     {
@@ -613,6 +703,12 @@ NTSTATUS WINAPI NtQueryMutant( HANDLE handle, MUTANT_INFORMATION_CLASS class,
     }
 
     if (len != sizeof(MUTANT_BASIC_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
+
+    if (do_fsync())
+        return fsync_query_mutex( handle, info, ret_len );
+
+    if (do_esync())
+        return esync_query_mutex( handle, info, ret_len );
 
     SERVER_START_REQ( query_mutex )
     {
@@ -1472,6 +1568,20 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, BO
 
     if (!count || count > MAXIMUM_WAIT_OBJECTS) return STATUS_INVALID_PARAMETER_1;
 
+    if (do_fsync())
+    {
+        NTSTATUS ret = fsync_wait_objects( count, handles, wait_any, alertable, timeout );
+        if (ret != STATUS_NOT_IMPLEMENTED)
+            return ret;
+    }
+
+    if (do_esync())
+    {
+        NTSTATUS ret = esync_wait_objects( count, handles, wait_any, alertable, timeout );
+        if (ret != STATUS_NOT_IMPLEMENTED)
+            return ret;
+    }
+
     if (alertable) flags |= SELECT_ALERTABLE;
     select_op.wait.op = wait_any ? SELECT_WAIT : SELECT_WAIT_ALL;
     for (i = 0; i < count; i++) select_op.wait.handles[i] = wine_server_obj_handle( handles[i] );
@@ -1497,6 +1607,12 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
     select_op_t select_op;
     UINT flags = SELECT_INTERRUPTIBLE;
 
+    if (do_fsync())
+        return fsync_signal_and_wait( signal, wait, alertable, timeout );
+
+    if (do_esync())
+        return esync_signal_and_wait( signal, wait, alertable, timeout );
+
     if (!signal) return STATUS_INVALID_HANDLE;
 
     if (alertable) flags |= SELECT_ALERTABLE;
@@ -1513,7 +1629,17 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
 NTSTATUS WINAPI NtYieldExecution(void)
 {
 #ifdef HAVE_SCHED_YIELD
+#ifdef RUSAGE_THREAD
+    struct rusage u1, u2;
+    int ret;
+
+    ret = getrusage( RUSAGE_THREAD, &u1 );
+#endif
     sched_yield();
+#ifdef RUSAGE_THREAD
+    if (!ret) ret = getrusage( RUSAGE_THREAD, &u2 );
+    if (!ret && u1.ru_nvcsw == u2.ru_nvcsw && u1.ru_nivcsw == u2.ru_nivcsw) return STATUS_NO_YIELD_PERFORMED;
+#endif
     return STATUS_SUCCESS;
 #else
     return STATUS_NO_YIELD_PERFORMED;
@@ -1527,7 +1653,24 @@ NTSTATUS WINAPI NtYieldExecution(void)
 NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )
 {
     /* if alertable, we need to query the server */
-    if (alertable) return server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout );
+    if (alertable)
+    {
+        if (do_fsync())
+        {
+            NTSTATUS ret = fsync_wait_objects( 0, NULL, TRUE, TRUE, timeout );
+            if (ret != STATUS_NOT_IMPLEMENTED)
+                return ret;
+        }
+
+        if (do_esync())
+        {
+            NTSTATUS ret = esync_wait_objects( 0, NULL, TRUE, TRUE, timeout );
+            if (ret != STATUS_NOT_IMPLEMENTED)
+                return ret;
+        }
+
+        return server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, timeout );
+    }
 
     if (!timeout || timeout->QuadPart == TIMEOUT_INFINITE)  /* sleep forever */
     {
@@ -1885,6 +2028,7 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
                                       IO_STATUS_BLOCK *io, LARGE_INTEGER *timeout )
 {
     unsigned int status;
+    int waited = 0;
 
     TRACE( "(%p, %p, %p, %p, %p)\n", handle, key, value, io, timeout );
 
@@ -1893,6 +2037,7 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
         SERVER_START_REQ( remove_completion )
         {
             req->handle = wine_server_obj_handle( handle );
+            req->waited = waited;
             if (!(status = wine_server_call( req )))
             {
                 *key            = reply->ckey;
@@ -1905,6 +2050,7 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
         if (status != STATUS_PENDING) return status;
         status = NtWaitForSingleObject( handle, FALSE, timeout );
         if (status != WAIT_OBJECT_0) return status;
+        waited = 1;
     }
 }
 
@@ -1916,6 +2062,7 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
                                         ULONG *written, LARGE_INTEGER *timeout, BOOLEAN alertable )
 {
     unsigned int status;
+    int waited = 0;
     ULONG i = 0;
 
     TRACE( "%p %p %u %p %p %u\n", handle, info, (int)count, written, timeout, alertable );
@@ -1927,6 +2074,7 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
             SERVER_START_REQ( remove_completion )
             {
                 req->handle = wine_server_obj_handle( handle );
+                req->waited = waited;
                 if (!(status = wine_server_call( req )))
                 {
                     info[i].CompletionKey             = reply->ckey;
@@ -1946,6 +2094,7 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
         }
         status = NtWaitForSingleObject( handle, alertable, timeout );
         if (status != WAIT_OBJECT_0) break;
+        waited = 1;
     }
     *written = i ? i : 1;
     return status;
@@ -2207,7 +2356,7 @@ done:
 static ULONG integral_atom_name( WCHAR *buffer, ULONG len, RTL_ATOM atom )
 {
     char tmp[16];
-    int ret = sprintf( tmp, "#%u", atom );
+    int ret = snprintf( tmp, sizeof(tmp), "#%u", atom );
 
     len /= sizeof(WCHAR);
     if (len)
@@ -2354,8 +2503,8 @@ NTSTATUS WINAPI NtQueryInformationAtom( RTL_ATOM atom, ATOM_INFORMATION_CLASS cl
 
 union tid_alert_entry
 {
-#ifdef __APPLE__
-    semaphore_t sem;
+#ifdef HAVE_KQUEUE
+    int kq;
 #else
     HANDLE event;
 #ifdef __linux__
@@ -2396,15 +2545,35 @@ static union tid_alert_entry *get_tid_alert_entry( HANDLE tid )
 
     entry = &tid_alert_blocks[block_idx][idx % TID_ALERT_BLOCK_SIZE];
 
-#ifdef __APPLE__
-    if (!entry->sem)
+#ifdef HAVE_KQUEUE
+    if (!entry->kq)
     {
-        semaphore_t sem;
+        int kq = kqueue();
+        static const struct kevent init_event =
+        {
+            .ident = 1,
+            .filter = EVFILT_USER,
+            .flags = EV_ADD | EV_CLEAR,
+            .fflags = 0,
+            .data = 0,
+            .udata = NULL
+        };
 
-        if (semaphore_create( mach_task_self(), &sem, SYNC_POLICY_FIFO, 0 ))
+        if (kq == -1)
+        {
+            ERR( "kqueue failed with error: %d (%s)\n", errno, strerror( errno ) );
             return NULL;
-        if (InterlockedCompareExchange( (LONG *)&entry->sem, sem, 0 ))
-            semaphore_destroy( mach_task_self(), sem );
+        }
+
+        if (kevent( kq, &init_event, 1, NULL, 0, NULL) == -1)
+        {
+            ERR( "kevent creation failed with error: %d (%s)\n", errno, strerror( errno ) );
+            close( kq );
+            return NULL;
+        }
+
+        if (InterlockedCompareExchange( (LONG *)&entry->kq, kq, 0 ))
+            close( kq );
     }
 #else
 #ifdef __linux__
@@ -2438,9 +2607,21 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
 
     if (!entry) return STATUS_INVALID_CID;
 
-#ifdef __APPLE__
-    semaphore_signal( entry->sem );
-    return STATUS_SUCCESS;
+#ifdef HAVE_KQUEUE
+    {
+        static const struct kevent signal_event =
+        {
+            .ident = 1,
+            .filter = EVFILT_USER,
+            .flags = 0,
+            .fflags = NOTE_TRIGGER,
+            .data = 0,
+            .udata = NULL
+        };
+
+        kevent( entry->kq, &signal_event, 1, NULL, 0, NULL );
+        return STATUS_SUCCESS;
+    }
 #else
 #ifdef __linux__
     if (use_futexes())
@@ -2457,7 +2638,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
 }
 
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(HAVE_KQUEUE)
 static LONGLONG get_absolute_timeout( const LARGE_INTEGER *timeout )
 {
     LARGE_INTEGER now;
@@ -2480,7 +2661,7 @@ static LONGLONG update_timeout( ULONGLONG end )
 #endif
 
 
-#ifdef __APPLE__
+#ifdef HAVE_KQUEUE
 
 /***********************************************************************
  *             NtWaitForAlertByThreadId (NTDLL.@)
@@ -2488,14 +2669,14 @@ static LONGLONG update_timeout( ULONGLONG end )
 NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEGER *timeout )
 {
     union tid_alert_entry *entry = get_tid_alert_entry( NtCurrentTeb()->ClientId.UniqueThread );
-    semaphore_t sem;
     ULONGLONG end;
-    kern_return_t ret;
+    int ret;
+    struct timespec timespec;
+    struct kevent wait_event;
 
     TRACE( "%p %s\n", address, debugstr_timeout( timeout ) );
 
     if (!entry) return STATUS_INVALID_CID;
-    sem = entry->sem;
 
     if (timeout)
     {
@@ -2505,27 +2686,29 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
             end = get_absolute_timeout( timeout );
     }
 
-    for (;;)
+    do
     {
         if (timeout)
         {
             LONGLONG timeleft = update_timeout( end );
-            mach_timespec_t timespec;
 
             timespec.tv_sec = timeleft / (ULONGLONG)TICKSPERSEC;
             timespec.tv_nsec = (timeleft % TICKSPERSEC) * 100;
-            ret = semaphore_timedwait( sem, timespec );
+            if (timespec.tv_sec > 0x7FFFFFFF) timeout = NULL;
         }
-        else
-            ret = semaphore_wait( sem );
 
-        switch (ret)
-        {
-        case KERN_SUCCESS: return STATUS_ALERTED;
-        case KERN_ABORTED: continue;
-        case KERN_OPERATION_TIMED_OUT: return STATUS_TIMEOUT;
-        default: return STATUS_INVALID_HANDLE;
-        }
+        ret = kevent( entry->kq, NULL, 0, &wait_event, 1, timeout ? &timespec : NULL );
+    } while (ret == -1 && errno == EINTR);
+
+    switch (ret)
+    {
+    case 1:
+        return STATUS_ALERTED;
+    case 0:
+        return STATUS_TIMEOUT;
+    default:
+        ERR( "kevent failed with error: %d (%s)\n", errno, strerror( errno ) );
+        return STATUS_INVALID_HANDLE;
     }
 }
 
@@ -2537,6 +2720,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
 NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEGER *timeout )
 {
     union tid_alert_entry *entry = get_tid_alert_entry( NtCurrentTeb()->ClientId.UniqueThread );
+    BOOL waited = FALSE;
     NTSTATUS status;
 
     TRACE( "%p %s\n", address, debugstr_timeout( timeout ) );
@@ -2572,8 +2756,15 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
             else
                 ret = futex_wait( futex, 0, NULL );
 
+            if (!timeout || timeout->QuadPart)
+                waited = TRUE;
+
             if (ret == -1 && errno == ETIMEDOUT) return STATUS_TIMEOUT;
         }
+
+        if (alert_simulate_sched_quantum && waited)
+            usleep(0);
+
         return STATUS_ALERTED;
     }
 #endif
@@ -2584,34 +2775,6 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
 }
 
 #endif
-
-/* Notify direct completion of async and close the wait handle if it is no longer needed.
- * This function is a no-op (returns status as-is) if the supplied handle is NULL.
- */
-void set_async_direct_result( HANDLE *async_handle, NTSTATUS status, ULONG_PTR information, BOOL mark_pending )
-{
-    unsigned int ret;
-
-    /* if we got STATUS_ALERTED, we must have a valid async handle */
-    assert( *async_handle );
-
-    SERVER_START_REQ( set_async_direct_result )
-    {
-        req->handle       = wine_server_obj_handle( *async_handle );
-        req->status       = status;
-        req->information  = information;
-        req->mark_pending = mark_pending;
-        ret = wine_server_call( req );
-        if (ret == STATUS_SUCCESS)
-            *async_handle = wine_server_ptr_handle( reply->handle );
-    }
-    SERVER_END_REQ;
-
-    if (ret != STATUS_SUCCESS)
-        ERR( "cannot report I/O result back to server: %08x\n", ret );
-
-    return;
-}
 
 /***********************************************************************
  *           NtCreateTransaction (NTDLL.@)

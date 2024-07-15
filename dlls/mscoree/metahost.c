@@ -39,7 +39,6 @@
 #include "metahost.h"
 #include "fusion.h"
 #include "wine/list.h"
-#include "wine/heap.h"
 #include "mscoree_private.h"
 
 #include "wine/debug.h"
@@ -374,7 +373,7 @@ MonoDomain* get_root_domain(void)
 
         root_domain = mono_jit_init_version(exe_basename, "v4.0.30319");
 
-        HeapFree(GetProcessHeap(), 0, exe_basename);
+        free(exe_basename);
 
         is_mono_started = TRUE;
     }
@@ -705,7 +704,7 @@ HRESULT ICLRRuntimeInfo_GetRuntimeHost(ICLRRuntimeInfo *iface, RuntimeHost **res
 
 #ifdef __i386__
 static const WCHAR libmono2_arch_dll[] = {'\\','b','i','n','\\','l','i','b','m','o','n','o','-','2','.','0','-','x','8','6','.','d','l','l',0};
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(__aarch64__)
 static const WCHAR libmono2_arch_dll[] = {'\\','b','i','n','\\','l','i','b','m','o','n','o','-','2','.','0','-','x','8','6','_','6','4','.','d','l','l',0};
 #else
 static const WCHAR libmono2_arch_dll[] = {'\\','b','i','n','\\','l','i','b','m','o','n','o','-','2','.','0','.','d','l','l',0};
@@ -796,7 +795,7 @@ static BOOL get_mono_path_dos(const WCHAR *dir, LPWSTR path)
         return FALSE;  /* No drive letter for this directory */
 
     len = lstrlenW( dir ) + lstrlenW( basedir ) + 1;
-    if (!(dos_dir = heap_alloc( len * sizeof(WCHAR) ))) return FALSE;
+    if (!(dos_dir = malloc( len * sizeof(WCHAR) ))) return FALSE;
     lstrcpyW( dos_dir, dir );
     lstrcatW( dos_dir, basedir );
 
@@ -804,7 +803,7 @@ static BOOL get_mono_path_dos(const WCHAR *dir, LPWSTR path)
     if (ret)
         lstrcpyW(path, dos_dir);
 
-    heap_free(dos_dir);
+    free(dos_dir);
 
     return ret;
 }
@@ -828,7 +827,7 @@ static BOOL get_mono_path_unix(const char *unix_dir, LPWSTR path)
 
     ret = get_mono_path_dos( dos_dir, path);
 
-    heap_free(dos_dir);
+    HeapFree(GetProcessHeap(), 0, dos_dir);
     return ret;
 }
 
@@ -852,13 +851,13 @@ static BOOL get_mono_path_datadir(LPWSTR path)
 
     if (!wcsncmp( data_dir, unix_prefix, wcslen(unix_prefix) )) return FALSE;
     data_dir += 4;  /* skip \??\ prefix */
-    package_dir = heap_alloc( (lstrlenW(data_dir) + lstrlenW(suffix) + 1) * sizeof(WCHAR));
+    package_dir = malloc((wcslen(data_dir) + wcslen(suffix) + 1) * sizeof(WCHAR));
     lstrcpyW( package_dir, data_dir );
     lstrcatW( package_dir, suffix );
 
     ret = get_mono_path_dos(package_dir, path);
 
-    heap_free(package_dir);
+    free(package_dir);
 
     return ret;
 }
@@ -928,7 +927,7 @@ static ULONG WINAPI InstalledRuntimeEnum_Release(IEnumUnknown* iface)
 
     if (ref == 0)
     {
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
     }
 
     return ref;
@@ -1004,7 +1003,7 @@ static HRESULT WINAPI InstalledRuntimeEnum_Clone(IEnumUnknown *iface, IEnumUnkno
 
     TRACE("(%p)\n", iface);
 
-    new_enum = HeapAlloc(GetProcessHeap(), 0, sizeof(*new_enum));
+    new_enum = malloc(sizeof(*new_enum));
     if (!new_enum)
         return E_OUTOFMEMORY;
 
@@ -1182,7 +1181,7 @@ static HRESULT WINAPI CLRMetaHost_EnumerateInstalledRuntimes(ICLRMetaHost* iface
 
     TRACE("%p\n", ppEnumerator);
 
-    new_enum = HeapAlloc(GetProcessHeap(), 0, sizeof(*new_enum));
+    new_enum = malloc(sizeof(*new_enum));
     if (!new_enum)
         return E_OUTOFMEMORY;
 
@@ -1507,18 +1506,18 @@ static BOOL WINAPI parse_env_overrides(INIT_ONCE *once, void *param, void **cont
                 continue;
             }
 
-            entry = heap_alloc_zero(sizeof(*entry));
+            entry = calloc(1, sizeof(*entry));
             if (!entry)
             {
                 ERR("out of memory\n");
                 break;
             }
 
-            entry->name = heap_alloc_zero(basename_end - entry_start + 1);
+            entry->name = calloc(1, basename_end - entry_start + 1);
             if (!entry->name)
             {
                 ERR("out of memory\n");
-                heap_free(entry);
+                free(entry);
                 break;
             }
 
@@ -1633,7 +1632,7 @@ static DWORD get_assembly_search_flags(MonoAssemblyName *aname)
         return result;
     }
 
-    name_copy = heap_alloc((strlen(name) + 3) * sizeof(WCHAR));
+    name_copy = malloc((strlen(name) + 3) * sizeof(WCHAR));
     if (!name_copy)
     {
         ERR("out of memory\n");
@@ -1663,7 +1662,7 @@ static DWORD get_assembly_search_flags(MonoAssemblyName *aname)
             result = ASSEMBLY_SEARCH_DEFAULT;
     }
 
-    heap_free(name_copy);
+    free(name_copy);
     if (appkey) RegCloseKey(appkey);
     if (userkey) RegCloseKey(userkey);
 
@@ -1718,10 +1717,48 @@ static MonoAssembly* mono_assembly_try_load(WCHAR *path)
     if (!(pathA = WtoA(path))) return NULL;
 
     result = mono_assembly_open(pathA, &stat);
-    HeapFree(GetProcessHeap(), 0, pathA);
+    free(pathA);
 
     if (result) TRACE("found: %s\n", debugstr_w(path));
     return result;
+}
+
+static BOOL compile_assembly(const char *source, const char *target, char *target_path, DWORD target_path_len)
+{
+    static const char *csc = "C:\\windows\\Microsoft.NET\\Framework\\v2.0.50727\\csc.exe";
+    char cmdline[2 * MAX_PATH + 74], tmp[MAX_PATH], tmpdir[MAX_PATH], source_path[MAX_PATH];
+    STARTUPINFOA si = {.cb = sizeof(STARTUPINFOA)};
+    PROCESS_INFORMATION pi;
+    HANDLE file;
+    DWORD size;
+    BOOL ret;
+    LUID id;
+
+    if (!PathFileExistsA(csc)) return FALSE;
+    if (!AllocateLocallyUniqueId(&id)) return FALSE;
+
+    GetTempPathA(MAX_PATH, tmp);
+    if (!GetTempFileNameA(tmp, "assembly", id.LowPart, tmpdir)) return FALSE;
+    if (!CreateDirectoryA(tmpdir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return FALSE;
+
+    snprintf(source_path, MAX_PATH, "%s\\source.cs", tmpdir);
+    snprintf(target_path, target_path_len, "%s\\%s", tmpdir, target);
+
+    file = CreateFileA(source_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    ret = WriteFile(file, source, strlen(source), &size, NULL);
+    CloseHandle(file);
+    if (!ret) return FALSE;
+
+    snprintf(cmdline, ARRAY_SIZE(cmdline), "%s /t:library /out:\"%s\" \"%s\"", csc, target_path, source_path);
+    ret = CreateProcessA(csc, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    if (!ret) return FALSE;
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    return PathFileExistsA(target_path);
 }
 
 static MonoAssembly* CDECL mono_assembly_preload_hook_fn(MonoAssemblyName *aname, char **assemblies_path, void *user_data)
@@ -1756,13 +1793,15 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
     static const WCHAR dotdllW[] = {'.','d','l','l',0};
     static const WCHAR dotexeW[] = {'.','e','x','e',0};
 
+    const char *sgi = getenv("SteamGameId");
+
     stringname = mono_stringify_assembly_name(aname);
     assemblyname = mono_assembly_name_get_name(aname);
     culture = mono_assembly_name_get_culture(aname);
     if (culture)
     {
         cultureW_size = MultiByteToWideChar(CP_UTF8, 0, culture, -1, NULL, 0);
-        cultureW = HeapAlloc(GetProcessHeap(), 0, cultureW_size * sizeof(WCHAR));
+        cultureW = malloc(cultureW_size * sizeof(WCHAR));
         if (cultureW) MultiByteToWideChar(CP_UTF8, 0, culture, -1, cultureW, cultureW_size);
     }
     else cultureW = NULL;
@@ -1775,7 +1814,7 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
     if (private_path && (search_flags & ASSEMBLY_SEARCH_PRIVATEPATH) != 0)
     {
         stringnameW_size = MultiByteToWideChar(CP_UTF8, 0, assemblyname, -1, NULL, 0);
-        stringnameW = HeapAlloc(GetProcessHeap(), 0, stringnameW_size * sizeof(WCHAR));
+        stringnameW = malloc(stringnameW_size * sizeof(WCHAR));
         if (stringnameW)
         {
             MultiByteToWideChar(CP_UTF8, 0, assemblyname, -1, stringnameW, stringnameW_size);
@@ -1807,8 +1846,92 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
                 result = mono_assembly_try_load(path);
                 if (result) break;
             }
-            HeapFree(GetProcessHeap(), 0, stringnameW);
+            free(stringnameW);
             if (result) goto done;
+        }
+    }
+
+    if (!strcmp(assemblyname, "ManagedStarter"))
+    {
+        /* HACK for Mount & Blade II: Bannerlord
+         *
+         * The launcher executable uses an AssemblyResolve event handler
+         * to redirect loads of the "ManagedStarter" assembly to
+         * Bannerlord.exe. Due to Mono issue #11319, the runtime attempts
+         * to load ManagedStarter before executing the static constructor
+         * that adds this event handler. We work around this by doing the
+         * same thing in our own assembly load hook. */
+        if (sgi && !strcmp(sgi, "261550"))
+        {
+            FIXME("hack, using Bannerlord.exe\n");
+
+            result = mono_assembly_open("Bannerlord.exe", &stat);
+
+            if (result)
+                goto done;
+            else
+                ERR("Bannerlord.exe failed to load\n");
+        }
+    }
+
+    /* HACK for games which reference a type from a non-existing DLL.
+     * Native .NET framework normally gets away with it but Mono cannot
+     * due to some deeply rooted differences. */
+    if (sgi)
+    {
+        size_t i;
+
+        static const struct {
+            const char *assembly_name;
+            const char *module_name;
+            const char *appid;
+            const char *source;
+        } assembly_hacks[] = {
+            {
+                "CameraQuakeViewer",
+                "CameraQuakeViewer.dll",
+                "527280", /* Nights of Azure */
+                "namespace CQViewer { class CQMgr {} }"
+            },
+            {
+                "UnrealEdCSharp",
+                "UnrealEdCSharp.dll",
+                "317940", /* Karmaflow */
+                "namespace ContentBrowser { class IContentBrowserBackendInterface {} class Package {} } "
+            },
+            {
+                "UnrealEdCSharp",
+                "UnrealEdCSharp.dll",
+                "321360", /* Primal Carnage: Extinction */
+                "namespace ContentBrowser { class IContentBrowserBackendInterface {} class Package {} } "
+            },
+            {
+                "DockPanel",
+                "DockPanel.dll",
+                "46450", /* Grotesque Tactics: Evil Heroes  */
+                "namespace WeifenLuo.WinFormsUI { class DockPanel {} }"
+            },
+        };
+
+        for (i = 0; i < ARRAY_SIZE(assembly_hacks); ++i)
+        {
+            if (!strcmp(assemblyname, assembly_hacks[i].assembly_name) &&
+                    !strcmp(sgi, assembly_hacks[i].appid))
+            {
+                char assembly_path[MAX_PATH];
+
+                FIXME("HACK: Building %s\n", assembly_hacks[i].module_name);
+
+                if (compile_assembly(assembly_hacks[i].source, assembly_hacks[i].module_name, assembly_path, MAX_PATH))
+                    result = mono_assembly_open(assembly_path, &stat);
+                else
+                    ERR("HACK: Failed to build %s\n", assembly_hacks[i].assembly_name);
+
+                if (result)
+                    goto done;
+
+                ERR("HACK: Failed to load %s\n", assembly_hacks[i].assembly_name);
+            }
         }
     }
 
@@ -1816,14 +1939,14 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
     {
         stringnameW_size = MultiByteToWideChar(CP_UTF8, 0, stringname, -1, NULL, 0);
 
-        stringnameW = HeapAlloc(GetProcessHeap(), 0, stringnameW_size * sizeof(WCHAR));
+        stringnameW = malloc(stringnameW_size * sizeof(WCHAR));
         if (stringnameW)
         {
             MultiByteToWideChar(CP_UTF8, 0, stringname, -1, stringnameW, stringnameW_size);
 
             hr = get_file_from_strongname(stringnameW, path, MAX_PATH);
 
-            HeapFree(GetProcessHeap(), 0, stringnameW);
+            free(stringnameW);
         }
         else
             hr = E_OUTOFMEMORY;
@@ -1841,7 +1964,7 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
                 if (!result)
                     ERR("Failed to load %s, status=%u\n", debugstr_w(path), stat);
 
-                HeapFree(GetProcessHeap(), 0, pathA);
+                free(pathA);
 
                 if (result)
                 {
@@ -1881,7 +2004,7 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
     }
 
 done:
-    HeapFree(GetProcessHeap(), 0, cultureW);
+    free(cultureW);
     mono_free(stringname);
 
     return result;

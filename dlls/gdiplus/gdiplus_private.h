@@ -30,7 +30,6 @@
 #include "objbase.h"
 #include "ocidl.h"
 #include "wincodecsdk.h"
-#include "wine/heap.h"
 #include "wine/list.h"
 
 #include "gdiplus.h"
@@ -127,6 +126,10 @@ extern void calc_curve_bezier(const GpPointF *pts, REAL tension, REAL *x1,
     REAL *y1, REAL *x2, REAL *y2);
 extern void calc_curve_bezier_endp(REAL xend, REAL yend, REAL xadj, REAL yadj,
     REAL tension, REAL *x, REAL *y);
+
+extern void get_font_hfont(GpGraphics *graphics, GDIPCONST GpFont *font,
+                           GDIPCONST GpStringFormat *format, HFONT *hfont,
+                           LOGFONTW *lfw_return, GDIPCONST GpMatrix *matrix);
 
 extern void free_installed_fonts(void);
 
@@ -607,13 +610,38 @@ static inline const void *buffer_read(struct memory_buffer *mbuf, INT size)
     return NULL;
 }
 
-typedef GpStatus (*gdip_format_string_callback)(HDC hdc,
-    GDIPCONST WCHAR *string, INT index, INT length, GDIPCONST GpFont *font,
-    GDIPCONST RectF *rect, GDIPCONST GpStringFormat *format,
-    INT lineno, const RectF *bounds, INT *underlined_indexes,
-    INT underlined_index_count, void *user_data);
+/* Represents a string section and the font it should use. */
+struct gdip_font_link_section {
+    struct list entry;
+    DWORD start; /* The starting index of the string where the font applies. */
+    DWORD end; /* The end index of the string. */
+    GpFont *font;
+};
 
-GpStatus gdip_format_string(HDC hdc,
+struct gdip_font_link_info {
+    GDIPCONST GpFont *base_font;
+    struct list sections;
+};
+
+struct gdip_format_string_info {
+    GpGraphics *graphics;
+    HDC hdc;
+    GDIPCONST WCHAR *string;
+    INT index;
+    INT length;
+    struct gdip_font_link_info font_link_info;
+    GDIPCONST RectF *rect;
+    GDIPCONST GpStringFormat *format;
+    INT lineno;
+    const RectF *bounds;
+    INT *underlined_indexes;
+    INT underlined_index_count;
+    void *user_data;
+};
+
+typedef GpStatus (*gdip_format_string_callback)(struct gdip_format_string_info *info);
+
+GpStatus gdip_format_string(GpGraphics *graphics, HDC hdc,
     GDIPCONST WCHAR *string, INT length, GDIPCONST GpFont *font,
     GDIPCONST RectF *rect, GDIPCONST GpStringFormat *format, int ignore_empty_clip,
     gdip_format_string_callback callback, void *user_data);

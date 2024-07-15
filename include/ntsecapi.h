@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __WINE_NTSECAPI_H
-#define __WINE_NTSECAPI_H
+#ifndef _NTSECAPI_
+#define _NTSECAPI_
 
 #ifndef GUID_DEFINED
 # include <guiddef.h>
@@ -188,7 +188,21 @@ typedef struct _SecHandle
 
 typedef UNICODE_STRING LSA_UNICODE_STRING, *PLSA_UNICODE_STRING;
 typedef STRING LSA_STRING, *PLSA_STRING;
+
+#ifdef _NTDEF_
 typedef OBJECT_ATTRIBUTES LSA_OBJECT_ATTRIBUTES, *PLSA_OBJECT_ATTRIBUTES;
+#else
+typedef struct _LSA_OBJECT_ATTRIBUTES
+{
+    ULONG Length;
+    HANDLE RootDirectory;
+    PLSA_UNICODE_STRING ObjectName;
+    ULONG Attributes;
+    PVOID SecurityDescriptor;
+    PVOID SecurityQualityOfService;
+} LSA_OBJECT_ATTRIBUTES, *PLSA_OBJECT_ATTRIBUTES;
+#endif
+
 
 typedef PVOID LSA_HANDLE, *PLSA_HANDLE;
 typedef ULONG LSA_ENUMERATION_HANDLE, *PLSA_ENUMERATION_HANDLE;
@@ -712,4 +726,4 @@ NTSTATUS WINAPI LsaRegisterLogonProcess(PLSA_STRING,PHANDLE,PLSA_OPERATIONAL_MOD
 } /* extern "C" */
 #endif /* defined(__cplusplus) */
 
-#endif /* !defined(__WINE_NTSECAPI_H) */
+#endif /* !defined(_NTSECAPI_) */

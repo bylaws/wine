@@ -125,6 +125,14 @@ typedef union
     } unload_dll;
 } debug_event_t;
 
+
+enum context_exec_space
+{
+    EXEC_SPACE_USERMODE,
+    EXEC_SPACE_SYSCALL,
+    EXEC_SPACE_EXCEPTION,
+};
+
 /* context data */
 typedef struct
 {
@@ -172,6 +180,10 @@ typedef struct
     } ext;                       /* selected by SERVER_CTX_EXTENDED_REGISTERS */
     union
     {
+        struct { enum context_exec_space space; int __pad; } space;
+    } exec_space;                /* selected by SERVER_CTX_EXEC_SPACE */
+    union
+    {
         struct { struct { unsigned __int64 low, high; } ymm_high[16]; } regs;
     } ymm;                       /* selected by SERVER_CTX_YMM_REGISTERS */
 } context_t;
@@ -183,6 +195,7 @@ typedef struct
 #define SERVER_CTX_DEBUG_REGISTERS    0x10
 #define SERVER_CTX_EXTENDED_REGISTERS 0x20
 #define SERVER_CTX_YMM_REGISTERS      0x40
+#define SERVER_CTX_EXEC_SPACE         0x80
 
 /* structure used in sending an fd from client to server */
 struct send_fd
@@ -224,6 +237,7 @@ typedef struct
     unsigned int attribute;
     unsigned int flags;
     unsigned int show;
+    process_id_t process_group_id;
     data_size_t  curdir_len;
     data_size_t  dllpath_len;
     data_size_t  imagepath_len;
@@ -842,6 +856,7 @@ typedef union
 typedef struct
 {
     client_ptr_t   base;
+    client_ptr_t   map_addr;
     mem_size_t     stack_size;
     mem_size_t     stack_commit;
     unsigned int   entry_point;
@@ -858,6 +873,8 @@ typedef struct
     unsigned char  contains_code : 1;
     unsigned char  wine_builtin : 1;
     unsigned char  wine_fakedll : 1;
+    unsigned char  is_hybrid : 1;
+    unsigned char  padding : 4;
     unsigned char  image_flags;
     unsigned int   loader_flags;
     unsigned int   header_size;
@@ -889,6 +906,63 @@ typedef struct
     int __pad;
     lparam_t info;
 } cursor_pos_t;
+
+struct cpu_topology_override
+{
+    unsigned int cpu_count;
+    unsigned char host_cpu_id[64];
+};
+
+struct shared_cursor
+{
+    int                  x;                /* cursor position */
+    int                  y;
+    unsigned int         last_change;      /* time of last position change */
+    rectangle_t          clip;             /* cursor clip rectangle */
+};
+
+struct desktop_shared_memory
+{
+    unsigned int         seq;              /* sequence number - server updating if (seq & 1) != 0 */
+    struct shared_cursor cursor;           /* global cursor information */
+    unsigned char        keystate[256];    /* asynchronous key state */
+    thread_id_t          foreground_tid;   /* tid of the foreground thread */
+    __int64              update_serial;
+    unsigned int         flags;
+};
+typedef volatile struct desktop_shared_memory desktop_shm_t;
+
+struct queue_shared_memory
+{
+    unsigned int         seq;              /* sequence number - server updating if (seq & 1) != 0 */
+    int                  created;          /* queue has been created */
+    unsigned int         wake_bits;
+    unsigned int         changed_bits;
+    unsigned int         wake_mask;
+    unsigned int         changed_mask;
+    thread_id_t          input_tid;
+};
+typedef volatile struct queue_shared_memory queue_shm_t;
+
+struct input_shared_memory
+{
+    unsigned int         seq;              /* sequence number - server updating if (seq & 1) != 0 */
+    int                  created;
+    thread_id_t          tid;
+    user_handle_t        focus;            /* handle to the focus window */
+    user_handle_t        capture;          /* handle to the capture window */
+    user_handle_t        active;           /* handle to the active window */
+    user_handle_t        menu_owner;       /* handle to the menu owner */
+    user_handle_t        move_size;        /* handle to the moving/resizing window */
+    user_handle_t        caret;            /* handle to the caret window */
+    user_handle_t        cursor;           /* handle to the cursor */
+    rectangle_t          caret_rect;       /* caret rectangle */
+    int                  cursor_count;     /* cursor show count */
+    unsigned char        keystate[256];    /* key state */
+    int                  keystate_lock;    /* keystate is locked */
+    __int64              sync_serial;
+};
+typedef volatile struct input_shared_memory input_shm_t;
 
 /****************************************************************/
 /* Request declarations */
@@ -955,7 +1029,7 @@ typedef struct
     client_ptr_t peb;          /* PEB of new process (in process address space) */
     client_ptr_t ldt_copy;     /* address of LDT copy (in process address space) */
 @REPLY
-    client_ptr_t entry;        /* process entry point */
+    VARARG(cpu_override,cpu_topology_override); /* Overridden CPUs to host CPUs mapping. */
     int          suspend;      /* is process suspended? */
 @END
 
@@ -1038,6 +1112,7 @@ typedef struct
 /* Fetch the name of the process image */
 @REQ(get_process_image_name)
     obj_handle_t handle;           /* process handle */
+    process_id_t pid;              /* process id */
     int          win32;            /* return a win32 filename? */
 @REPLY
     data_size_t  len;              /* len in bytes required to store filename */
@@ -1083,10 +1158,12 @@ typedef struct
     int          priority;      /* thread priority level */
     int          last;          /* last thread in process */
     int          suspend_count; /* thread suspend count */
-    int          dbg_hidden;    /* thread hidden from debugger */
+    unsigned int flags;         /* GET_THREAD_INFO_FLAG_ flags */
     data_size_t  desc_len;      /* description length in bytes */
     VARARG(desc,unicode_str);   /* description string */
 @END
+#define GET_THREAD_INFO_FLAG_DBG_HIDDEN 0x01
+#define GET_THREAD_INFO_FLAG_TERMINATED 0x02
 
 
 /* Retrieve information about thread times */
@@ -1120,9 +1197,11 @@ typedef struct
 
 /* Suspend a thread */
 @REQ(suspend_thread)
-    obj_handle_t handle;       /* thread handle */
+    obj_handle_t handle;        /* thread handle */
+    obj_handle_t waited_handle; /* handle waited on */
 @REPLY
-    int          count;        /* new suspend count */
+    int          count;         /* new suspend count */
+    obj_handle_t wait_handle;   /* handle to wait on */
 @END
 
 
@@ -1611,6 +1690,14 @@ enum server_fd_type
 @END
 
 
+/* Get the address to use to map an image mapping */
+@REQ(get_image_map_address)
+    obj_handle_t handle;        /* handle to the mapping */
+@REPLY
+    client_ptr_t addr;          /* map address */
+@END
+
+
 /* Add a memory view in the current process */
 @REQ(map_view)
     obj_handle_t mapping;       /* file mapping handle */
@@ -1795,6 +1882,7 @@ struct process_info
     obj_handle_t handle;       /* process handle */
     client_ptr_t addr;         /* addr to read from */
 @REPLY
+    int unix_pid;              /* Unix pid of new process */
     VARARG(data,bytes);        /* result data */
 @END
 
@@ -1837,6 +1925,18 @@ struct process_info
 /* Flush a registry key */
 @REQ(flush_key)
     obj_handle_t hkey;         /* handle to the key */
+@REPLY
+    abstime_t   timestamp_counter; /* branch last change timestamp counter */
+    data_size_t total;             /* total length needed for data */
+    int         branch_count;      /* number of registry branches to flush */
+    VARARG(data,bytes);            /* registry data */
+@END
+
+
+/* Clear KEY_DIRTY after key flush */
+@REQ(flush_key_done)
+    abstime_t    timestamp_counter; /* timestamp counter returned from flush_key */
+    int          branch;            /* saved registry branch id */
 @END
 
 
@@ -1917,11 +2017,19 @@ struct process_info
 @END
 
 
-/* Save a registry branch to a file */
+/* Return full registry branch non-volatile data for saving */
 @REQ(save_registry)
-    obj_handle_t hkey;         /* key to save */
-    obj_handle_t file;         /* file to save to */
+    obj_handle_t hkey;  /* key to save */
+@REPLY
+    data_size_t  total; /* total length needed for data */
+    VARARG(data,bytes); /* registry data */
 @END
+enum prefix_type
+{
+    PREFIX_UNKNOWN,
+    PREFIX_32BIT,
+    PREFIX_64BIT,
+};
 
 
 /* Add a registry key change notification */
@@ -2143,6 +2251,7 @@ enum message_type
     int             new_y;
 @END
 #define SEND_HWMSG_INJECTED    0x01
+#define SEND_HWMSG_RAWINPUT    0x02
 
 
 /* Get a message from the current queue */
@@ -2163,7 +2272,6 @@ enum message_type
     int             x;         /* message x position */
     int             y;         /* message y position */
     unsigned int    time;      /* message time */
-    unsigned int    active_hooks; /* active hooks bitmap */
     data_size_t     total;     /* total size of extra data */
     VARARG(data,message_data); /* message data for sent messages */
 @END
@@ -2806,6 +2914,7 @@ enum coords_relative
     obj_handle_t handle;          /* handle to the object */
     unsigned int flags;           /* information to set/get */
     unsigned int obj_flags;       /* new object flags */
+    timeout_t    close_timeout;   /* desktop close timeout */
 @REPLY
     int          is_desktop;      /* is object a desktop? */
     unsigned int old_obj_flags;   /* old object flags */
@@ -2813,6 +2922,7 @@ enum coords_relative
 @END
 #define SET_USER_OBJECT_SET_FLAGS       1
 #define SET_USER_OBJECT_GET_FULL_NAME   2
+#define SET_USER_OBJECT_SET_CLOSE_TIMEOUT 4
 
 
 /* Register a hotkey */
@@ -2853,12 +2963,9 @@ enum coords_relative
     user_handle_t  focus;         /* handle to the focus window */
     user_handle_t  capture;       /* handle to the capture window */
     user_handle_t  active;        /* handle to the active window */
-    user_handle_t  foreground;    /* handle to the global foreground window */
     user_handle_t  menu_owner;    /* handle to the menu owner */
     user_handle_t  move_size;     /* handle to the moving/resizing window */
     user_handle_t  caret;         /* handle to the caret window */
-    user_handle_t  cursor;        /* handle to the cursor */
-    int            show_count;    /* cursor show count */
     rectangle_t    rect;          /* caret rectangle */
 @END
 
@@ -2904,6 +3011,7 @@ enum coords_relative
 /* Set the current thread active window */
 @REQ(set_active_window)
     user_handle_t  handle;        /* handle to the active window */
+    unsigned int   internal_msg;  /* set active window internal message */
 @REPLY
     user_handle_t  previous;      /* handle to the previous active window */
 @END
@@ -2957,6 +3065,13 @@ enum caret_state
     CARET_STATE_TOGGLE,     /* toggle current state */
     CARET_STATE_ON_IF_MOVED /* on if the position differs, unchanged otherwise */
 };
+
+
+/* get thread active hooks */
+@REQ(get_active_hooks)
+@REPLY
+    unsigned int   active_hooks;   /* active hooks bitmap */
+@END
 
 
 /* Set a window hook */
@@ -3186,6 +3301,26 @@ enum caret_state
 @END
 
 
+/* Create a security token */
+@REQ(create_token)
+    struct luid    token_id;
+    unsigned int   access;         /* access rights to the new token */
+    int            primary;        /* is the new token to be a primary one? */
+    int            impersonation_level; /* impersonation level of the new token */
+    abstime_t      expire;         /* expiration time */
+    int            group_count;
+    int            primary_group;
+    int            priv_count;
+    /* VARARG(objattr,object_attributes);  */
+    /* VARARG(user,sid); */
+    /* VARARG(groups,sid); */
+    /* VARARG(privs,luid_attr); */
+    /* VARARG(dacl,acl); */
+@REPLY
+    obj_handle_t   token;    /* handle to the token */
+@END
+
+
 /* Open a security token */
 @REQ(open_token)
     obj_handle_t   handle;    /* handle to the thread or process */
@@ -3324,11 +3459,13 @@ enum caret_state
 
 struct handle_info
 {
+    client_ptr_t object;
     process_id_t owner;
     obj_handle_t handle;
     unsigned int access;
     unsigned int attributes;
     unsigned int type;
+    unsigned int __pad;
 };
 
 /* Return a list of all opened handles */
@@ -3555,6 +3692,7 @@ struct handle_info
 /* Make the current process a system process */
 @REQ(make_process_system)
     obj_handle_t handle;          /* handle to the process */
+    timeout_t    desktop_close_timeout; /* set timeout for desktop close */
 @REPLY
     obj_handle_t event;           /* event signaled when all user processes have exited */
 @END
@@ -3617,6 +3755,7 @@ struct handle_info
 /* get completion from completion port queue */
 @REQ(remove_completion)
     obj_handle_t handle;          /* port handle */
+    int          waited;          /* port was just successfully waited on */
 @REPLY
     apc_param_t   ckey;           /* completion key */
     apc_param_t   cvalue;         /* completion value */
@@ -3671,7 +3810,7 @@ struct handle_info
     obj_handle_t rootdir;         /* root directory */
     data_size_t  namelen;         /* length of NT name in bytes */
     int          link;            /* link instead of renaming */
-    int          replace;         /* replace an existing file? */
+    unsigned int flags;           /* FILE_RENAME_* flags */
     VARARG(name,unicode_str,namelen); /* NT name */
     VARARG(filename,string);      /* new file name */
 @END
@@ -3752,9 +3891,12 @@ struct handle_info
 @REQ(get_rawinput_buffer)
     data_size_t rawinput_size; /* size of RAWINPUT structure */
     data_size_t buffer_size;   /* size of output buffer */
+    int         clear_qs_rawinput;
+    int         __pad;
 @REPLY
     data_size_t next_size; /* minimum size to get next message data */
     unsigned int count;
+    unsigned int last_message_time;
     VARARG(data,bytes);
 @END
 
@@ -3840,7 +3982,6 @@ struct handle_info
     obj_handle_t handle;       /* process handle */
 @END
 
-
 /* Iterate thread list for process */
 @REQ(get_next_thread)
     obj_handle_t process;      /* process handle */
@@ -3850,4 +3991,118 @@ struct handle_info
     unsigned int flags;        /* controls iteration direction */
 @REPLY
     obj_handle_t handle;       /* next thread handle */
+@END
+
+enum esync_type
+{
+    ESYNC_SEMAPHORE = 1,
+    ESYNC_AUTO_EVENT,
+    ESYNC_MANUAL_EVENT,
+    ESYNC_MUTEX,
+    ESYNC_AUTO_SERVER,
+    ESYNC_MANUAL_SERVER,
+    ESYNC_QUEUE,
+};
+
+/* Create a new eventfd-based synchronization object */
+@REQ(create_esync)
+    unsigned int access;        /* wanted access rights */
+    int          initval;       /* initial value */
+    int          type;          /* type of esync object */
+    int          max;           /* maximum count on a semaphore */
+    VARARG(objattr,object_attributes); /* object attributes */
+@REPLY
+    obj_handle_t handle;        /* handle to the object */
+    int          type;          /* actual type (may be different for events) */
+    unsigned int shm_idx;
+@END
+
+@REQ(open_esync)
+    unsigned int access;        /* wanted access rights */
+    unsigned int attributes;    /* object attributes */
+    obj_handle_t rootdir;       /* root directory */
+    int          type;          /* type of esync object (above) */
+    VARARG(name,unicode_str);   /* object name */
+@REPLY
+    obj_handle_t handle;        /* handle to the event */
+    int          type;          /* type of esync object (above) */
+    unsigned int shm_idx;       /* this object's index into the shm section */
+@END
+
+/* Retrieve the esync fd for an object. */
+@REQ(get_esync_fd)
+    obj_handle_t handle;        /* handle to the object */
+@REPLY
+    int          type;
+    unsigned int shm_idx;
+@END
+
+/* Notify the server that we are doing a message wait or done with one. */
+@REQ(esync_msgwait)
+    int          in_msgwait;    /* are we in a message wait? */
+@END
+
+/* Retrieve the fd to wait on for user APCs. */
+@REQ(get_esync_apc_fd)
+@END
+
+#define FSYNC_SHM_PAGE_SIZE 0x10000
+
+enum fsync_type
+{
+    FSYNC_SEMAPHORE = 1,
+    FSYNC_AUTO_EVENT,
+    FSYNC_MANUAL_EVENT,
+    FSYNC_MUTEX,
+    FSYNC_AUTO_SERVER,
+    FSYNC_MANUAL_SERVER,
+    FSYNC_QUEUE,
+};
+
+/* Create a new futex-based synchronization object */
+@REQ(create_fsync)
+    unsigned int access;        /* wanted access rights */
+    int low;                    /* initial value of low word */
+    int high;                   /* initial value of high word */
+    int type;                   /* type of fsync object */
+    VARARG(objattr,object_attributes); /* object attributes */
+@REPLY
+    obj_handle_t handle;        /* handle to the object */
+    int type;                   /* type of fsync object */
+    unsigned int shm_idx;       /* this object's index into the shm section */
+@END
+
+/* Open an fsync object */
+@REQ(open_fsync)
+    unsigned int access;        /* wanted access rights */
+    unsigned int attributes;    /* object attributes */
+    obj_handle_t rootdir;       /* root directory */
+    int          type;          /* type of fsync object */
+    VARARG(name,unicode_str);   /* object name */
+@REPLY
+    obj_handle_t handle;        /* handle to the event */
+    int          type;          /* type of fsync object */
+    unsigned int shm_idx;       /* this object's index into the shm section */
+@END
+
+/* Retrieve the shm index for an object. */
+@REQ(get_fsync_idx)
+    obj_handle_t handle;        /* handle to the object */
+@REPLY
+    int          type;
+    unsigned int shm_idx;
+@END
+
+@REQ(fsync_msgwait)
+    int          in_msgwait;    /* are we in a message wait? */
+@END
+
+@REQ(get_fsync_apc_idx)
+@REPLY
+    unsigned int shm_idx;
+@END
+
+@REQ(fsync_free_shm_idx)
+    unsigned int shm_idx;
+@REPLY
 @END

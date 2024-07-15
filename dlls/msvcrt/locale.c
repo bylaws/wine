@@ -68,7 +68,7 @@ __lc_time_data cloc_time_data =
 #if _MSVCR_VER < 110
     MAKELCID(LANG_ENGLISH, SORT_DEFAULT),
 #endif
-    1, 0,
+    1, -1,
 #if _MSVCR_VER == 0 || _MSVCR_VER >= 100
     {{L"Sun", L"Mon", L"Tue", L"Wed", L"Thu", L"Fri", L"Sat",
       L"Sunday", L"Monday", L"Tuesday", L"Wednesday", L"Thursday", L"Friday", L"Saturday",
@@ -2036,6 +2036,7 @@ char* CDECL setlocale(int category, const char* locale)
 {
     thread_data_t *data = msvcrt_get_thread_data();
     pthreadlocinfo locinfo = get_locinfo(), newlocinfo;
+    int locale_flags;
 
     if(category<LC_MIN || category>LC_MAX)
         return NULL;
@@ -2047,7 +2048,11 @@ char* CDECL setlocale(int category, const char* locale)
         return locinfo->lc_category[category].locale;
     }
 
+    /* Make sure that locinfo is not updated by e.g. stricmp function */
+    locale_flags = data->locale_flags;
+    data->locale_flags |= LOCALE_THREAD;
     newlocinfo = create_locinfo(category, locale, locinfo);
+    data->locale_flags = locale_flags;
     if(!newlocinfo) {
         WARN("%d %s failed\n", category, locale);
         return NULL;

@@ -371,7 +371,7 @@ enum TreeScope {
     TreeScope_Descendants = 0x04,
     TreeScope_Parent      = 0x08,
     TreeScope_Ancestors   = 0x10,
-    TreeScope_SubTree     = TreeScope_Element | TreeScope_Children | TreeScope_Descendants,
+    TreeScope_Subtree     = TreeScope_Element | TreeScope_Children | TreeScope_Descendants,
 };
 
 enum PropertyConditionFlags {
@@ -558,6 +558,8 @@ HRESULT WINAPI UiaAddEvent(HUIANODE huianode, EVENTID event_id, UiaEventCallback
 HRESULT WINAPI UiaRemoveEvent(HUIAEVENT huiaevent);
 HRESULT WINAPI UiaEventAddWindow(HUIAEVENT huiaevent, HWND hwnd);
 HRESULT WINAPI UiaEventRemoveWindow(HUIAEVENT huiaevent, HWND hwnd);
+BOOL WINAPI UiaHasServerSideProvider(HWND hwnd);
+BOOL WINAPI UiaClientsAreListening(void);
 
 #ifdef __cplusplus
 }

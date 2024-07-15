@@ -73,6 +73,21 @@ coclass CWMAEncMediaObject {}
 coclass AACMFTEncoder {}
 
 [
+    uuid(01f36ce2-0907-4d8b-979d-f151be91c883)
+]
+coclass CFrameRateConvertDmo {}
+
+[
+    uuid(1ea1ea14-48f4-4054-ad1a-e8aee10ac805)
+]
+coclass CResizerDMO {}
+
+[
+    uuid(798059f0-89ca-4160-b325-aeb48efe4f9a)
+]
+coclass CColorControlDmo {}
+
+[
     uuid(98230571-0087-4204-b020-3282538e57d3)
 ]
 coclass CColorConvertDMO {}
@@ -91,3 +106,16 @@ coclass CWMVDecMediaObject {}
     uuid(7e320092-596a-41b2-bbeb-175d10504eb6)
 ]
 coclass CWMVXEncMediaObject {}
+
+typedef float ChMtxType;
+
+[
+    local,
+    object,
+    uuid(e7e9984f-f09f-4da4-903f-6e2e0efe56b5),
+]
+interface IWMResamplerProps : IUnknown
+{
+    HRESULT SetHalfFilterLength(LONG length);
+    HRESULT SetUserChannelMtx(ChMtxType *conversion_matrix);
+}

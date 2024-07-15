@@ -24,13 +24,14 @@
 
 #include <stdint.h>
 #include "wine/debug.h"
-#include "wine/heap.h"
 #include "wine/rbtree.h"
 
 #define COBJMACROS
 #include "d3dx9.h"
 
 #define ULONG64_MAX (~(ULONG64)0)
+
+#define FOURCC_TX_1 0x54580100
 
 struct vec4
 {

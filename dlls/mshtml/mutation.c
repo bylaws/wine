@@ -313,8 +313,8 @@ static nsresult run_end_load(HTMLDocumentNode *This, nsISupports *arg1, nsISuppo
     bind_event_scripts(This);
 
     if(This->window == window) {
-        window->performance_timing->dom_interactive_time = get_time_stamp();
-        set_ready_state(This->outer_window, READYSTATE_INTERACTIVE);
+        window->dom_interactive_time = get_time_stamp();
+        set_ready_state(This->window->base.outer_window, READYSTATE_INTERACTIVE);
     }
     IHTMLWindow2_Release(&window->base.IHTMLWindow2_iface);
     return NS_OK;
@@ -408,6 +408,38 @@ DWORD get_compat_mode_version(compat_mode_t compat_mode)
     return 0;
 }
 
+static void setup_doc_proxy(HTMLDocumentNode *doc)
+{
+    HTMLOuterWindow *outer_window = doc->window && doc->window->base.outer_window ? doc->window->base.outer_window : doc->doc_obj->window;
+    HTMLInnerWindow *window = outer_window->base.inner_window;
+
+    /* If stray document while inner window not attached yet, let update_window_doc handle it. */
+    if(doc->window && doc->window != window)
+        return;
+
+    init_proxies(window);
+
+    if(!doc->node.event_target.dispex.proxy) {
+        IWineDispatchProxyCbPrivate *proxy = window->event_target.dispex.proxy;
+        if(proxy) {
+            HRESULT hres = proxy->lpVtbl->InitProxy(proxy, (IDispatch*)&doc->node.event_target.dispex.IDispatchEx_iface);
+            if(FAILED(hres))
+                ERR("InitProxy failed: %08lx\n", hres);
+        }
+    }
+}
+
+static void update_location_dispex(HTMLDocumentNode *doc)
+{
+    HTMLOuterWindow *outer_window = doc->window->base.outer_window;
+
+    if(outer_window && outer_window->location) {
+        if(outer_window->location->dispex.prototype)
+            IDispatchEx_Release(&outer_window->location->dispex.prototype->dispex.IDispatchEx_iface);
+        outer_window->location->dispex.prototype = get_legacy_prototype(doc->window, PROTO_ID_HTMLLocation, min(doc->document_mode, COMPAT_MODE_IE8));
+    }
+}
+
 /*
  * We may change document mode only in early stage of document lifetime.
  * Later attempts will not have an effect.
@@ -421,6 +453,15 @@ compat_mode_t lock_document_mode(HTMLDocumentNode *doc)
 
         if(doc->html_document)
             nsIDOMHTMLDocument_SetIECompatMode(doc->html_document, get_compat_mode_version(doc->document_mode));
+
+        /* Setup the proxy immediately since mode is decided. Proxies delegate the
+           methods so we can't rely on the delay init of the dispex to set them up. */
+        if(doc->document_mode >= COMPAT_MODE_IE9)
+            setup_doc_proxy(doc);
+
+        /* location is special case since it's tied to the outer window */
+        if(doc->window)
+            update_location_dispex(doc);
     }
 
     return doc->document_mode;
@@ -1080,7 +1121,6 @@ void init_mutation(nsIComponentManager *component_manager)
 struct mutation_observer {
     IWineMSHTMLMutationObserver IWineMSHTMLMutationObserver_iface;
 
-    LONG ref;
     DispatchEx dispex;
     IDispatch *callback;
 };
@@ -1093,44 +1133,19 @@ static inline struct mutation_observer *impl_from_IWineMSHTMLMutationObserver(IW
 static HRESULT WINAPI MutationObserver_QueryInterface(IWineMSHTMLMutationObserver *iface, REFIID riid, void **ppv)
 {
     struct mutation_observer *This = impl_from_IWineMSHTMLMutationObserver(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid) || IsEqualGUID(&IID_IWineMSHTMLMutationObserver, riid)) {
-        *ppv = &This->IWineMSHTMLMutationObserver_iface;
-    } else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    } else {
-        WARN("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        *ppv = NULL;
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI MutationObserver_AddRef(IWineMSHTMLMutationObserver *iface)
 {
     struct mutation_observer *This = impl_from_IWineMSHTMLMutationObserver(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI MutationObserver_Release(IWineMSHTMLMutationObserver *iface)
 {
     struct mutation_observer *This = impl_from_IWineMSHTMLMutationObserver(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI MutationObserver_GetTypeInfoCount(IWineMSHTMLMutationObserver *iface, UINT *pctinfo)
@@ -1215,6 +1230,23 @@ static inline struct mutation_observer *mutation_observer_from_DispatchEx(Dispat
     return CONTAINING_RECORD(iface, struct mutation_observer, dispex);
 }
 
+static void *mutation_observer_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    struct mutation_observer *This = mutation_observer_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IWineMSHTMLMutationObserver, riid))
+        return &This->IWineMSHTMLMutationObserver_iface;
+
+    return NULL;
+}
+
+static void mutation_observer_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    struct mutation_observer *This = mutation_observer_from_DispatchEx(dispex);
+    if(This->callback)
+        note_cc_edge((nsISupports*)This->callback, "callback", cb);
+}
+
 static void mutation_observer_unlink(DispatchEx *dispex)
 {
     struct mutation_observer *This = mutation_observer_from_DispatchEx(dispex);
@@ -1228,27 +1260,30 @@ static void mutation_observer_destructor(DispatchEx *dispex)
 }
 
 static const dispex_static_data_vtbl_t mutation_observer_dispex_vtbl = {
-    mutation_observer_destructor,
-    mutation_observer_unlink
+    .query_interface  = mutation_observer_query_interface,
+    .destructor       = mutation_observer_destructor,
+    .traverse         = mutation_observer_traverse,
+    .unlink           = mutation_observer_unlink
 };
 
 static const tid_t mutation_observer_iface_tids[] = {
     IWineMSHTMLMutationObserver_tid,
     0
 };
-static dispex_static_data_t mutation_observer_dispex = {
-    L"MutationObserver",
+dispex_static_data_t mutation_observer_dispex = {
+    "MutationObserver",
     &mutation_observer_dispex_vtbl,
+    PROTO_ID_MutationObserver,
     IWineMSHTMLMutationObserver_tid,
     mutation_observer_iface_tids
 };
 
-static HRESULT create_mutation_observer(compat_mode_t compat_mode, IDispatch *callback,
+static HRESULT create_mutation_observer(HTMLInnerWindow *window, IDispatch *callback,
                                         IWineMSHTMLMutationObserver **ret)
 {
     struct mutation_observer *obj;
 
-    TRACE("(compat_mode = %d, callback = %p, ret = %p)\n", compat_mode, callback, ret);
+    TRACE("(window = %p, callback = %p, ret = %p)\n", window, callback, ret);
 
     obj = calloc(1, sizeof(*obj));
     if(!obj)
@@ -1258,9 +1293,7 @@ static HRESULT create_mutation_observer(compat_mode_t compat_mode, IDispatch *ca
     }
 
     obj->IWineMSHTMLMutationObserver_iface.lpVtbl = &WineMSHTMLMutationObserverVtbl;
-    obj->ref = 1;
-    init_dispatch(&obj->dispex, (IUnknown*)&obj->IWineMSHTMLMutationObserver_iface,
-                  &mutation_observer_dispex, compat_mode);
+    init_dispatch(&obj->dispex, &mutation_observer_dispex, window, dispex_compat_mode(&window->event_target.dispex));
 
     IDispatch_AddRef(callback);
     obj->callback = callback;
@@ -1268,83 +1301,16 @@ static HRESULT create_mutation_observer(compat_mode_t compat_mode, IDispatch *ca
     return S_OK;
 }
 
-struct mutation_observer_ctor {
-    IUnknown IUnknown_iface;
-    DispatchEx dispex;
-
-    LONG ref;
-};
-
-static inline struct mutation_observer_ctor *mutation_observer_ctor_from_IUnknown(IUnknown *iface)
+static inline struct global_ctor *ctor_from_DispatchEx(DispatchEx *iface)
 {
-    return CONTAINING_RECORD(iface, struct mutation_observer_ctor, IUnknown_iface);
-}
-
-static inline struct mutation_observer_ctor *mutation_observer_ctor_from_DispatchEx(DispatchEx *iface)
-{
-    return CONTAINING_RECORD(iface, struct mutation_observer_ctor, dispex);
-}
-
-static HRESULT WINAPI mutation_observer_ctor_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
-{
-    struct mutation_observer_ctor *This = mutation_observer_ctor_from_IUnknown(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IUnknown_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        WARN("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        *ppv = NULL;
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
-}
-
-static ULONG WINAPI mutation_observer_ctor_AddRef(IUnknown *iface)
-{
-    struct mutation_observer_ctor *This = mutation_observer_ctor_from_IUnknown(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
-}
-
-static ULONG WINAPI mutation_observer_ctor_Release(IUnknown *iface)
-{
-    struct mutation_observer_ctor *This = mutation_observer_ctor_from_IUnknown(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
-}
-
-static const IUnknownVtbl mutation_observer_ctor_vtbl = {
-    mutation_observer_ctor_QueryInterface,
-    mutation_observer_ctor_AddRef,
-    mutation_observer_ctor_Release,
-};
-
-static void mutation_observer_ctor_destructor(DispatchEx *dispex)
-{
-    struct mutation_observer_ctor *This = mutation_observer_ctor_from_DispatchEx(dispex);
-    free(This);
+    return CONTAINING_RECORD(iface, struct global_ctor, dispex);
 }
 
 static HRESULT mutation_observer_ctor_value(DispatchEx *dispex, LCID lcid,
         WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei,
         IServiceProvider *caller)
 {
-    struct mutation_observer_ctor *This = mutation_observer_ctor_from_DispatchEx(dispex);
+    struct global_ctor *This = ctor_from_DispatchEx(dispex);
     VARIANT *callback;
     IWineMSHTMLMutationObserver *mutation_observer;
     HRESULT hres;
@@ -1360,8 +1326,7 @@ static HRESULT mutation_observer_ctor_value(DispatchEx *dispex, LCID lcid,
     case DISPATCH_METHOD:
         break;
     default:
-        FIXME("flags %x is not supported\n", flags);
-        return E_NOTIMPL;
+        return global_ctor_value(dispex, lcid, flags, params, res, ei, caller);
     }
 
     if (argc < 1)
@@ -1376,8 +1341,7 @@ static HRESULT mutation_observer_ctor_value(DispatchEx *dispex, LCID lcid,
     if (!res)
         return S_OK;
 
-    hres = create_mutation_observer(dispex_compat_mode(&This->dispex), V_DISPATCH(callback),
-                                    &mutation_observer);
+    hres = create_mutation_observer(This->window, V_DISPATCH(callback), &mutation_observer);
     if (FAILED(hres))
         return hres;
 
@@ -1388,40 +1352,20 @@ static HRESULT mutation_observer_ctor_value(DispatchEx *dispex, LCID lcid,
 }
 
 static dispex_static_data_vtbl_t mutation_observer_ctor_dispex_vtbl = {
-    mutation_observer_ctor_destructor,
-    NULL,
-    mutation_observer_ctor_value
+    .destructor       = global_ctor_destructor,
+    .traverse         = global_ctor_traverse,
+    .unlink           = global_ctor_unlink,
+    .value            = mutation_observer_ctor_value,
+    .get_dispid       = legacy_ctor_get_dispid,
+    .get_name         = legacy_ctor_get_name,
+    .invoke           = legacy_ctor_invoke,
+    .delete           = legacy_ctor_delete
 };
 
-static const tid_t mutation_observer_ctor_iface_tids[] = {
-    0
-};
-
-static dispex_static_data_t mutation_observer_ctor_dispex = {
-    L"Function",
+dispex_static_data_t mutation_observer_ctor_dispex = {
+    "Function",
     &mutation_observer_ctor_dispex_vtbl,
+    PROTO_ID_NULL,
     NULL_tid,
-    mutation_observer_ctor_iface_tids
+    no_iface_tids
 };
-
-HRESULT create_mutation_observer_ctor(compat_mode_t compat_mode, IDispatch **ret)
-{
-    struct mutation_observer_ctor *obj;
-
-    TRACE("(compat_mode = %d, ret = %p)\n", compat_mode, ret);
-
-    obj = calloc(1, sizeof(*obj));
-    if(!obj)
-    {
-        ERR("No memory.\n");
-        return E_OUTOFMEMORY;
-    }
-
-    obj->IUnknown_iface.lpVtbl = &mutation_observer_ctor_vtbl;
-    obj->ref = 1;
-    init_dispatch(&obj->dispex, (IUnknown*)&obj->IUnknown_iface,
-                  &mutation_observer_ctor_dispex, compat_mode);
-
-    *ret = (IDispatch *)&obj->dispex.IDispatchEx_iface;
-    return S_OK;
-}

@@ -84,9 +84,9 @@ static ULONG WINAPI uia_or_condition_Release(IUIAutomationOrCondition *iface)
             }
         }
 
-        heap_free(uia_or_condition->child_ifaces);
-        heap_free(uia_or_condition->condition.ppConditions);
-        heap_free(uia_or_condition);
+        free(uia_or_condition->child_ifaces);
+        free(uia_or_condition->condition.ppConditions);
+        free(uia_or_condition);
     }
 
     return ref;
@@ -164,21 +164,21 @@ static HRESULT create_uia_or_condition_iface(IUIAutomationCondition **out_cond, 
 
     *out_cond = NULL;
 
-    uia_or_condition = heap_alloc_zero(sizeof(*uia_or_condition));
+    uia_or_condition = calloc(1, sizeof(*uia_or_condition));
     if (!uia_or_condition)
         return E_OUTOFMEMORY;
 
     uia_or_condition->IUIAutomationOrCondition_iface.lpVtbl = &uia_or_condition_vtbl;
     uia_or_condition->ref = 1;
 
-    uia_or_condition->child_ifaces = heap_alloc_zero(sizeof(*in_conds) * in_cond_count);
+    uia_or_condition->child_ifaces = calloc(in_cond_count, sizeof(*in_conds));
     if (!uia_or_condition->child_ifaces)
     {
         IUIAutomationOrCondition_Release(&uia_or_condition->IUIAutomationOrCondition_iface);
         return E_OUTOFMEMORY;
     }
 
-    uia_or_condition->condition.ppConditions = heap_alloc_zero(sizeof(*uia_or_condition->condition.ppConditions) * in_cond_count);
+    uia_or_condition->condition.ppConditions = calloc(in_cond_count, sizeof(*uia_or_condition->condition.ppConditions));
     if (!uia_or_condition->condition.ppConditions)
     {
         IUIAutomationOrCondition_Release(&uia_or_condition->IUIAutomationOrCondition_iface);
@@ -253,7 +253,7 @@ static ULONG WINAPI uia_not_condition_Release(IUIAutomationNotCondition *iface)
     if (!ref)
     {
         IUIAutomationCondition_Release(uia_not_condition->child_iface);
-        heap_free(uia_not_condition);
+        free(uia_not_condition);
     }
 
     return ref;
@@ -295,7 +295,7 @@ static HRESULT create_uia_not_condition_iface(IUIAutomationCondition **out_cond,
     if (FAILED(hr))
         return hr;
 
-    uia_not_condition = heap_alloc_zero(sizeof(*uia_not_condition));
+    uia_not_condition = calloc(1, sizeof(*uia_not_condition));
     if (!uia_not_condition)
         return E_OUTOFMEMORY;
 
@@ -357,7 +357,7 @@ static ULONG WINAPI uia_property_condition_Release(IUIAutomationPropertyConditio
     if (!ref)
     {
         VariantClear(&uia_property_condition->condition.Value);
-        heap_free(uia_property_condition);
+        free(uia_property_condition);
     }
 
     return ref;
@@ -445,7 +445,7 @@ static HRESULT create_uia_property_condition_iface(IUIAutomationCondition **out_
         return E_NOTIMPL;
     }
 
-    uia_property_condition = heap_alloc_zero(sizeof(*uia_property_condition));
+    uia_property_condition = calloc(1, sizeof(*uia_property_condition));
     if (!uia_property_condition)
         return E_OUTOFMEMORY;
 
@@ -504,7 +504,7 @@ static ULONG WINAPI uia_bool_condition_Release(IUIAutomationBoolCondition *iface
 
     TRACE("%p, refcount %ld\n", uia_bool_condition, ref);
     if (!ref)
-        heap_free(uia_bool_condition);
+        free(uia_bool_condition);
 
     return ref;
 }
@@ -540,7 +540,7 @@ static HRESULT create_uia_bool_condition_iface(IUIAutomationCondition **out_cond
     if (!out_cond)
         return E_POINTER;
 
-    uia_bool_condition = heap_alloc_zero(sizeof(*uia_bool_condition));
+    uia_bool_condition = calloc(1, sizeof(*uia_bool_condition));
     if (!uia_bool_condition)
         return E_OUTOFMEMORY;
 
@@ -673,8 +673,8 @@ static ULONG WINAPI uia_cache_request_Release(IUIAutomationCacheRequest *iface)
     if (!ref)
     {
         IUIAutomationCondition_Release(uia_cache_request->view_condition);
-        heap_free(uia_cache_request->prop_ids);
-        heap_free(uia_cache_request);
+        free(uia_cache_request->prop_ids);
+        free(uia_cache_request);
     }
 
     return ref;
@@ -743,7 +743,7 @@ static HRESULT WINAPI uia_cache_request_put_TreeScope(IUIAutomationCacheRequest 
 
     TRACE("%p, %#x\n", iface, scope);
 
-    if (!scope || (scope & ~TreeScope_SubTree))
+    if (!scope || (scope & ~TreeScope_Subtree))
         return E_INVALIDARG;
 
     if ((scope & TreeScope_Children) || (scope & TreeScope_Descendants))
@@ -861,7 +861,7 @@ static HRESULT create_uia_cache_request_iface(IUIAutomationCacheRequest **out_ca
     if (FAILED(hr))
         return hr;
 
-    uia_cache_request = heap_alloc_zero(sizeof(*uia_cache_request));
+    uia_cache_request = calloc(1, sizeof(*uia_cache_request));
     if (!uia_cache_request)
     {
         IUIAutomationCondition_Release(view_condition);
@@ -903,6 +903,7 @@ static HRESULT get_uia_cache_request_struct_from_iface(IUIAutomationCacheRequest
  */
 static struct uia_com_event_handlers
 {
+    struct rb_tree handler_event_id_map;
     struct rb_tree handler_map;
 
     LONG handler_count;
@@ -916,6 +917,22 @@ static CRITICAL_SECTION_DEBUG com_event_handlers_cs_debug =
       0, 0, { (DWORD_PTR)(__FILE__ ": com_event_handlers_cs") }
 };
 static CRITICAL_SECTION com_event_handlers_cs = { &com_event_handlers_cs_debug, -1, 0, 0, 0, 0 };
+
+struct uia_event_handler_event_id_map_entry
+{
+    struct rb_entry entry;
+    int event_id;
+
+    struct list handlers_list;
+};
+
+static int uia_com_event_handler_event_id_compare(const void *key, const struct rb_entry *entry)
+{
+    struct uia_event_handler_event_id_map_entry *event_entry = RB_ENTRY_VALUE(entry, struct uia_event_handler_event_id_map_entry, entry);
+    int event_id = *((int *)key);
+
+    return (event_entry->event_id > event_id) - (event_entry->event_id < event_id);
+}
 
 struct uia_event_handler_identifier {
     IUnknown *handler_iface;
@@ -932,6 +949,9 @@ struct uia_event_handler_map_entry
     int event_id;
 
     struct list handlers_list;
+
+    struct uia_event_handler_event_id_map_entry *handler_event_id_map;
+    struct list handler_event_id_map_list_entry;
 };
 
 static int uia_com_event_handler_id_compare(const void *key, const struct rb_entry *entry)
@@ -954,9 +974,343 @@ struct uia_com_event {
     HUIAEVENT event;
     BOOL from_cui8;
 
+    struct rb_tree focus_hwnd_map;
     struct list event_handler_map_list_entry;
     struct uia_event_handler_map_entry *handler_map;
 };
+
+static HRESULT uia_com_focus_win_event_callback(struct uia_event *event, void *user_data)
+{
+    struct uia_node *node = impl_from_IWineUiaNode((IWineUiaNode *)user_data);
+    VARIANT v, v2;
+    HRESULT hr;
+
+    /* Only match desktop events. */
+    if (!event->desktop_subtree_event)
+        return S_OK;
+
+    VariantInit(&v);
+    VariantInit(&v2);
+
+    hr = create_node_from_node_provider(&node->IWineUiaNode_iface, 0, PROV_METHOD_FLAG_RETURN_NODE_LRES, &v);
+    if (FAILED(hr))
+    {
+        WARN("Failed to create new node lres with hr %#lx\n", hr);
+        return hr;
+    }
+
+    if (V_VT(&v) == VT_I4)
+    {
+        hr = IWineUiaEvent_raise_event(&event->IWineUiaEvent_iface, v, v2);
+        if (FAILED(hr))
+        {
+            WARN("raise_event failed with hr %#lx\n", hr);
+            uia_node_lresult_release(V_I4(&v));
+        }
+    }
+    VariantClear(&v);
+
+    return hr;
+}
+
+static BOOL uia_com_focus_handler_advise_node(struct uia_com_event *event, HUIANODE node, HWND hwnd)
+{
+    HRESULT hr;
+
+    hr = uia_event_advise_node((struct uia_event *)event->event, node);
+    if (FAILED(hr))
+    {
+        WARN("uia_event_advise_node failed with hr %#lx\n", hr);
+        goto exit;
+    }
+
+    hr = uia_hwnd_map_add_hwnd(&event->focus_hwnd_map, hwnd);
+    if (FAILED(hr))
+        WARN("Failed to add hwnd for focus winevent, hr %#lx\n", hr);
+
+exit:
+    return SUCCEEDED(hr);
+}
+
+static void uia_com_focus_win_event_handler(HUIANODE node, HWND hwnd, struct uia_event_handler_event_id_map_entry *event_id_map)
+{
+    struct uia_event_handler_map_entry *entry;
+    HRESULT hr;
+    VARIANT v;
+
+    LIST_FOR_EACH_ENTRY(entry, &event_id_map->handlers_list, struct uia_event_handler_map_entry, handler_event_id_map_list_entry)
+    {
+        struct uia_com_event *event;
+
+        LIST_FOR_EACH_ENTRY(event, &entry->handlers_list, struct uia_com_event, event_handler_map_list_entry)
+        {
+            if (uia_hwnd_map_check_hwnd(&event->focus_hwnd_map, hwnd) ||
+                    !uia_com_focus_handler_advise_node(event, node, hwnd))
+                continue;
+
+            hr = get_focus_from_node_provider((IWineUiaNode *)node, 0, PROV_METHOD_FLAG_RETURN_NODE_LRES, &v);
+            if (V_VT(&v) == VT_I4)
+            {
+                HUIANODE focus_node = NULL;
+
+                hr = uia_node_from_lresult(V_I4(&v), &focus_node, NODE_FLAG_IGNORE_CLIENTSIDE_HWND_PROVS);
+                if (SUCCEEDED(hr))
+                {
+                    hr = uia_event_for_each(UIA_AutomationFocusChangedEventId, uia_com_focus_win_event_callback,
+                            (void *)focus_node, TRUE);
+                    if (FAILED(hr))
+                        WARN("uia_event_for_each on focus_node failed with hr %#lx\n", hr);
+                }
+                UiaNodeRelease(focus_node);
+            }
+            VariantClear(&v);
+        }
+    }
+
+    VariantInit(&v);
+    hr = UiaGetPropertyValue(node, UIA_HasKeyboardFocusPropertyId, &v);
+    if (SUCCEEDED(hr) && (V_VT(&v) == VT_BOOL && V_BOOL(&v) == VARIANT_TRUE))
+    {
+        hr = uia_event_for_each(UIA_AutomationFocusChangedEventId, uia_com_focus_win_event_callback, (void *)node, TRUE);
+        if (FAILED(hr))
+            WARN("uia_event_for_each failed with hr %#lx\n", hr);
+    }
+
+    VariantClear(&v);
+}
+
+static HRESULT uia_com_focus_win_event_msaa_callback(struct uia_event *event, void *user_data)
+{
+    struct uia_event_args args = { { EventArgsType_Simple, UIA_AutomationFocusChangedEventId }, 0 };
+    HUIANODE node = (HUIANODE)user_data;
+
+    /* Only match desktop events. */
+    if (!event->desktop_subtree_event)
+        return S_OK;
+
+    return uia_event_invoke(node, NULL, &args, event);
+}
+
+static void uia_com_focus_win_event_msaa_handler(HWND hwnd, LONG child_id)
+{
+    IRawElementProviderFragmentRoot *elroot;
+    IRawElementProviderFragment *elfrag;
+    IRawElementProviderSimple *elprov;
+    HRESULT hr;
+    VARIANT v;
+
+    hr = create_msaa_provider_from_hwnd(hwnd, child_id, &elprov);
+    if (FAILED(hr))
+    {
+        WARN("create_msaa_provider_from_hwnd failed with hr %#lx\n", hr);
+        return;
+    }
+
+    hr = IRawElementProviderSimple_QueryInterface(elprov, &IID_IRawElementProviderFragmentRoot, (void **)&elroot);
+    if (FAILED(hr))
+        goto exit;
+
+    hr = IRawElementProviderFragmentRoot_GetFocus(elroot, &elfrag);
+    IRawElementProviderFragmentRoot_Release(elroot);
+    if (FAILED(hr))
+        goto exit;
+
+    if (elfrag)
+    {
+        IRawElementProviderSimple *elprov2;
+
+        hr = IRawElementProviderFragment_QueryInterface(elfrag, &IID_IRawElementProviderSimple, (void **)&elprov2);
+        IRawElementProviderFragment_Release(elfrag);
+        if (FAILED(hr))
+            goto exit;
+
+        IRawElementProviderSimple_Release(elprov);
+        elprov = elprov2;
+    }
+
+    VariantInit(&v);
+    hr = IRawElementProviderSimple_GetPropertyValue(elprov, UIA_HasKeyboardFocusPropertyId, &v);
+    if (FAILED(hr))
+        goto exit;
+
+    if (V_VT(&v) == VT_BOOL && V_BOOL(&v) == VARIANT_TRUE)
+    {
+        HUIANODE node;
+
+        hr = create_uia_node_from_elprov(elprov, &node, TRUE, 0);
+        if (SUCCEEDED(hr))
+        {
+            hr = uia_event_for_each(UIA_AutomationFocusChangedEventId, uia_com_focus_win_event_msaa_callback, (void *)node, TRUE);
+            if (FAILED(hr))
+                WARN("uia_event_for_each failed with hr %#lx\n", hr);
+            UiaNodeRelease(node);
+        }
+    }
+
+exit:
+    IRawElementProviderSimple_Release(elprov);
+}
+
+HRESULT uia_com_win_event_callback(DWORD event_id, HWND hwnd, LONG obj_id, LONG child_id, DWORD thread_id, DWORD event_time)
+{
+    LONG handler_count;
+
+    TRACE("%ld, %p, %ld, %ld, %ld, %ld\n", event_id, hwnd, obj_id, child_id, thread_id, event_time);
+
+    EnterCriticalSection(&com_event_handlers_cs);
+    handler_count = com_event_handlers.handler_count;
+    LeaveCriticalSection(&com_event_handlers_cs);
+
+    if (!handler_count)
+        return S_OK;
+
+    switch (event_id)
+    {
+    case EVENT_OBJECT_SHOW:
+    {
+        struct uia_event_handler_map_entry *entry;
+        SAFEARRAY *rt_id = NULL;
+        HUIANODE node;
+        HRESULT hr;
+
+        if (obj_id != OBJID_WINDOW || !uia_hwnd_is_visible(hwnd))
+            break;
+
+        hr = UiaNodeFromHandle(hwnd, &node);
+        if (FAILED(hr))
+            return hr;
+
+        hr = UiaGetRuntimeId(node, &rt_id);
+        if (FAILED(hr))
+        {
+            UiaNodeRelease(node);
+            return hr;
+        }
+
+        EnterCriticalSection(&com_event_handlers_cs);
+
+        RB_FOR_EACH_ENTRY(entry, &com_event_handlers.handler_map, struct uia_event_handler_map_entry, entry)
+        {
+            struct uia_com_event *event;
+
+            /*
+             * Focus change event handlers only listen for EVENT_OBJECT_SHOW
+             * on the desktop HWND.
+             */
+            if ((entry->event_id == UIA_AutomationFocusChangedEventId) && (hwnd != GetDesktopWindow()))
+                continue;
+
+            LIST_FOR_EACH_ENTRY(event, &entry->handlers_list, struct uia_com_event, event_handler_map_list_entry)
+            {
+                hr = uia_event_check_node_within_event_scope((struct uia_event *)event->event, node, rt_id, NULL);
+                if (FAILED(hr))
+                    WARN("uia_event_check_node_within_scope failed with hr %#lx\n", hr);
+                else if (hr == S_OK)
+                {
+                    hr = uia_event_advise_node((struct uia_event *)event->event, node);
+                    if (FAILED(hr))
+                        WARN("uia_event_advise_node failed with hr %#lx\n", hr);
+                }
+            }
+        }
+
+        LeaveCriticalSection(&com_event_handlers_cs);
+
+        UiaNodeRelease(node);
+        break;
+    }
+
+    case EVENT_OBJECT_FOCUS:
+    {
+        static const int uia_event_id = UIA_AutomationFocusChangedEventId;
+        struct rb_entry *rb_entry;
+        HRESULT hr;
+
+        if (obj_id != OBJID_CLIENT)
+            break;
+
+        EnterCriticalSection(&com_event_handlers_cs);
+
+        if ((rb_entry = rb_get(&com_event_handlers.handler_event_id_map, &uia_event_id)))
+        {
+            struct uia_event_handler_event_id_map_entry *event_id_map;
+            HUIANODE node = NULL;
+
+            event_id_map = RB_ENTRY_VALUE(rb_entry, struct uia_event_handler_event_id_map_entry, entry);
+            hr = create_uia_node_from_hwnd(hwnd, &node, NODE_FLAG_IGNORE_CLIENTSIDE_HWND_PROVS);
+            if (SUCCEEDED(hr))
+                uia_com_focus_win_event_handler(node, hwnd, event_id_map);
+            else
+                uia_com_focus_win_event_msaa_handler(hwnd, child_id);
+
+            UiaNodeRelease(node);
+        }
+
+        LeaveCriticalSection(&com_event_handlers_cs);
+        break;
+    }
+
+    case EVENT_OBJECT_DESTROY:
+    {
+        static const int uia_event_id = UIA_AutomationFocusChangedEventId;
+        struct rb_entry *rb_entry;
+
+        if (obj_id != OBJID_WINDOW)
+            break;
+
+        EnterCriticalSection(&com_event_handlers_cs);
+
+        if ((rb_entry = rb_get(&com_event_handlers.handler_event_id_map, &uia_event_id)))
+        {
+            struct uia_event_handler_event_id_map_entry *event_id_map;
+            struct uia_event_handler_map_entry *entry;
+
+            event_id_map = RB_ENTRY_VALUE(rb_entry, struct uia_event_handler_event_id_map_entry, entry);
+            LIST_FOR_EACH_ENTRY(entry, &event_id_map->handlers_list, struct uia_event_handler_map_entry,
+                    handler_event_id_map_list_entry)
+            {
+                struct uia_com_event *event;
+
+                LIST_FOR_EACH_ENTRY(event, &entry->handlers_list, struct uia_com_event, event_handler_map_list_entry)
+                {
+                    uia_hwnd_map_remove_hwnd(&event->focus_hwnd_map, hwnd);
+                }
+            }
+        }
+
+        LeaveCriticalSection(&com_event_handlers_cs);
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    return S_OK;
+}
+
+static HRESULT uia_event_handlers_add_handler_to_event_id_map(struct uia_event_handler_map_entry *event_map)
+{
+    struct uia_event_handler_event_id_map_entry *event_id_map;
+    struct rb_entry *rb_entry;
+
+    if ((rb_entry = rb_get(&com_event_handlers.handler_event_id_map, &event_map->event_id)))
+        event_id_map = RB_ENTRY_VALUE(rb_entry, struct uia_event_handler_event_id_map_entry, entry);
+    else
+    {
+        if (!(event_id_map = calloc(1, sizeof(*event_id_map))))
+            return E_OUTOFMEMORY;
+
+        event_id_map->event_id = event_map->event_id;
+        list_init(&event_id_map->handlers_list);
+        rb_put(&com_event_handlers.handler_event_id_map, &event_map->event_id, &event_id_map->entry);
+    }
+
+    list_add_tail(&event_id_map->handlers_list, &event_map->handler_event_id_map_list_entry);
+    event_map->handler_event_id_map = event_id_map;
+
+    return S_OK;
+}
 
 static HRESULT uia_event_handlers_add_handler(IUnknown *handler_iface, SAFEARRAY *runtime_id, int event_id,
         struct uia_com_event *event)
@@ -969,13 +1323,16 @@ static HRESULT uia_event_handlers_add_handler(IUnknown *handler_iface, SAFEARRAY
     EnterCriticalSection(&com_event_handlers_cs);
 
     if (!com_event_handlers.handler_count)
+    {
         rb_init(&com_event_handlers.handler_map, uia_com_event_handler_id_compare);
+        rb_init(&com_event_handlers.handler_event_id_map, uia_com_event_handler_event_id_compare);
+    }
 
     if ((rb_entry = rb_get(&com_event_handlers.handler_map, &event_ident)))
         event_map = RB_ENTRY_VALUE(rb_entry, struct uia_event_handler_map_entry, entry);
     else
     {
-        if (!(event_map = heap_alloc_zero(sizeof(*event_map))))
+        if (!(event_map = calloc(1, sizeof(*event_map))))
         {
             hr = E_OUTOFMEMORY;
             goto exit;
@@ -984,11 +1341,19 @@ static HRESULT uia_event_handlers_add_handler(IUnknown *handler_iface, SAFEARRAY
         hr = SafeArrayCopy(runtime_id, &event_map->runtime_id);
         if (FAILED(hr))
         {
-            heap_free(event_map);
+            free(event_map);
             goto exit;
         }
 
         event_map->event_id = event_id;
+        hr = uia_event_handlers_add_handler_to_event_id_map(event_map);
+        if (FAILED(hr))
+        {
+            SafeArrayDestroy(event_map->runtime_id);
+            free(event_map);
+            goto exit;
+        }
+
         event_map->handler_iface = handler_iface;
         IUnknown_AddRef(event_map->handler_iface);
 
@@ -999,6 +1364,19 @@ static HRESULT uia_event_handlers_add_handler(IUnknown *handler_iface, SAFEARRAY
     list_add_tail(&event_map->handlers_list, &event->event_handler_map_list_entry);
     event->handler_map = event_map;
     com_event_handlers.handler_count++;
+    if (event_id == UIA_AutomationFocusChangedEventId)
+    {
+        GUITHREADINFO info = { sizeof(info) };
+
+        if (GetGUIThreadInfo(0, &info) && info.hwndFocus)
+        {
+            HUIANODE node = NULL;
+
+            if (SUCCEEDED(create_uia_node_from_hwnd(info.hwndFocus, &node, NODE_FLAG_IGNORE_CLIENTSIDE_HWND_PROVS)))
+                uia_com_focus_handler_advise_node(event, node, info.hwndFocus);
+            UiaNodeRelease(node);
+        }
+    }
 
 exit:
     LeaveCriticalSection(&com_event_handlers_cs);
@@ -1009,11 +1387,12 @@ exit:
 static void uia_event_handler_destroy(struct uia_com_event *event)
 {
     list_remove(&event->event_handler_map_list_entry);
+    uia_hwnd_map_destroy(&event->focus_hwnd_map);
     if (event->event)
         UiaRemoveEvent(event->event);
     if (event->git_cookie)
         unregister_interface_in_git(event->git_cookie);
-    heap_free(event);
+    free(event);
 }
 
 static void uia_event_handler_map_entry_destroy(struct uia_event_handler_map_entry *entry)
@@ -1026,10 +1405,17 @@ static void uia_event_handler_map_entry_destroy(struct uia_event_handler_map_ent
         com_event_handlers.handler_count--;
     }
 
+    list_remove(&entry->handler_event_id_map_list_entry);
+    if (list_empty(&entry->handler_event_id_map->handlers_list))
+    {
+        rb_remove(&com_event_handlers.handler_event_id_map, &entry->handler_event_id_map->entry);
+        free(entry->handler_event_id_map);
+    }
+
     rb_remove(&com_event_handlers.handler_map, &entry->entry);
     IUnknown_Release(entry->handler_iface);
     SafeArrayDestroy(entry->runtime_id);
-    heap_free(entry);
+    free(entry);
 }
 
 static void uia_event_handlers_remove_handlers(IUnknown *handler_iface, SAFEARRAY *runtime_id, int event_id)
@@ -1153,8 +1539,8 @@ static ULONG WINAPI uia_element_array_Release(IUIAutomationElementArray *iface)
                     IUIAutomationElement_Release(element_arr->elements[i]);
             }
         }
-        heap_free(element_arr->elements);
-        heap_free(element_arr);
+        free(element_arr->elements);
+        free(element_arr);
     }
 
     return ref;
@@ -1203,7 +1589,7 @@ static const IUIAutomationElementArrayVtbl uia_element_array_vtbl = {
 
 static HRESULT create_uia_element_array_iface(IUIAutomationElementArray **iface, int elements_count)
 {
-    struct uia_element_array *element_arr = heap_alloc_zero(sizeof(*element_arr));
+    struct uia_element_array *element_arr = calloc(1, sizeof(*element_arr));
 
     *iface = NULL;
     if (!element_arr)
@@ -1212,9 +1598,9 @@ static HRESULT create_uia_element_array_iface(IUIAutomationElementArray **iface,
     element_arr->IUIAutomationElementArray_iface.lpVtbl = &uia_element_array_vtbl;
     element_arr->ref = 1;
     element_arr->elements_count = elements_count;
-    if (!(element_arr->elements = heap_alloc_zero(sizeof(*element_arr->elements) * elements_count)))
+    if (!(element_arr->elements = calloc(elements_count, sizeof(*element_arr->elements))))
     {
-        heap_free(element_arr);
+        free(element_arr);
         return E_OUTOFMEMORY;
     }
 
@@ -1293,9 +1679,9 @@ static ULONG WINAPI uia_element_Release(IUIAutomationElement9 *iface)
         }
 
         IUnknown_Release(element->marshal);
-        heap_free(element->cached_props);
+        free(element->cached_props);
         UiaNodeRelease(element->node);
-        heap_free(element);
+        free(element);
     }
 
     return ref;
@@ -1366,7 +1752,7 @@ static HRESULT set_find_params_struct(struct UiaFindParams *params, IUIAutomatio
     if (FAILED(hr))
         return hr;
 
-    if (!scope || (scope & (~TreeScope_SubTree)))
+    if (!scope || (scope & (~TreeScope_Subtree)))
         return E_INVALIDARG;
 
     params->FindFirst = find_first;
@@ -1756,27 +2142,33 @@ static HRESULT WINAPI uia_element_get_CurrentProcessId(IUIAutomationElement9 *if
     return E_NOTIMPL;
 }
 
+static void uia_elem_get_control_type(VARIANT *v, CONTROLTYPEID *ret_val)
+{
+    const struct uia_control_type_info *info = NULL;
+
+    *ret_val = UIA_CustomControlTypeId;
+    if (V_VT(v) != VT_I4)
+        return;
+
+    if ((info = uia_control_type_info_from_id(V_I4(v))))
+        *ret_val = info->control_type_id;
+    else
+        WARN("Provider returned invalid control type ID %ld\n", V_I4(v));
+}
+
 static HRESULT WINAPI uia_element_get_CurrentControlType(IUIAutomationElement9 *iface, CONTROLTYPEID *ret_val)
 {
     struct uia_element *element = impl_from_IUIAutomationElement9(iface);
-    const struct uia_control_type_info *control_type_info = NULL;
     HRESULT hr;
     VARIANT v;
 
     TRACE("%p, %p\n", iface, ret_val);
 
     VariantInit(&v);
-    *ret_val = UIA_CustomControlTypeId;
     hr = UiaGetPropertyValue(element->node, UIA_ControlTypePropertyId, &v);
-    if (SUCCEEDED(hr) && V_VT(&v) == VT_I4)
-    {
-        if ((control_type_info = uia_control_type_info_from_id(V_I4(&v))))
-            *ret_val = control_type_info->control_type_id;
-        else
-            WARN("Provider returned invalid control type ID %ld\n", V_I4(&v));
-    }
-
+    uia_elem_get_control_type(&v, ret_val);
     VariantClear(&v);
+
     return hr;
 }
 
@@ -1919,6 +2311,32 @@ static HRESULT WINAPI uia_element_get_CurrentItemStatus(IUIAutomationElement9 *i
     return E_NOTIMPL;
 }
 
+static void uia_variant_rect_to_rect(VARIANT *v, RECT *ret_val)
+{
+    double *vals;
+    HRESULT hr;
+
+    memset(ret_val, 0, sizeof(*ret_val));
+    if (V_VT(v) != (VT_R8 | VT_ARRAY))
+        return;
+
+    hr = SafeArrayAccessData(V_ARRAY(v), (void **)&vals);
+    if (FAILED(hr))
+    {
+        WARN("SafeArrayAccessData failed with hr %#lx\n", hr);
+        return;
+    }
+
+    ret_val->left = vals[0];
+    ret_val->top = vals[1];
+    ret_val->right = ret_val->left + vals[2];
+    ret_val->bottom = ret_val->top + vals[3];
+
+    hr = SafeArrayUnaccessData(V_ARRAY(v));
+    if (FAILED(hr))
+        WARN("SafeArrayUnaccessData failed with hr %#lx\n", hr);
+}
+
 static HRESULT WINAPI uia_element_get_CurrentBoundingRectangle(IUIAutomationElement9 *iface, RECT *ret_val)
 {
     struct uia_element *element = impl_from_IUIAutomationElement9(iface);
@@ -1927,22 +2345,9 @@ static HRESULT WINAPI uia_element_get_CurrentBoundingRectangle(IUIAutomationElem
 
     TRACE("%p, %p\n", element, ret_val);
 
-    memset(ret_val, 0, sizeof(*ret_val));
     VariantInit(&v);
     hr = UiaGetPropertyValue(element->node, UIA_BoundingRectanglePropertyId, &v);
-    if (SUCCEEDED(hr) && V_VT(&v) == (VT_R8 | VT_ARRAY))
-    {
-        double vals[4];
-        LONG idx;
-
-        for (idx = 0; idx < ARRAY_SIZE(vals); idx++)
-            SafeArrayGetElement(V_ARRAY(&v), &idx, &vals[idx]);
-
-        ret_val->left = vals[0];
-        ret_val->top = vals[1];
-        ret_val->right = ret_val->left + vals[2];
-        ret_val->bottom = ret_val->top + vals[3];
-    }
+    uia_variant_rect_to_rect(&v, ret_val);
 
     VariantClear(&v);
     return hr;
@@ -2006,8 +2411,21 @@ static HRESULT WINAPI uia_element_get_CachedProcessId(IUIAutomationElement9 *ifa
 
 static HRESULT WINAPI uia_element_get_CachedControlType(IUIAutomationElement9 *iface, CONTROLTYPEID *ret_val)
 {
-    FIXME("%p: stub\n", iface);
-    return E_NOTIMPL;
+    struct uia_element *element = impl_from_IUIAutomationElement9(iface);
+    const int prop_id = UIA_ControlTypePropertyId;
+    struct uia_cache_property *cache_prop = NULL;
+
+    TRACE("%p, %p\n", iface, ret_val);
+
+    if (!ret_val)
+        return E_POINTER;
+
+    if (!(cache_prop = bsearch(&prop_id, element->cached_props, element->cached_props_count, sizeof(*cache_prop),
+            uia_cached_property_id_compare)))
+        return E_INVALIDARG;
+
+    uia_elem_get_control_type(&cache_prop->prop_val, ret_val);
+    return S_OK;
 }
 
 static HRESULT WINAPI uia_element_get_CachedLocalizedControlType(IUIAutomationElement9 *iface, BSTR *ret_val)
@@ -2018,8 +2436,25 @@ static HRESULT WINAPI uia_element_get_CachedLocalizedControlType(IUIAutomationEl
 
 static HRESULT WINAPI uia_element_get_CachedName(IUIAutomationElement9 *iface, BSTR *ret_val)
 {
-    FIXME("%p: stub\n", iface);
-    return E_NOTIMPL;
+    struct uia_element *element = impl_from_IUIAutomationElement9(iface);
+    struct uia_cache_property *cache_prop = NULL;
+    const int prop_id = UIA_NamePropertyId;
+
+    TRACE("%p, %p\n", iface, ret_val);
+
+    if (!ret_val)
+        return E_POINTER;
+
+    if (!(cache_prop = bsearch(&prop_id, element->cached_props, element->cached_props_count, sizeof(*cache_prop),
+            uia_cached_property_id_compare)))
+        return E_INVALIDARG;
+
+    if ((V_VT(&cache_prop->prop_val) == VT_BSTR) && V_BSTR(&cache_prop->prop_val))
+        *ret_val = SysAllocString(V_BSTR(&cache_prop->prop_val));
+    else
+        *ret_val = SysAllocString(L"");
+
+    return S_OK;
 }
 
 static HRESULT WINAPI uia_element_get_CachedAcceleratorKey(IUIAutomationElement9 *iface, BSTR *ret_val)
@@ -2036,14 +2471,40 @@ static HRESULT WINAPI uia_element_get_CachedAccessKey(IUIAutomationElement9 *ifa
 
 static HRESULT WINAPI uia_element_get_CachedHasKeyboardFocus(IUIAutomationElement9 *iface, BOOL *ret_val)
 {
-    FIXME("%p: stub\n", iface);
-    return E_NOTIMPL;
+    struct uia_element *element = impl_from_IUIAutomationElement9(iface);
+    const int prop_id = UIA_HasKeyboardFocusPropertyId;
+    struct uia_cache_property *cache_prop = NULL;
+
+    TRACE("%p, %p\n", iface, ret_val);
+
+    if (!ret_val)
+        return E_POINTER;
+
+    if (!(cache_prop = bsearch(&prop_id, element->cached_props, element->cached_props_count, sizeof(*cache_prop),
+            uia_cached_property_id_compare)))
+        return E_INVALIDARG;
+
+    *ret_val = ((V_VT(&cache_prop->prop_val) == VT_BOOL) && (V_BOOL(&cache_prop->prop_val) == VARIANT_TRUE));
+    return S_OK;
 }
 
 static HRESULT WINAPI uia_element_get_CachedIsKeyboardFocusable(IUIAutomationElement9 *iface, BOOL *ret_val)
 {
-    FIXME("%p: stub\n", iface);
-    return E_NOTIMPL;
+    struct uia_element *element = impl_from_IUIAutomationElement9(iface);
+    const int prop_id = UIA_IsKeyboardFocusablePropertyId;
+    struct uia_cache_property *cache_prop = NULL;
+
+    TRACE("%p, %p\n", iface, ret_val);
+
+    if (!ret_val)
+        return E_POINTER;
+
+    if (!(cache_prop = bsearch(&prop_id, element->cached_props, element->cached_props_count, sizeof(*cache_prop),
+            uia_cached_property_id_compare)))
+        return E_INVALIDARG;
+
+    *ret_val = ((V_VT(&cache_prop->prop_val) == VT_BOOL) && (V_BOOL(&cache_prop->prop_val) == VARIANT_TRUE));
+    return S_OK;
 }
 
 static HRESULT WINAPI uia_element_get_CachedIsEnabled(IUIAutomationElement9 *iface, BOOL *ret_val)
@@ -2139,8 +2600,21 @@ static HRESULT WINAPI uia_element_get_CachedItemStatus(IUIAutomationElement9 *if
 
 static HRESULT WINAPI uia_element_get_CachedBoundingRectangle(IUIAutomationElement9 *iface, RECT *ret_val)
 {
-    FIXME("%p: stub\n", iface);
-    return E_NOTIMPL;
+    struct uia_element *element = impl_from_IUIAutomationElement9(iface);
+    const int prop_id = UIA_BoundingRectanglePropertyId;
+    struct uia_cache_property *cache_prop = NULL;
+
+    TRACE("%p, %p\n", iface, ret_val);
+
+    if (!ret_val)
+        return E_POINTER;
+
+    if (!(cache_prop = bsearch(&prop_id, element->cached_props, element->cached_props_count, sizeof(*cache_prop),
+            uia_cached_property_id_compare)))
+        return E_INVALIDARG;
+
+    uia_variant_rect_to_rect(&cache_prop->prop_val, ret_val);
+    return S_OK;
 }
 
 static HRESULT WINAPI uia_element_get_CachedLabeledBy(IUIAutomationElement9 *iface, IUIAutomationElement **ret_val)
@@ -2539,7 +3013,7 @@ static const IUIAutomationElement9Vtbl uia_element_vtbl = {
 
 static HRESULT create_uia_element(IUIAutomationElement **iface, BOOL from_cui8, HUIANODE node)
 {
-    struct uia_element *element = heap_alloc_zero(sizeof(*element));
+    struct uia_element *element = calloc(1, sizeof(*element));
     HRESULT hr;
 
     *iface = NULL;
@@ -2554,7 +3028,7 @@ static HRESULT create_uia_element(IUIAutomationElement **iface, BOOL from_cui8, 
     hr = CoCreateFreeThreadedMarshaler((IUnknown *)&element->IUIAutomationElement9_iface, &element->marshal);
     if (FAILED(hr))
     {
-        heap_free(element);
+        free(element);
         return hr;
     }
 
@@ -2603,7 +3077,7 @@ static HRESULT create_uia_element_from_cache_req(IUIAutomationElement **iface, B
     {
         LONG i;
 
-        elem_data->cached_props = heap_alloc_zero(sizeof(*elem_data->cached_props) * cache_req->cProperties);
+        elem_data->cached_props = calloc(cache_req->cProperties, sizeof(*elem_data->cached_props));
         if (!elem_data->cached_props)
         {
             hr = E_OUTOFMEMORY;
@@ -2702,7 +3176,7 @@ static ULONG WINAPI uia_tree_walker_Release(IUIAutomationTreeWalker *iface)
         if (tree_walker->default_cache_req)
             IUIAutomationCacheRequest_Release(tree_walker->default_cache_req);
         IUIAutomationCondition_Release(tree_walker->nav_cond);
-        heap_free(tree_walker);
+        free(tree_walker);
     }
 
     return ref;
@@ -2895,7 +3369,7 @@ static HRESULT create_uia_tree_walker(IUIAutomationTreeWalker **out_tree_walker,
     if (FAILED(hr))
         return hr;
 
-    tree_walker = heap_alloc_zero(sizeof(*tree_walker));
+    tree_walker = calloc(1, sizeof(*tree_walker));
     if (!tree_walker)
         return E_OUTOFMEMORY;
 
@@ -2968,7 +3442,7 @@ static ULONG WINAPI uia_iface_Release(IUIAutomation6 *iface)
 
     TRACE("%p, refcount %ld\n", uia_iface, ref);
     if (!ref)
-        heap_free(uia_iface);
+        free(uia_iface);
     return ref;
 }
 
@@ -3288,7 +3762,7 @@ static HRESULT uia_add_com_event_handler(IUIAutomation6 *iface, EVENTID event_id
     if (FAILED(hr))
         goto exit;
 
-    if (!(com_event = heap_alloc_zero(sizeof(*com_event))))
+    if (!(com_event = calloc(1, sizeof(*com_event))))
     {
         hr = E_OUTOFMEMORY;
         goto exit;
@@ -3296,6 +3770,7 @@ static HRESULT uia_add_com_event_handler(IUIAutomation6 *iface, EVENTID event_id
 
     com_event->from_cui8 = element->from_cui8;
     list_init(&com_event->event_handler_map_list_entry);
+    uia_hwnd_map_init(&com_event->focus_hwnd_map);
 
     hr = IUnknown_QueryInterface(handler_unk, handler_riid, (void **)&handler_iface);
     if (FAILED(hr))
@@ -3310,6 +3785,9 @@ static HRESULT uia_add_com_event_handler(IUIAutomation6 *iface, EVENTID event_id
             uia_com_event_callback, (void *)com_event, &com_event->event);
     if (FAILED(hr))
         goto exit;
+
+    if (!uia_clientside_event_start_event_thread((struct uia_event *)com_event->event))
+        WARN("Failed to start event thread, WinEvents may not be delivered.\n");
 
     hr = uia_event_handlers_add_handler(handler_unk, runtime_id, event_id, com_event);
 
@@ -3447,7 +3925,7 @@ static HRESULT WINAPI uia_iface_AddFocusChangedEventHandler(IUIAutomation6 *ifac
         return hr;
     }
 
-    hr = uia_add_com_event_handler(iface, UIA_AutomationFocusChangedEventId, elem, TreeScope_SubTree, cache_req,
+    hr = uia_add_com_event_handler(iface, UIA_AutomationFocusChangedEventId, elem, TreeScope_Subtree, cache_req,
             &IID_IUIAutomationFocusChangedEventHandler, handler_unk);
     IUIAutomationElement_Release(elem);
     IUnknown_Release(handler_unk);
@@ -3925,7 +4403,7 @@ HRESULT create_uia_iface(IUnknown **iface, BOOL is_cui8)
 {
     struct uia_iface *uia;
 
-    uia = heap_alloc_zero(sizeof(*uia));
+    uia = calloc(1, sizeof(*uia));
     if (!uia)
         return E_OUTOFMEMORY;
 

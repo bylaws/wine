@@ -41,6 +41,7 @@ struct resampler
     IMediaObject IMediaObject_iface;
     IPropertyBag IPropertyBag_iface;
     IPropertyStore IPropertyStore_iface;
+    IWMResamplerProps IWMResamplerProps_iface;
     IUnknown *outer;
     LONG refcount;
 
@@ -55,25 +56,15 @@ struct resampler
 
 static HRESULT try_create_wg_transform(struct resampler *impl)
 {
-    struct wg_format input_format, output_format;
     struct wg_transform_attrs attrs = {0};
 
     if (impl->wg_transform)
+    {
         wg_transform_destroy(impl->wg_transform);
-    impl->wg_transform = 0;
+        impl->wg_transform = 0;
+    }
 
-    mf_media_type_to_wg_format(impl->input_type, &input_format);
-    if (input_format.major_type == WG_MAJOR_TYPE_UNKNOWN)
-        return MF_E_INVALIDMEDIATYPE;
-
-    mf_media_type_to_wg_format(impl->output_type, &output_format);
-    if (output_format.major_type == WG_MAJOR_TYPE_UNKNOWN)
-        return MF_E_INVALIDMEDIATYPE;
-
-    if (!(impl->wg_transform = wg_transform_create(&input_format, &output_format, &attrs)))
-        return E_FAIL;
-
-    return S_OK;
+    return wg_transform_create_mf(impl->input_type, impl->output_type, &attrs, &impl->wg_transform);
 }
 
 static inline struct resampler *impl_from_IUnknown(IUnknown *iface)
@@ -97,6 +88,8 @@ static HRESULT WINAPI unknown_QueryInterface(IUnknown *iface, REFIID iid, void *
         *out = &impl->IPropertyBag_iface;
     else if (IsEqualIID(iid, &IID_IPropertyStore))
         *out = &impl->IPropertyStore_iface;
+    else if (IsEqualIID(iid, &IID_IWMResamplerProps))
+        *out = &impl->IWMResamplerProps_iface;
     else
     {
         *out = NULL;
@@ -548,7 +541,7 @@ static HRESULT WINAPI transform_ProcessOutput(IMFTransform *iface, DWORD flags, 
         return hr;
 
     if (SUCCEEDED(hr = wg_transform_read_mf(impl->wg_transform, samples->pSample,
-            info.cbSize, NULL, &samples->dwStatus)))
+            info.cbSize, &samples->dwStatus)))
         wg_sample_queue_flush(impl->wg_sample_queue, false);
 
     return hr;
@@ -872,43 +865,67 @@ static const IPropertyStoreVtbl property_store_vtbl =
     property_store_Commit,
 };
 
+static inline struct resampler *impl_from_IWMResamplerProps(IWMResamplerProps *iface)
+{
+    return CONTAINING_RECORD(iface, struct resampler, IWMResamplerProps_iface);
+}
+
+static HRESULT WINAPI resampler_props_QueryInterface(IWMResamplerProps *iface, REFIID iid, void **out)
+{
+    return IUnknown_QueryInterface(impl_from_IWMResamplerProps(iface)->outer, iid, out);
+}
+
+static ULONG WINAPI resampler_props_AddRef(IWMResamplerProps *iface)
+{
+    return IUnknown_AddRef(impl_from_IWMResamplerProps(iface)->outer);
+}
+
+static ULONG WINAPI resampler_props_Release(IWMResamplerProps *iface)
+{
+    return IUnknown_Release(impl_from_IWMResamplerProps(iface)->outer);
+}
+
+static HRESULT WINAPI resampler_props_SetHalfFilterLength(IWMResamplerProps *iface, LONG length)
+{
+    FIXME("iface %p, count %lu stub!\n", iface, length);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI resampler_props_SetUserChannelMtx(IWMResamplerProps *iface, ChMtxType *conversion_matrix)
+{
+    FIXME("iface %p, userChannelMtx %p stub!\n", iface, conversion_matrix);
+    return E_NOTIMPL;
+}
+
+static const IWMResamplerPropsVtbl resampler_props_vtbl =
+{
+    resampler_props_QueryInterface,
+    resampler_props_AddRef,
+    resampler_props_Release,
+    resampler_props_SetHalfFilterLength,
+    resampler_props_SetUserChannelMtx,
+};
+
 HRESULT resampler_create(IUnknown *outer, IUnknown **out)
 {
-    static const struct wg_format input_format =
+    static const WAVEFORMATEX output_format =
     {
-        .major_type = WG_MAJOR_TYPE_AUDIO,
-        .u.audio =
-        {
-            .format = WG_AUDIO_FORMAT_S16LE,
-            .channel_mask = 1,
-            .channels = 1,
-            .rate = 44100,
-        },
+        .wFormatTag = WAVE_FORMAT_IEEE_FLOAT, .wBitsPerSample = 32, .nSamplesPerSec = 44100, .nChannels = 1,
     };
-    static const struct wg_format output_format =
+    static const WAVEFORMATEX input_format =
     {
-        .major_type = WG_MAJOR_TYPE_AUDIO,
-        .u.audio =
-        {
-            .format = WG_AUDIO_FORMAT_F32LE,
-            .channel_mask = 1,
-            .channels = 1,
-            .rate = 44100,
-        },
+        .wFormatTag = WAVE_FORMAT_PCM, .wBitsPerSample = 16, .nSamplesPerSec = 44100, .nChannels = 1,
     };
-    struct wg_transform_attrs attrs = {0};
-    wg_transform_t transform;
     struct resampler *impl;
     HRESULT hr;
 
     TRACE("outer %p, out %p.\n", outer, out);
 
-    if (!(transform = wg_transform_create(&input_format, &output_format, &attrs)))
+    if (FAILED(hr = check_audio_transform_support(&input_format, &output_format)))
     {
         ERR_(winediag)("GStreamer doesn't support audio resampling, please install appropriate plugins.\n");
-        return E_FAIL;
+        return hr;
     }
-    wg_transform_destroy(transform);
 
     if (!(impl = calloc(1, sizeof(*impl))))
         return E_OUTOFMEMORY;
@@ -924,6 +941,7 @@ HRESULT resampler_create(IUnknown *outer, IUnknown **out)
     impl->IMediaObject_iface.lpVtbl = &media_object_vtbl;
     impl->IPropertyBag_iface.lpVtbl = &property_bag_vtbl;
     impl->IPropertyStore_iface.lpVtbl = &property_store_vtbl;
+    impl->IWMResamplerProps_iface.lpVtbl = &resampler_props_vtbl;
     impl->refcount = 1;
     impl->outer = outer ? outer : &impl->IUnknown_inner;
 

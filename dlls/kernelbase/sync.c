@@ -284,7 +284,11 @@ DWORD WINAPI DECLSPEC_HOTPATCH SignalObjectAndWait( HANDLE signal, HANDLE wait,
                                                     DWORD timeout, BOOL alertable )
 {
     NTSTATUS status;
+#ifdef __i386__
+    DECLSPEC_ALIGN(4) LARGE_INTEGER time;
+#else
     LARGE_INTEGER time;
+#endif
 
     TRACE( "%p %p %ld %d\n", signal, wait, timeout, alertable );
 
@@ -393,6 +397,45 @@ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjectsEx( DWORD count, const HAND
  *           WaitForDebugEvent   (kernelbase.@)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH WaitForDebugEvent( DEBUG_EVENT *event, DWORD timeout )
+{
+    NTSTATUS status;
+    LARGE_INTEGER time;
+    DBGUI_WAIT_STATE_CHANGE state;
+
+    for (;;)
+    {
+        status = DbgUiWaitStateChange( &state, get_nt_timeout( &time, timeout ) );
+        switch (status)
+        {
+        case STATUS_SUCCESS:
+            /* continue on wide print exceptions to force resending an ANSI one. */
+            if (state.NewState == DbgExceptionStateChange)
+            {
+                DBGKM_EXCEPTION *info = &state.StateInfo.Exception;
+                DWORD code = info->ExceptionRecord.ExceptionCode;
+                if (code == DBG_PRINTEXCEPTION_WIDE_C && info->ExceptionRecord.NumberParameters >= 2)
+                {
+                    DbgUiContinue( &state.AppClientId, DBG_EXCEPTION_NOT_HANDLED );
+                    break;
+                }
+            }
+            DbgUiConvertStateChangeStructure( &state, event );
+            return TRUE;
+        case STATUS_USER_APC:
+            continue;
+        case STATUS_TIMEOUT:
+            SetLastError( ERROR_SEM_TIMEOUT );
+            return FALSE;
+        default:
+            return set_ntstatus( status );
+        }
+    }
+}
+
+/******************************************************************************
+ *           WaitForDebugEventEx   (kernelbase.@)
+ */
+BOOL WINAPI DECLSPEC_HOTPATCH WaitForDebugEventEx( DEBUG_EVENT *event, DWORD timeout )
 {
     NTSTATUS status;
     LARGE_INTEGER time;
@@ -1133,6 +1176,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetQueuedCompletionStatus( HANDLE port, LPDWORD co
     }
 
     if (status == STATUS_TIMEOUT) SetLastError( WAIT_TIMEOUT );
+    else if (status == ERROR_WAIT_NO_CHILDREN) SetLastError( ERROR_ABANDONED_WAIT_0 );
     else SetLastError( RtlNtStatusToDosError(status) );
     return FALSE;
 }
@@ -1154,6 +1198,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetQueuedCompletionStatusEx( HANDLE port, OVERLAPP
     if (ret == STATUS_SUCCESS) return TRUE;
     else if (ret == STATUS_TIMEOUT) SetLastError( WAIT_TIMEOUT );
     else if (ret == STATUS_USER_APC) SetLastError( WAIT_IO_COMPLETION );
+    else if (ret == ERROR_WAIT_NO_CHILDREN) SetLastError( ERROR_ABANDONED_WAIT_0 );
     else SetLastError( RtlNtStatusToDosError(ret) );
     return FALSE;
 }

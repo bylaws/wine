@@ -243,18 +243,20 @@ static INT X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOID in_d
                     return TRUE;
                 }
                 break;
-            case X11DRV_FLUSH_GL_DRAWABLE:
-                if (in_count >= sizeof(struct x11drv_escape_flush_gl_drawable))
+            case X11DRV_PRESENT_DRAWABLE:
+                if (in_count >= sizeof(struct x11drv_escape_present_drawable))
                 {
-                    const struct x11drv_escape_flush_gl_drawable *data = in_data;
+                    const struct x11drv_escape_present_drawable *data = in_data;
                     RECT rect = physDev->dc_rect;
+                    RECT real_rect = physDev->dc_rect;
 
+                    fs_hack_rect_user_to_real( &real_rect );
                     OffsetRect( &rect, -physDev->dc_rect.left, -physDev->dc_rect.top );
                     if (data->flush) XFlush( gdi_display );
                     XSetFunction( gdi_display, physDev->gc, GXcopy );
-                    XCopyArea( gdi_display, data->gl_drawable, physDev->drawable, physDev->gc,
-                               0, 0, rect.right, rect.bottom,
-                               physDev->dc_rect.left, physDev->dc_rect.top );
+                    XCopyArea( gdi_display, data->drawable, physDev->drawable, physDev->gc,
+                               0, 0, real_rect.right - real_rect.left, real_rect.bottom - real_rect.top,
+                               real_rect.left, real_rect.top );
                     add_device_bounds( physDev, &rect );
                     return TRUE;
                 }
@@ -401,9 +403,12 @@ static const struct user_driver_funcs x11drv_funcs =
     .pNotifyIMEStatus = X11DRV_NotifyIMEStatus,
     .pDestroyCursorIcon = X11DRV_DestroyCursorIcon,
     .pSetCursor = X11DRV_SetCursor,
-    .pGetCursorPos = X11DRV_GetCursorPos,
     .pSetCursorPos = X11DRV_SetCursorPos,
     .pClipCursor = X11DRV_ClipCursor,
+    .pSystrayDockInit = X11DRV_SystrayDockInit,
+    .pSystrayDockInsert = X11DRV_SystrayDockInsert,
+    .pSystrayDockClear = X11DRV_SystrayDockClear,
+    .pSystrayDockRemove = X11DRV_SystrayDockRemove,
     .pChangeDisplaySettings = X11DRV_ChangeDisplaySettings,
     .pGetCurrentDisplaySettings = X11DRV_GetCurrentDisplaySettings,
     .pGetDisplayDepth = X11DRV_GetDisplayDepth,

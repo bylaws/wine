@@ -301,6 +301,7 @@ static void test_choosepixelformat(void)
         ok( ret_fmt.cAlphaShift == 24, "Got %u.\n", ret_fmt.cAlphaShift );
     else
         ok( !ret_fmt.cAlphaShift, "Got %u.\n", ret_fmt.cAlphaShift );
+    ok( ret_fmt.cDepthBits, "Got %u.\n", ret_fmt.cDepthBits );
 
     pfd.dwFlags |= PFD_DOUBLEBUFFER_DONTCARE;
     ok( test_pfd(&pfd, NULL), "PFD_DOUBLEBUFFER_DONTCARE failed\n" );
@@ -725,7 +726,8 @@ static void test_makecurrent(HDC winhdc)
 static void test_colorbits(HDC hdc)
 {
     const int iAttribList[] = { WGL_COLOR_BITS_ARB, WGL_RED_BITS_ARB, WGL_GREEN_BITS_ARB,
-                                WGL_BLUE_BITS_ARB, WGL_ALPHA_BITS_ARB };
+                                WGL_BLUE_BITS_ARB, WGL_ALPHA_BITS_ARB, WGL_BLUE_SHIFT_ARB, WGL_GREEN_SHIFT_ARB,
+                                WGL_RED_SHIFT_ARB, WGL_ALPHA_SHIFT_ARB, };
     int iAttribRet[ARRAY_SIZE(iAttribList)];
     const int iAttribs[] = { WGL_ALPHA_BITS_ARB, 1, 0 };
     unsigned int nFormats;
@@ -753,6 +755,11 @@ static void test_colorbits(HDC hdc)
         skip("wglGetPixelFormatAttribivARB failed\n");
         return;
     }
+    ok(!iAttribRet[5], "got %d.\n", iAttribRet[5]);
+    ok(iAttribRet[6] == iAttribRet[3], "got %d.\n", iAttribRet[6]);
+    ok(iAttribRet[7] == iAttribRet[6] + iAttribRet[2], "got %d.\n", iAttribRet[7]);
+    ok(iAttribRet[8] == iAttribRet[7] + iAttribRet[1], "got %d.\n", iAttribRet[8]);
+
     iAttribRet[1] += iAttribRet[2]+iAttribRet[3]+iAttribRet[4];
     ok(iAttribRet[0] == iAttribRet[1], "WGL_COLOR_BITS_ARB (%d) does not equal R+G+B+A (%d)!\n",
                                        iAttribRet[0], iAttribRet[1]);
@@ -2006,6 +2013,55 @@ static void test_copy_context(HDC hdc)
     ok(ret, "wglMakeCurrent failed, last error %#lx.\n", GetLastError());
 }
 
+static void test_child_window(HWND hwnd, PIXELFORMATDESCRIPTOR *pfd)
+{
+    int pixel_format;
+    DWORD t1, t;
+    HGLRC hglrc;
+    HWND child;
+    HDC hdc;
+    int res;
+
+    child = CreateWindowA("static", "Title", WS_CHILDWINDOW | WS_VISIBLE, 50, 50, 100, 100, hwnd, NULL, NULL, NULL);
+    ok(!!child, "got error %lu.\n", GetLastError());
+
+    hdc = GetDC(child);
+    pixel_format = ChoosePixelFormat(hdc, pfd);
+    res = SetPixelFormat(hdc, pixel_format, pfd);
+    ok(res, "got error %lu.\n", GetLastError());
+
+    hglrc = wglCreateContext(hdc);
+    ok(!!hglrc, "got error %lu.\n", GetLastError());
+
+    /* Test SwapBuffers with NULL context. */
+
+    glDrawBuffer(GL_BACK);
+
+    /* Currently blit happening for child window in winex11 may not be updated with the latest GL frame
+     * even on glXWaitForSbcOML() path. So simulate continuous present for the test purpose. */
+    trace("Child window rectangle should turn from red to green now.\n");
+    t1 = GetTickCount();
+    while ((t = GetTickCount()) - t1 < 3000)
+    {
+        res = wglMakeCurrent(hdc, hglrc);
+        ok(res, "got error %lu.\n", GetLastError());
+        if (t - t1 > 1500)
+            glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+        else
+            glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        res = wglMakeCurrent(NULL, NULL);
+        ok(res, "got error %lu.\n", GetLastError());
+        SwapBuffers(hdc);
+    }
+
+    res = wglDeleteContext(hglrc);
+    ok(res, "got error %lu.\n", GetLastError());
+
+    ReleaseDC(child, hdc);
+    DestroyWindow(child);
+}
+
 START_TEST(opengl)
 {
     HWND hwnd;
@@ -2137,6 +2193,9 @@ START_TEST(opengl)
             test_swap_control(hdc);
         else
             skip("WGL_EXT_swap_control not supported, skipping test\n");
+
+        if (winetest_interactive)
+            test_child_window(hwnd, &pfd);
 
 cleanup:
         ReleaseDC(hwnd, hdc);

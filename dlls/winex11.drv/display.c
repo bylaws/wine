@@ -30,6 +30,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(x11drv);
 
 static struct x11drv_display_device_handler host_handler;
 static struct x11drv_settings_handler settings_handler;
+RECT native_screen_rect;
 
 #define NEXT_DEVMODEW(mode) ((DEVMODEW *)((char *)((mode) + 1) + (mode)->dmDriverExtra))
 
@@ -59,6 +60,11 @@ void X11DRV_Settings_SetHandler(const struct x11drv_settings_handler *new_handle
         settings_handler = *new_handler;
         TRACE("Display settings are now handled by: %s.\n", settings_handler.name);
     }
+}
+
+struct x11drv_settings_handler X11DRV_Settings_GetHandler(void)
+{
+    return settings_handler;
 }
 
 /***********************************************************************
@@ -340,7 +346,6 @@ static LONG apply_display_settings( DEVMODEW *displays, x11drv_settings_id *ids,
  */
 LONG X11DRV_ChangeDisplaySettings( LPDEVMODEW displays, LPCWSTR primary_name, HWND hwnd, DWORD flags, LPVOID lpvoid )
 {
-    INT left_most = INT_MAX, top_most = INT_MAX;
     LONG count, ret = DISP_CHANGE_BADPARAM;
     x11drv_settings_id *ids;
     DEVMODEW *mode;
@@ -348,18 +353,13 @@ LONG X11DRV_ChangeDisplaySettings( LPDEVMODEW displays, LPCWSTR primary_name, HW
     /* Convert virtual screen coordinates to root coordinates, and find display ids.
      * We cannot safely get the ids while changing modes, as the backend state may be invalidated.
      */
-    for (count = 0, mode = displays; mode->dmSize; mode = NEXT_DEVMODEW(mode), count++)
-    {
-        left_most = min( left_most, mode->dmPosition.x );
-        top_most = min( top_most, mode->dmPosition.y );
-    }
+    for (count = 0, mode = displays; mode->dmSize; mode = NEXT_DEVMODEW( mode )) count++;
 
     if (!(ids = calloc( count, sizeof(*ids) ))) return DISP_CHANGE_FAILED;
     for (count = 0, mode = displays; mode->dmSize; mode = NEXT_DEVMODEW(mode), count++)
     {
-        if (!settings_handler.get_id( mode->dmDeviceName, !wcsicmp( mode->dmDeviceName, primary_name ), ids + count )) goto done;
-        mode->dmPosition.x -= left_most;
-        mode->dmPosition.y -= top_most;
+        BOOL is_primary = !wcsicmp( mode->dmDeviceName, primary_name );
+        if (!settings_handler.get_id( mode->dmDeviceName, is_primary, ids + count )) goto done;
     }
 
     /* Detach displays first to free up CRTCs */
@@ -374,21 +374,33 @@ done:
 
 POINT virtual_screen_to_root(INT x, INT y)
 {
-    RECT virtual = NtUserGetVirtualScreenRect();
+    RECT virtual = fs_hack_get_real_virtual_screen();
     POINT pt;
 
-    pt.x = x - virtual.left;
-    pt.y = y - virtual.top;
+    TRACE( "from %d,%d\n", x, y );
+
+    pt.x = x;
+    pt.y = y;
+    fs_hack_point_user_to_real( &pt );
+    TRACE( "to real %s\n", wine_dbgstr_point( &pt ) );
+
+    pt.x -= virtual.left;
+    pt.y -= virtual.top;
+    TRACE( "to root %s\n", wine_dbgstr_point( &pt ) );
     return pt;
 }
 
 POINT root_to_virtual_screen(INT x, INT y)
 {
-    RECT virtual = NtUserGetVirtualScreenRect();
+    RECT virtual = fs_hack_get_real_virtual_screen();
     POINT pt;
 
+    TRACE( "from root %d,%d\n", x, y );
     pt.x = x + virtual.left;
     pt.y = y + virtual.top;
+    TRACE( "to real %s\n", wine_dbgstr_point( &pt ) );
+    fs_hack_point_real_to_user( &pt );
+    TRACE( "to user %s\n", wine_dbgstr_point( &pt ) );
     return pt;
 }
 
@@ -402,7 +414,7 @@ RECT get_host_primary_monitor_rect(void)
     RECT rect = {0};
 
     /* The first monitor is always primary */
-    if (host_handler.get_gpus(&gpus, &gpu_count) && gpu_count &&
+    if (host_handler.get_gpus(&gpus, &gpu_count, FALSE) && gpu_count &&
         host_handler.get_adapters(gpus[0].id, &adapters, &adapter_count) && adapter_count &&
         host_handler.get_monitors(adapters[0].id, &monitors, &monitor_count) && monitor_count)
         rect = monitors[0].rc_monitor;
@@ -481,6 +493,11 @@ void X11DRV_DisplayDevices_SetHandler(const struct x11drv_display_device_handler
     }
 }
 
+struct x11drv_display_device_handler X11DRV_DisplayDevices_GetHandler(void)
+{
+    return host_handler;
+}
+
 void X11DRV_DisplayDevices_RegisterEventHandlers(void)
 {
     if (host_handler.register_event_handlers) host_handler.register_event_handlers();
@@ -513,6 +530,26 @@ static const char *debugstr_devmodew( const DEVMODEW *devmode )
                              position );
 }
 
+static void fixup_device_id(UINT *vendor_id, UINT *device_id)
+{
+    const char *sgi;
+
+    if (*vendor_id == 0x10de /* NVIDIA */ && (sgi = getenv("WINE_HIDE_NVIDIA_GPU")) && *sgi != '0')
+    {
+        *vendor_id = 0x1002; /* AMD */
+        *device_id = 0x73df; /* RX 6700XT */
+    }
+    else if (*vendor_id == 0x1002 /* AMD */ && (sgi = getenv("WINE_HIDE_AMD_GPU")) && *sgi != '0')
+    {
+        *vendor_id = 0x10de; /* NVIDIA */
+        *device_id = 0x2487; /* RTX 3060 */
+    }
+    else if (*vendor_id == 0x1002 && (*device_id == 0x163f || *device_id == 0x1435) && (sgi = getenv("WINE_HIDE_VANGOGH_GPU")) && *sgi != '0')
+    {
+        *device_id = 0x687f; /* Radeon RX Vega 56/64 */
+    }
+}
+
 BOOL X11DRV_UpdateDisplayDevices( const struct gdi_device_manager *device_manager, BOOL force, void *param )
 {
     struct gdi_adapter *adapters;
@@ -529,11 +566,13 @@ BOOL X11DRV_UpdateDisplayDevices( const struct gdi_device_manager *device_manage
     TRACE( "via %s\n", debugstr_a(host_handler.name) );
 
     /* Initialize GPUs */
-    if (!host_handler.get_gpus( &gpus, &gpu_count )) return FALSE;
+    if (!host_handler.get_gpus( &gpus, &gpu_count, TRUE )) return FALSE;
     TRACE("GPU count: %d\n", gpu_count);
 
     for (gpu = 0; gpu < gpu_count; gpu++)
     {
+        fixup_device_id( &gpus[gpu].vendor_id, &gpus[gpu].device_id );
+
         device_manager->add_gpu( &gpus[gpu], param );
 
         /* Initialize adapters */
@@ -600,4 +639,6 @@ void X11DRV_DisplayDevices_Init(BOOL force)
     if (force) force_display_devices_refresh = TRUE;
     /* trigger refresh in win32u */
     NtUserGetDisplayConfigBufferSizes( QDC_ONLY_ACTIVE_PATHS, &num_path, &num_mode );
+
+    if (!native_screen_rect.bottom) native_screen_rect = NtUserGetVirtualScreenRect();
 }

@@ -18,7 +18,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "wine/heap.h"
 #include "wine/list.h"
 
 struct async_task
@@ -53,3 +52,14 @@ HRESULT mmaudio_out_create( IUnknown *outer, REFIID iid, void **obj );
 HRESULT token_category_create( IUnknown *outer, REFIID iid, void **obj );
 HRESULT token_enum_create( IUnknown *outer, REFIID iid, void **obj );
 HRESULT token_create( IUnknown *outer, REFIID iid, void **obj );
+
+enum type_id
+{
+    ISpeechObjectToken_tid,
+    ISpeechObjectTokens_tid,
+    ISpeechVoice_tid,
+    last_tid
+};
+
+HRESULT get_typeinfo( enum type_id tid, ITypeInfo **typeinfo );
+void release_typelib( void );

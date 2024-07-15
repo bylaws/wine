@@ -5,7 +5,7 @@ DELAYIMPORTS = comctl32 ole32 shell32 imm32
 UNIX_CFLAGS  = $(X_CFLAGS)
 UNIX_LIBS    = -lwin32u $(X_LIBS) $(X_EXTRA_LIBS) $(PTHREAD_LIBS) -lm
 
-C_SRCS = \
+SOURCES = \
 	bitblt.c \
 	brush.c \
 	clipboard.c \
@@ -13,6 +13,7 @@ C_SRCS = \
 	display.c \
 	dllmain.c \
 	event.c \
+	fs.c \
 	graphics.c \
 	init.c \
 	keyboard.c \
@@ -21,6 +22,7 @@ C_SRCS = \
 	palette.c \
 	pen.c \
 	systray.c \
+	version.rc \
 	vulkan.c \
 	window.c \
 	wintab.c \
@@ -31,5 +33,3 @@ C_SRCS = \
 	xrandr.c \
 	xrender.c \
 	xvidmode.c
-
-RC_SRCS = version.rc

@@ -22,11 +22,16 @@
 
 #include <stdarg.h>
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "winerror.h"
+#include "winternl.h"
 #define COBJMACROS
 #include "corerror.h"
 #include "windef.h"
 #include "winbase.h"
 #include "winstring.h"
+#include "winuser.h"
 #include "objbase.h"
 
 #include "activation.h"
@@ -42,6 +47,8 @@
 #include "windows.media.speechrecognition.h"
 
 #include "wine/list.h"
+
+#define SPERR_WINRT_INTERNAL_ERROR 0x800455a0
 
 /*
  *
@@ -125,5 +132,15 @@ HRESULT vector_inspectable_create( const struct vector_iids *iids, IVector_IInsp
     DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from_##iface_type, iface_type##_iface, &impl->base_iface )
 #define DEFINE_IINSPECTABLE_OUTER( pfx, iface_type, impl_type, outer_iface )                       \
     DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from_##iface_type, iface_type##_iface, impl->outer_iface )
+
+struct synth_provider
+{
+    struct IVoiceInformation **voices;
+    unsigned num_voices;
+    void (*dispose)(struct synth_provider *provider);
+};
+
+HRESULT voice_information_allocate(const WCHAR *display_name, const WCHAR *id, const WCHAR *locale,
+                                   VoiceGender gender, IVoiceInformation **pvoice);
 
 #endif

@@ -38,6 +38,8 @@ static void test_dc_values(void)
     HDC hdc = CreateDCA("DISPLAY", NULL, NULL, NULL);
     COLORREF color;
     int extra, attr;
+    float limit;
+    BOOL ret;
 
     ok( hdc != NULL, "CreateDC failed\n" );
     color = SetBkColor( hdc, 0x12345678 );
@@ -90,6 +92,22 @@ static void test_dc_values(void)
     attr = GetDeviceCaps(ULongToHandle(0xdeadbeef), TECHNOLOGY);
     ok(!attr, "GetDeviceCaps rets %d\n", attr);
     ok(GetLastError() == ERROR_INVALID_HANDLE, "GetLastError() = %lu\n", GetLastError());
+
+    /* Miter limit */
+    limit = 123.0f;
+    ret = GetMiterLimit(hdc, &limit);
+    ok(ret, "Unexpected return value.\n");
+    ok(limit == 10.0f, "Unexpected default miter limit %f.\n", limit);
+
+    limit = 456.0;
+    ret = SetMiterLimit(hdc, 0.9f, &limit);
+    ok(!ret, "Unexpected return value.\n");
+    ok(limit == 456.0f, "Unexpected default miter limit %f.\n", limit);
+
+    limit = 0.0;
+    ret = SetMiterLimit(hdc, 1.0f, &limit);
+    ok(ret, "Unexpected return value.\n");
+    ok(limit == 10.0f, "Unexpected default miter limit %f.\n", limit);
 
     DeleteDC( hdc );
 }
@@ -1343,11 +1361,11 @@ static HDC create_printer_dc(int scale, BOOL reset)
     if (!pOpenPrinterA( buffer, &hprn, NULL )) goto done;
 
     pGetPrinterA( hprn, 2, NULL, 0, &len );
-    pbuf = HeapAlloc( GetProcessHeap(), 0, len );
+    pbuf = malloc( len );
     if (!pGetPrinterA( hprn, 2, (LPBYTE)pbuf, len, &len )) goto done;
 
     pGetPrinterDriverA( hprn, NULL, 3, NULL, 0, &len );
-    dbuf = HeapAlloc( GetProcessHeap(), 0, len );
+    dbuf = malloc( len );
     if (!pGetPrinterDriverA( hprn, NULL, 3, (LPBYTE)dbuf, len, &len )) goto done;
 
     pbuf->pDevMode->dmScale = scale;
@@ -1360,8 +1378,8 @@ static HDC create_printer_dc(int scale, BOOL reset)
 
     if (reset) ResetDCA( hdc, pbuf->pDevMode );
 done:
-    HeapFree( GetProcessHeap(), 0, dbuf );
-    HeapFree( GetProcessHeap(), 0, pbuf );
+    free( dbuf );
+    free( pbuf );
     if (hprn) pClosePrinter( hprn );
     if (winspool) FreeLibrary( winspool );
     if (!hdc) skip( "could not create a DC for the default printer\n" );

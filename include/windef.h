@@ -248,7 +248,6 @@ typedef unsigned int    DWORD,      *PDWORD,   *LPDWORD;
 
 #ifdef __WINESRC__
 #define WINE_NO_UNICODE_MACROS 1
-#define WINE_STRICT_PROTOTYPES 1
 #endif
 
 #ifdef WINE_NO_UNICODE_MACROS
@@ -326,7 +325,7 @@ typedef HICON HCURSOR;
 
 /* Callback function pointers types */
 
-#ifdef WINE_STRICT_PROTOTYPES
+#ifndef WINE_NO_STRICT_PROTOTYPES
 typedef INT_PTR (CALLBACK *FARPROC)(void);
 typedef INT_PTR (CALLBACK *NEARPROC)(void);
 typedef INT_PTR (CALLBACK *PROC)(void);
@@ -390,23 +389,13 @@ typedef struct _POINTL
 
 typedef struct tagPOINTS
 {
-#ifdef WORDS_BIGENDIAN
-    SHORT y;
-    SHORT x;
-#else
     SHORT x;
     SHORT y;
-#endif
 } POINTS, *PPOINTS, *LPPOINTS;
 
 typedef struct _FILETIME {
-#ifdef WORDS_BIGENDIAN
-    DWORD  dwHighDateTime;
-    DWORD  dwLowDateTime;
-#else
     DWORD  dwLowDateTime;
     DWORD  dwHighDateTime;
-#endif
 } FILETIME, *PFILETIME, *LPFILETIME;
 #define _FILETIME_
 
@@ -448,5 +437,11 @@ typedef enum DPI_AWARENESS
 #ifdef __cplusplus
 }
 #endif
+
+typedef enum {
+  DPI_HOSTING_BEHAVIOR_INVALID = -1,
+  DPI_HOSTING_BEHAVIOR_DEFAULT = 0,
+  DPI_HOSTING_BEHAVIOR_MIXED = 1
+} DPI_HOSTING_BEHAVIOR;
 
 #endif /* _WINDEF_ */

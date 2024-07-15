@@ -990,6 +990,7 @@ void macdrv_compute_keyboard_layout(struct macdrv_thread_data *thread_data)
  */
 static void macdrv_send_keyboard_input(HWND hwnd, WORD vkey, WORD scan, unsigned int flags, unsigned int time)
 {
+    RAWINPUT rawinput;
     INPUT input;
 
     TRACE_(key)("hwnd %p vkey=%04x scan=%04x flags=%04x\n", hwnd, vkey, scan, flags);
@@ -1001,7 +1002,7 @@ static void macdrv_send_keyboard_input(HWND hwnd, WORD vkey, WORD scan, unsigned
     input.ki.time           = time;
     input.ki.dwExtraInfo    = 0;
 
-    __wine_send_input(hwnd, &input, NULL);
+    __wine_send_input(hwnd, &input, &rawinput);
 }
 
 
@@ -1361,7 +1362,7 @@ INT macdrv_GetKeyNameText(LONG lparam, LPWSTR buffer, INT size)
             if (!len)
             {
                 char name[16];
-                len = sprintf(name, "Key 0x%02x", vkey);
+                len = snprintf(name, sizeof(name), "Key 0x%02x", vkey);
                 len = min(len + 1, size);
                 ascii_to_unicode(buffer, name, len);
                 if (len) buffer[--len] = 0;

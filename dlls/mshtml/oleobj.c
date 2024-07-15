@@ -35,6 +35,7 @@
 
 #include "mshtml_private.h"
 #include "htmlevent.h"
+#include "binding.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
@@ -2079,8 +2080,10 @@ void HTMLDocumentNode_OleObj_Init(HTMLDocumentNode *This)
     This->IObjectWithSite_iface.lpVtbl = &DocNodeObjectWithSiteVtbl;
     This->IOleContainer_iface.lpVtbl = &DocNodeOleContainerVtbl;
     This->IObjectSafety_iface.lpVtbl = &DocNodeObjectSafetyVtbl;
-    This->doc_obj->extent.cx = 1;
-    This->doc_obj->extent.cy = 1;
+    if(This->doc_obj) {
+        This->doc_obj->extent.cx = 1;
+        This->doc_obj->extent.cy = 1;
+    }
 }
 
 static void HTMLDocumentObj_OleObj_Init(HTMLDocumentObj *This)
@@ -3403,6 +3406,60 @@ static ULONG WINAPI HTMLDocumentObj_AddRef(IUnknown *iface)
     return ref;
 }
 
+static void set_window_uninitialized(HTMLOuterWindow *window)
+{
+    nsChannelBSC *channelbsc;
+    nsWineURI *nsuri;
+    IMoniker *mon;
+    HRESULT hres;
+    IUri *uri;
+
+    window->readystate = READYSTATE_UNINITIALIZED;
+    set_current_uri(window, NULL);
+    if(window->mon) {
+        IMoniker_Release(window->mon);
+        window->mon = NULL;
+    }
+
+    if(!window->base.inner_window)
+        return;
+
+    hres = create_uri(L"about:blank", 0, &uri);
+    if(FAILED(hres))
+        return;
+
+    hres = create_doc_uri(uri, &nsuri);
+    IUri_Release(uri);
+    if(FAILED(hres))
+        return;
+
+    hres = CreateURLMoniker(NULL, L"about:blank", &mon);
+    if(SUCCEEDED(hres)) {
+        hres = create_channelbsc(mon, NULL, NULL, 0, TRUE, &channelbsc);
+        IMoniker_Release(mon);
+
+        if(SUCCEEDED(hres)) {
+            channelbsc->bsc.bindf = 0;  /* synchronous binding */
+
+            if(window->base.inner_window->doc)
+                remove_target_tasks(window->base.inner_window->task_magic);
+            abort_window_bindings(window->base.inner_window);
+            window->base.inner_window->doc->unload_sent = TRUE;
+
+            hres = load_nsuri(window, nsuri, NULL, channelbsc, LOAD_FLAGS_BYPASS_CACHE);
+            if(SUCCEEDED(hres))
+                hres = create_pending_window(window, channelbsc);
+            IBindStatusCallback_Release(&channelbsc->bsc.IBindStatusCallback_iface);
+        }
+    }
+    nsISupports_Release((nsISupports*)nsuri);
+    if(FAILED(hres))
+        return;
+
+    window->load_flags |= BINDING_REPLACE;
+    start_binding(window->pending_window, &window->pending_window->bscallback->bsc, NULL);
+}
+
 static ULONG WINAPI HTMLDocumentObj_Release(IUnknown *iface)
 {
     HTMLDocumentObj *This = impl_from_IUnknown(iface);
@@ -3412,8 +3469,15 @@ static ULONG WINAPI HTMLDocumentObj_Release(IUnknown *iface)
 
     if(!ref) {
         if(This->doc_node) {
-            This->doc_node->doc_obj = NULL;
-            IHTMLDOMNode_Release(&This->doc_node->node.IHTMLDOMNode_iface);
+            HTMLDocumentNode *doc_node = This->doc_node;
+
+            if(This->nscontainer)
+                This->nscontainer->doc = NULL;
+            This->doc_node = NULL;
+            doc_node->doc_obj = NULL;
+
+            set_window_uninitialized(This->window);
+            IHTMLDOMNode_Release(&doc_node->node.IHTMLDOMNode_iface);
         }
         if(This->window)
             IHTMLWindow2_Release(&This->window->base.IHTMLWindow2_iface);
@@ -3605,14 +3669,97 @@ static const cpc_entry_t HTMLDocumentObj_cpc[] = {
     {NULL}
 };
 
+
+
+/* TRUE if we create a dedicated thread for all HTML documents */
+static BOOL gecko_main_thread_config;
+
+static LONG gecko_main_thread;
+static HWND gecko_main_thread_hwnd;
+static HANDLE gecko_main_thread_event;
+
+static DWORD WINAPI gecko_main_thread_proc(void *arg)
+{
+    MSG msg;
+
+    TRACE("\n");
+
+    CoInitialize(NULL);
+
+    gecko_main_thread_hwnd = get_thread_hwnd();
+    if(!gecko_main_thread_hwnd) {
+        ERR("Could not create thread window\n");
+        SetEvent(gecko_main_thread_event);
+        CoUninitialize();
+        return 0;
+    }
+
+    gecko_main_thread = GetCurrentThreadId();
+    SetEvent(gecko_main_thread_event);
+
+    while(GetMessageW(&msg, NULL, 0, 0)) {
+        DispatchMessageW(&msg);
+        TranslateMessage(&msg);
+    }
+
+    CoUninitialize();
+    return 0;
+}
+
+static BOOL WINAPI read_thread_config(INIT_ONCE *once, void *param, void **context)
+{
+    char str[64];
+
+    if((GetEnvironmentVariableA("SteamGameId", str, sizeof(str)) && (!strcmp(str, "491540") || !strcmp(str,"47890")))
+            || (GetEnvironmentVariableA("WINE_GECKO_MAIN_THREAD", str, sizeof(str)) && *str != '0'))
+    {
+        FIXME("HACK: Using separated main thread.\n");
+        gecko_main_thread_config = TRUE;
+    }
+
+    return TRUE;
+}
+
 static HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv)
 {
     HTMLDocumentObj *doc;
     HRESULT hres;
 
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+
     if(outer && !IsEqualGUID(&IID_IUnknown, riid)) {
         *ppv = NULL;
         return E_INVALIDARG;
+    }
+
+    /* CXHACK 15579 */
+    InitOnceExecuteOnce(&init_once, read_thread_config, NULL, NULL);
+    if(gecko_main_thread_config && !gecko_main_thread) {
+        HANDLE thread, event;
+
+        event = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if(InterlockedCompareExchangePointer(&gecko_main_thread_event, event, NULL))
+            CloseHandle(event);
+
+        thread = CreateThread(NULL, 0, gecko_main_thread_proc, NULL, 0, NULL);
+        if(thread) {
+            WaitForSingleObject(gecko_main_thread_event, INFINITE);
+            CloseHandle(thread);
+        }else {
+            ERR("Could not create a thread\n");
+        }
+    }
+
+    if(!gecko_main_thread) {
+        gecko_main_thread = GetCurrentThreadId();
+        gecko_main_thread_hwnd = get_thread_hwnd();
+    }else if(GetCurrentThreadId() != gecko_main_thread) {
+        FIXME("HACK: Creating HTMLDocument outside Gecko main thread\n");
+        if(!gecko_main_thread_config) {
+            FIXME("HACK: Dedicated main thread not configured\n");
+            FIXME("HACK: Create HKCU\\Software\\Wine\\MSHTML\\MainThreadHack key\n");
+        }
+        return create_marshaled_doc(gecko_main_thread_hwnd, riid, ppv);
     }
 
     /* ensure that security manager is initialized */

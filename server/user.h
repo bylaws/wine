@@ -52,16 +52,6 @@ struct winstation
     struct namespace  *desktop_names;      /* namespace for desktops of this winstation */
 };
 
-struct global_cursor
-{
-    int                  x;                /* cursor position */
-    int                  y;
-    rectangle_t          clip;             /* cursor clip rectangle */
-    unsigned int         last_change;      /* time of last position change */
-    user_handle_t        win;              /* window that contains the cursor */
-    user_handle_t        handle;           /* last set cursor handle */
-};
-
 struct desktop
 {
     struct object        obj;              /* object header */
@@ -73,10 +63,16 @@ struct desktop
     struct hook_table   *global_hooks;     /* table of global hooks on this desktop */
     struct list          hotkeys;          /* list of registered hotkeys */
     struct timeout_user *close_timeout;    /* timeout before closing the desktop */
+    timeout_t            close_timeout_val;/* timeout duration before closing desktop */
+    struct list          touches;          /* list of active touches */
     struct thread_input *foreground_input; /* thread input of foreground thread */
     unsigned int         users;            /* processes and threads using this desktop */
-    struct global_cursor cursor;           /* global cursor information */
+    user_handle_t        cursor_win;       /* window that contains the cursor */
+    unsigned int         cursor_clip_flags;/* last cursor clip flags */
     unsigned char        keystate[256];    /* asynchronous key state */
+    unsigned int         last_press_alt:1; /* last key press was Alt (used to determine msg on Alt release) */
+    struct object       *shared_mapping;   /* desktop shared memory mapping */
+    const desktop_shm_t *shared;           /* desktop shared memory */
 };
 
 /* user handles functions */
@@ -97,8 +93,8 @@ extern void cleanup_clipboard_thread( struct thread *thread );
 /* hook functions */
 
 extern void remove_thread_hooks( struct thread *thread );
-extern unsigned int get_active_hooks(void);
-extern struct thread *get_first_global_hook( int id );
+extern struct thread *get_first_global_hook( int id, thread_id_t *thread_id, client_ptr_t *proc );
+extern void disable_hung_hook( struct desktop *desktop, int id, thread_id_t thread_id, client_ptr_t proc );
 
 /* queue functions */
 
@@ -122,6 +118,7 @@ extern void post_win_event( struct thread *thread, unsigned int event,
                             const WCHAR *module, data_size_t module_size,
                             user_handle_t handle );
 extern void free_hotkeys( struct desktop *desktop, user_handle_t window );
+extern void free_touches( struct desktop *desktop, user_handle_t window );
 
 /* region functions */
 

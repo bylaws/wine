@@ -16,6 +16,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#if 0
+#pragma makedep arm64ec_x64
+#endif
+
 #include <stdarg.h>
 
 #define COBJMACROS
@@ -337,7 +341,7 @@ HRESULT wrap_iface(IUnknown *iface, IUnknown *ref_unk, IUnknown **ret)
     IUnknown_AddRef(iface);
     wrapper->iface = iface;
 
-    IUnknown_AddRef(ref_unk);
+    /* Caller AddRefs */
     wrapper->ref_unk = ref_unk;
 
     *ret = &wrapper->IUnknown_iface;

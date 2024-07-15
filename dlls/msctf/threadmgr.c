@@ -37,6 +37,17 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(msctf);
 
+static CRITICAL_SECTION ThreadMgrCs;
+static CRITICAL_SECTION_DEBUG ThreadMgrCsDebug =
+{
+    0, 0, &ThreadMgrCs,
+    {&ThreadMgrCsDebug.ProcessLocksList,
+     &ThreadMgrCsDebug.ProcessLocksList },
+     0, 0, {(DWORD_PTR)(__FILE__ ": ThreadMgrCs")}
+};
+static CRITICAL_SECTION ThreadMgrCs = {&ThreadMgrCsDebug, -1, 0, 0, 0, 0};
+struct list ThreadMgrList = LIST_INIT(ThreadMgrList);
+
 typedef struct tagPreservedKey
 {
     struct list     entry;
@@ -98,6 +109,9 @@ typedef struct tagACLMulti {
     struct list     ThreadMgrEventSink;
     struct list     UIElementSink;
     struct list     InputProcessorProfileActivationSink;
+
+    DWORD threadId;
+    struct list entry;
 } ThreadMgr;
 
 typedef struct tagEnumTfDocumentMgr {
@@ -109,6 +123,11 @@ typedef struct tagEnumTfDocumentMgr {
 } EnumTfDocumentMgr;
 
 static HRESULT EnumTfDocumentMgr_Constructor(struct list* head, IEnumTfDocumentMgrs **ppOut);
+
+static inline ThreadMgr *impl_from_ITfThreadMgr(ITfThreadMgr *iface)
+{
+    return CONTAINING_RECORD(iface, ThreadMgr, ITfThreadMgrEx_iface);
+}
 
 static inline ThreadMgr *impl_from_ITfThreadMgrEx(ITfThreadMgrEx *iface)
 {
@@ -155,6 +174,35 @@ static inline EnumTfDocumentMgr *impl_from_IEnumTfDocumentMgrs(IEnumTfDocumentMg
     return CONTAINING_RECORD(iface, EnumTfDocumentMgr, IEnumTfDocumentMgrs_iface);
 }
 
+/***********************************************************************
+ *              TF_GetThreadMgr (MSCTF.@)
+ */
+HRESULT WINAPI TF_GetThreadMgr(ITfThreadMgr **pptim)
+{
+    DWORD id = GetCurrentThreadId();
+    ThreadMgr *cursor;
+
+    TRACE("%p\n", pptim);
+
+    if (!pptim)
+        return E_INVALIDARG;
+
+    EnterCriticalSection(&ThreadMgrCs);
+    LIST_FOR_EACH_ENTRY(cursor, &ThreadMgrList, ThreadMgr, entry)
+    {
+        if (cursor->threadId == id)
+        {
+            ITfThreadMgrEx_AddRef(&cursor->ITfThreadMgrEx_iface);
+            *pptim = (ITfThreadMgr *)&cursor->ITfThreadMgrEx_iface;
+            LeaveCriticalSection(&ThreadMgrCs);
+            return S_OK;
+        }
+    }
+    LeaveCriticalSection(&ThreadMgrCs);
+    *pptim = NULL;
+    return E_FAIL;
+}
+
 static void ThreadMgr_Destructor(ThreadMgr *This)
 {
     struct list *cursor, *cursor2;
@@ -163,7 +211,9 @@ static void ThreadMgr_Destructor(ThreadMgr *This)
     if (This->focusHook)
         UnhookWindowsHookEx(This->focusHook);
 
-    TlsSetValue(tlsIndex,NULL);
+    EnterCriticalSection(&ThreadMgrCs);
+    list_remove(&This->entry);
+    LeaveCriticalSection(&ThreadMgrCs);
     TRACE("destroying %p\n", This);
     if (This->focus)
         ITfDocumentMgr_Release(This->focus);
@@ -181,8 +231,8 @@ static void ThreadMgr_Destructor(ThreadMgr *This)
     {
         PreservedKey* key = LIST_ENTRY(cursor,PreservedKey,entry);
         list_remove(cursor);
-        HeapFree(GetProcessHeap(),0,key->description);
-        HeapFree(GetProcessHeap(),0,key);
+        free(key->description);
+        free(key);
     }
 
     LIST_FOR_EACH_SAFE(cursor, cursor2, &This->CreatedDocumentMgrs)
@@ -190,19 +240,19 @@ static void ThreadMgr_Destructor(ThreadMgr *This)
         DocumentMgrEntry *mgr = LIST_ENTRY(cursor,DocumentMgrEntry,entry);
         list_remove(cursor);
         FIXME("Left Over ITfDocumentMgr.  Should we do something with it?\n");
-        HeapFree(GetProcessHeap(),0,mgr);
+        free(mgr);
     }
 
     LIST_FOR_EACH_SAFE(cursor, cursor2, &This->AssociatedFocusWindows)
     {
         AssociatedWindow *wnd = LIST_ENTRY(cursor,AssociatedWindow,entry);
         list_remove(cursor);
-        HeapFree(GetProcessHeap(),0,wnd);
+        free(wnd);
     }
 
     CompartmentMgr_Destructor(This->CompartmentMgr);
 
-    HeapFree(GetProcessHeap(),0,This);
+    free(This);
 }
 
 static HRESULT WINAPI ThreadMgr_QueryInterface(ITfThreadMgrEx *iface, REFIID iid, LPVOID *ppvOut)
@@ -315,7 +365,7 @@ static HRESULT WINAPI ThreadMgr_CreateDocumentMgr(ITfThreadMgrEx *iface, ITfDocu
     HRESULT hr;
 
     TRACE("(%p)\n",iface);
-    mgrentry = HeapAlloc(GetProcessHeap(),0,sizeof(DocumentMgrEntry));
+    mgrentry = malloc(sizeof(DocumentMgrEntry));
     if (mgrentry == NULL)
         return E_OUTOFMEMORY;
 
@@ -327,7 +377,7 @@ static HRESULT WINAPI ThreadMgr_CreateDocumentMgr(ITfThreadMgrEx *iface, ITfDocu
         list_add_head(&This->CreatedDocumentMgrs,&mgrentry->entry);
     }
     else
-        HeapFree(GetProcessHeap(),0,mgrentry);
+        free(mgrentry);
 
     return hr;
 }
@@ -386,17 +436,20 @@ static HRESULT WINAPI ThreadMgr_SetFocus(ITfThreadMgrEx *iface, ITfDocumentMgr *
 
 static LRESULT CALLBACK ThreadFocusHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
+    ITfThreadMgr *ThreadMgr_iface;
     ThreadMgr *This;
 
-    This = TlsGetValue(tlsIndex);
-    if (!This)
+    if (FAILED(TF_GetThreadMgr(&ThreadMgr_iface)))
     {
         ERR("Hook proc but no ThreadMgr for this thread. Serious Error\n");
         return 0;
     }
+
+    This = impl_from_ITfThreadMgr(ThreadMgr_iface);
     if (!This->focusHook)
     {
         ERR("Hook proc but no ThreadMgr focus Hook. Serious Error\n");
+        ITfThreadMgr_Release(ThreadMgr_iface);
         return 0;
     }
 
@@ -417,6 +470,7 @@ static LRESULT CALLBACK ThreadFocusHookProc(int nCode, WPARAM wParam, LPARAM lPa
         }
     }
 
+    ITfThreadMgr_Release(ThreadMgr_iface);
     return CallNextHookEx(This->focusHook, nCode, wParam, lParam);
 }
 
@@ -465,7 +519,7 @@ ITfDocumentMgr *pdimNew, ITfDocumentMgr **ppdimPrev)
         }
     }
 
-    wnd = HeapAlloc(GetProcessHeap(),0,sizeof(AssociatedWindow));
+    wnd = malloc(sizeof(AssociatedWindow));
     wnd->hwnd = hwnd;
     wnd->docmgr = pdimNew;
     list_add_head(&This->AssociatedFocusWindows,&wnd->entry);
@@ -875,7 +929,7 @@ static HRESULT WINAPI KeystrokeMgr_PreserveKey(ITfKeystrokeMgr *iface,
             return TF_E_ALREADY_EXISTS;
     }
 
-    newkey = HeapAlloc(GetProcessHeap(),0,sizeof(PreservedKey));
+    newkey = malloc(sizeof(PreservedKey));
     if (!newkey)
         return E_OUTOFMEMORY;
 
@@ -885,10 +939,10 @@ static HRESULT WINAPI KeystrokeMgr_PreserveKey(ITfKeystrokeMgr *iface,
     newkey->description = NULL;
     if (cchDesc)
     {
-        newkey->description = HeapAlloc(GetProcessHeap(),0,cchDesc * sizeof(WCHAR));
+        newkey->description = malloc(cchDesc * sizeof(WCHAR));
         if (!newkey->description)
         {
-            HeapFree(GetProcessHeap(),0,newkey);
+            free(newkey);
             return E_OUTOFMEMORY;
         }
         memcpy(newkey->description, pchDesc, cchDesc*sizeof(WCHAR));
@@ -922,8 +976,8 @@ static HRESULT WINAPI KeystrokeMgr_UnpreserveKey(ITfKeystrokeMgr *iface,
         return CONNECT_E_NOCONNECTION;
 
     list_remove(&key->entry);
-    HeapFree(GetProcessHeap(),0,key->description);
-    HeapFree(GetProcessHeap(),0,key);
+    free(key->description);
+    free(key);
 
     return S_OK;
 }
@@ -1346,15 +1400,10 @@ HRESULT ThreadMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut)
         return CLASS_E_NOAGGREGATION;
 
     /* Only 1 ThreadMgr is created per thread */
-    This = TlsGetValue(tlsIndex);
-    if (This)
-    {
-        ThreadMgr_AddRef(&This->ITfThreadMgrEx_iface);
-        *ppOut = (IUnknown*)&This->ITfThreadMgrEx_iface;
+    if (SUCCEEDED(TF_GetThreadMgr((ITfThreadMgr **)ppOut)))
         return S_OK;
-    }
 
-    This = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(ThreadMgr));
+    This = calloc(1, sizeof(ThreadMgr));
     if (This == NULL)
         return E_OUTOFMEMORY;
 
@@ -1367,7 +1416,6 @@ HRESULT ThreadMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut)
     This->ITfUIElementMgr_iface.lpVtbl = &ThreadMgrUIElementMgrVtbl;
     This->ITfSourceSingle_iface.lpVtbl = &SourceSingleVtbl;
     This->refCount = 1;
-    TlsSetValue(tlsIndex,This);
 
     CompartmentMgr_Constructor((IUnknown*)&This->ITfThreadMgrEx_iface, &IID_IUnknown, (IUnknown**)&This->CompartmentMgr);
 
@@ -1384,6 +1432,11 @@ HRESULT ThreadMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut)
     list_init(&This->UIElementSink);
     list_init(&This->InputProcessorProfileActivationSink);
 
+    This->threadId = GetCurrentThreadId();
+    EnterCriticalSection(&ThreadMgrCs);
+    list_add_tail(&ThreadMgrList, &This->entry);
+    LeaveCriticalSection(&ThreadMgrCs);
+
     TRACE("returning %p\n", This);
     *ppOut = (IUnknown *)&This->ITfThreadMgrEx_iface;
     return S_OK;
@@ -1395,7 +1448,7 @@ HRESULT ThreadMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut)
 static void EnumTfDocumentMgr_Destructor(EnumTfDocumentMgr *This)
 {
     TRACE("destroying %p\n", This);
-    HeapFree(GetProcessHeap(),0,This);
+    free(This);
 }
 
 static HRESULT WINAPI EnumTfDocumentMgr_QueryInterface(IEnumTfDocumentMgrs *iface, REFIID iid, LPVOID *ppvOut)
@@ -1520,7 +1573,7 @@ static HRESULT EnumTfDocumentMgr_Constructor(struct list* head, IEnumTfDocumentM
 {
     EnumTfDocumentMgr *This;
 
-    This = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(EnumTfDocumentMgr));
+    This = calloc(1, sizeof(EnumTfDocumentMgr));
     if (This == NULL)
         return E_OUTOFMEMORY;
 
@@ -1546,7 +1599,7 @@ void ThreadMgr_OnDocumentMgrDestruction(ITfThreadMgr *iface, ITfDocumentMgr *mgr
         if (mgrentry->docmgr == mgr)
         {
             list_remove(cursor);
-            HeapFree(GetProcessHeap(),0,mgrentry);
+            free(mgrentry);
             found = TRUE;
             break;
         }

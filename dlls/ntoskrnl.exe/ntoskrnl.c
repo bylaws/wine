@@ -27,6 +27,7 @@
 #include "excpt.h"
 #include "winreg.h"
 #include "ntsecapi.h"
+#include "evntprov.h"
 #include "ddk/csq.h"
 #include "wine/server.h"
 #include "wine/heap.h"
@@ -257,6 +258,15 @@ POBJECT_TYPE WINAPI ObGetObjectType( void *object )
     return header->type;
 }
 
+static const WCHAR section_type_name[] = {'S','e','c','t','i','o','n',0};
+
+static struct _OBJECT_TYPE section_type =
+{
+    section_type_name
+};
+
+static POBJECT_TYPE p_section_type = &section_type;
+
 static const POBJECT_TYPE *known_types[] =
 {
     &ExEventObjectType,
@@ -266,7 +276,8 @@ static const POBJECT_TYPE *known_types[] =
     &IoFileObjectType,
     &PsProcessType,
     &PsThreadType,
-    &SeTokenObjectType
+    &SeTokenObjectType,
+    &p_section_type,
 };
 
 DECLARE_CRITICAL_SECTION(handle_map_cs);
@@ -4598,6 +4609,25 @@ void WINAPI KeLowerIrql(KIRQL new)
 }
 
 #endif
+
+typedef void (WINAPI *PETW_CLASSIC_CALLBACK)(
+    const GUID *guid, UCHAR control_code, void *enable_context, void *callback_context);
+
+NTSTATUS WINAPI EtwRegisterClassicProvider(const GUID *provider, ULONG type, PETW_CLASSIC_CALLBACK callback,
+                                           void *context, REGHANDLE *handle)
+{
+    FIXME("provider %s, type %lu, enable_callback %p, context %p, handle %p\n", debugstr_guid(provider), type,
+          callback, context, handle);
+
+    *handle = 0xdeadbeef;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS WINAPI EtwUnregister(REGHANDLE handle)
+{
+    FIXME("handle %I64x\n", handle);
+    return STATUS_SUCCESS;
+}
 
 /*****************************************************
  *           DllMain

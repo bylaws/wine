@@ -94,6 +94,12 @@ static void test_select( IWbemServices *services )
         L"SELECT * FROM Win32_BIOS WHERE NULL = NAME",
         L"SELECT * FROM Win32_LogicalDiskToPartition",
         L"SELECT * FROM Win32_DiskDriveToDiskPartition",
+        L"SELECT \x80 FROM \x80",
+        L"SELECT \xC6 FROM \xC6",
+        L"SELECT \xFF FROM \xFF",
+        L"SELECT \x200C FROM \x200C",
+        L"SELECT \xFF21 FROM \xFF21",
+        L"SELECT \xFFFD FROM \xFFFD",
     };
     HRESULT hr;
     IEnumWbemClassObject *result;
@@ -133,6 +139,82 @@ static void test_select( IWbemServices *services )
     SysFreeString( sql );
     SysFreeString( query );
 }
+
+static void check_explorer_like_query( IWbemServices *services, const WCHAR *str, BOOL expect_success)
+{
+    HRESULT hr;
+    IWbemClassObject *obj[2];
+    BSTR wql = SysAllocString( L"wql" ), query = SysAllocString( str );
+    LONG flags = WBEM_FLAG_RETURN_IMMEDIATELY | WBEM_FLAG_FORWARD_ONLY;
+    ULONG count;
+    IEnumWbemClassObject *result;
+
+    hr = IWbemServices_ExecQuery( services, wql, query, flags, NULL, &result );
+    if (hr == S_OK)
+    {
+        VARIANT var;
+        IEnumWbemClassObject_Next( result, 10000, 2, obj, &count );
+
+        ok( count == (expect_success ? 1 : 0), "expected to get %d results but got %lu\n",
+                (expect_success ? 1 : 0), count);
+
+        if (count)
+        {
+            BSTR caption;
+            hr = IWbemClassObject_Get( obj[0], L"Caption", 0, &var, NULL, NULL );
+            ok( hr == WBEM_S_NO_ERROR, "IWbemClassObject_Get failed %#lx", hr);
+            caption = V_BSTR(&var);
+            ok( !wcscmp( caption, L"explorer.exe" ), "%s is not explorer.exe\n", debugstr_w(caption));
+            VariantClear( &var );
+        }
+
+        while (count--)
+            IWbemClassObject_Release( obj[count] );
+    }
+
+    SysFreeString( wql );
+    SysFreeString( query );
+}
+
+
+static void test_like_query( IWbemServices *services )
+{
+    int i;
+    WCHAR query[250];
+
+    struct {
+        BOOL expect_success;
+        const WCHAR *str;
+    } queries[] = {
+        { TRUE,  L"explorer%" },
+        { FALSE, L"xplorer.exe" },
+        { FALSE, L"explorer.ex" },
+        { TRUE,  L"%explorer%" },
+        { TRUE,  L"explorer.exe%" },
+        { TRUE,  L"%explorer.exe%" },
+        { TRUE,  L"%plorer.exe" },
+        { TRUE,  L"%plorer.exe%" },
+        { TRUE,  L"__plorer.exe" },
+        { TRUE,  L"e_plorer.exe" },
+        { FALSE, L"_plorer.exe" },
+        { TRUE,  L"%%%plorer.e%" },
+        { TRUE,  L"%plorer.e%" },
+        { TRUE,  L"%plorer.e_e" },
+        { TRUE,  L"%plorer.e_e" },
+        { TRUE,  L"explore%exe" },
+        { FALSE, L"fancy_explore.exe" },
+        { FALSE, L"fancy%xplore%exe" },
+        { FALSE, L"%%%f%xplore%exe" },
+    };
+
+    for (i = 0; i < ARRAYSIZE(queries); i++)
+    {
+        wsprintfW( query, L"SELECT * FROM Win32_Process WHERE Caption LIKE '%ls'", queries[i].str );
+        trace("%s\n", wine_dbgstr_w(query));
+        check_explorer_like_query( services, query, queries[i].expect_success );
+    }
+}
+
 
 static void test_associators( IWbemServices *services )
 {
@@ -2122,6 +2204,7 @@ static void test_Win32_SoundDevice( IWbemServices *services )
         hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
         if (hr != S_OK) break;
 
+        check_property( obj, L"Caption", VT_BSTR, CIM_STRING );
         check_property( obj, L"DeviceID", VT_BSTR, CIM_STRING );
         check_property( obj, L"Manufacturer", VT_BSTR, CIM_STRING );
         check_property( obj, L"Name", VT_BSTR, CIM_STRING );
@@ -2359,6 +2442,7 @@ START_TEST(query)
     test_query_async( services );
     test_query_semisync( services );
     test_select( services );
+    test_like_query( services );
 
     /* classes */
     test_SoftwareLicensingProduct( services );

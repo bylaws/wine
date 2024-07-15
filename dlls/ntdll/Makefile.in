@@ -10,7 +10,7 @@ EXTRADLLFLAGS = -nodefaultlibs
 i386_EXTRADLLFLAGS = -Wl,--image-base,0x7bc00000
 x86_64_EXTRADLLFLAGS = -Wl,--image-base,0x170000000
 
-C_SRCS = \
+SOURCES = \
 	actctx.c \
 	atom.c \
 	crypt.c \
@@ -37,6 +37,7 @@ C_SRCS = \
 	sec.c \
 	signal_arm.c \
 	signal_arm64.c \
+	signal_arm64ec.c \
 	signal_i386.c \
 	signal_x86_64.c \
 	string.c \
@@ -47,7 +48,9 @@ C_SRCS = \
 	unix/cdrom.c \
 	unix/debug.c \
 	unix/env.c \
+	unix/esync.c \
 	unix/file.c \
+	unix/fsync.c \
 	unix/loader.c \
 	unix/loadorder.c \
 	unix/process.c \
@@ -65,10 +68,10 @@ C_SRCS = \
 	unix/tape.c \
 	unix/thread.c \
 	unix/virtual.c \
+	unwind.c \
 	version.c \
+	version.rc \
 	wcstring.c
-
-RC_SRCS = version.rc
 
 EXTRA_OBJS = unix/version.o
 

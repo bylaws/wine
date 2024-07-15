@@ -75,6 +75,7 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
 {
     struct d3d_vertex_buffer *buffer = impl_from_IDirect3DVertexBuffer7(iface);
     ULONG ref = InterlockedDecrement(&buffer->ref);
+    struct d3d_device *device;
 
     TRACE("%p decreasing refcount to %lu.\n", buffer, ref);
 
@@ -85,8 +86,12 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
          * stream source in wined3d and they should get unset there before
          * they are destroyed. */
         wined3d_mutex_lock();
-        if (buffer->ddraw->stateblock_state->streams[0].buffer == buffer->wined3d_buffer)
-            wined3d_stateblock_set_stream_source(buffer->ddraw->state, 0, NULL, 0, 0);
+
+        LIST_FOR_EACH_ENTRY(device, &buffer->ddraw->d3ddevice_list, struct d3d_device, ddraw_entry)
+        {
+            if (device->stateblock_state->streams[0].buffer == buffer->wined3d_buffer)
+                wined3d_stateblock_set_stream_source(device->state, 0, NULL, 0, 0);
+        }
 
         wined3d_vertex_declaration_decref(buffer->wined3d_declaration);
         wined3d_buffer_decref(buffer->wined3d_buffer);
@@ -95,7 +100,7 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
         if (buffer->version == 7)
             IDirectDraw7_Release(&buffer->ddraw->IDirectDraw7_iface);
 
-        heap_free(buffer);
+        free(buffer);
     }
 
     return ref;
@@ -448,7 +453,7 @@ HRESULT d3d_vertex_buffer_create(struct d3d_vertex_buffer **vertex_buf,
     TRACE("    FVF %#lx\n", desc->dwFVF);
     TRACE("    dwNumVertices %lu\n", desc->dwNumVertices);
 
-    if (!(buffer = heap_alloc_zero(sizeof(*buffer))))
+    if (!(buffer = calloc(1, sizeof(*buffer))))
         return DDERR_OUTOFMEMORY;
 
     buffer->IDirect3DVertexBuffer7_iface.lpVtbl = &d3d_vertex_buffer7_vtbl;
@@ -485,7 +490,7 @@ end:
     if (hr == D3D_OK)
         *vertex_buf = buffer;
     else
-        heap_free(buffer);
+        free(buffer);
 
     return hr;
 }

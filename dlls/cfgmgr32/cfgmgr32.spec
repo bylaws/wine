@@ -91,6 +91,7 @@
 @ stdcall CM_Get_Device_Interface_List_SizeW(ptr ptr wstr long) setupapi.CM_Get_Device_Interface_List_SizeW
 @ stdcall CM_Get_Device_Interface_List_Size_ExA(ptr ptr str long ptr) setupapi.CM_Get_Device_Interface_List_Size_ExA
 @ stdcall CM_Get_Device_Interface_List_Size_ExW(ptr ptr wstr long ptr) setupapi.CM_Get_Device_Interface_List_Size_ExW
+@ stdcall CM_Get_Device_Interface_PropertyW(wstr ptr ptr ptr ptr long)
 @ stub CM_Get_First_Log_Conf
 @ stub CM_Get_First_Log_Conf_Ex
 @ stub CM_Get_Global_State
@@ -153,6 +154,7 @@
 @ stub CM_Register_Device_InterfaceW
 @ stub CM_Register_Device_Interface_ExA
 @ stub CM_Register_Device_Interface_ExW
+@ stdcall CM_Register_Notification(ptr ptr ptr ptr)
 @ stub CM_Remove_SubTree
 @ stub CM_Remove_SubTree_Ex
 @ stub CM_Remove_Unmarked_Children

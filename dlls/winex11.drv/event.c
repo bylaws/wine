@@ -233,9 +233,6 @@ static Bool filter_event( Display *display, XEvent *event, char *arg )
     case ButtonPress:
     case ButtonRelease:
         return (mask & QS_MOUSEBUTTON) != 0;
-#ifdef GenericEvent
-    case GenericEvent:
-#endif
     case MotionNotify:
     case EnterNotify:
     case LeaveNotify:
@@ -250,11 +247,42 @@ static Bool filter_event( Display *display, XEvent *event, char *arg )
     case PropertyNotify:
     case ClientMessage:
         return (mask & QS_POSTMESSAGE) != 0;
+#ifdef GenericEvent
+    case GenericEvent:
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
+        if (event->xcookie.extension == xinput2_opcode) return (mask & QS_INPUT) != 0;
+#endif
+        /* fallthrough */
+#endif
     default:
         return (mask & QS_SENDMESSAGE) != 0;
     }
 }
 
+static void wait_grab_pointer( Display *display )
+{
+    RECT rect;
+
+    /* unnecessary on gamescope, windows cannot be moved with the mouse */
+    if (wm_is_steamcompmgr( display )) return;
+
+    /* release cursor grab held by any Wine process */
+    NtUserGetClipCursor( &rect );
+    NtUserClipCursor( NULL );
+
+    while (XGrabPointer( display, root_window, False, 0, GrabModeAsync, GrabModeAsync,
+                         None, None, CurrentTime ) != GrabSuccess)
+    {
+        LARGE_INTEGER timeout = {.QuadPart = -10 * (ULONGLONG)10000};
+        NtDelayExecution( FALSE, &timeout );
+    }
+
+    XUngrabPointer( display, CurrentTime );
+    XFlush( display );
+
+    /* restore the previously used clipping rect */
+    NtUserClipCursor( &rect );
+}
 
 enum event_merge_action
 {
@@ -311,6 +339,10 @@ static enum event_merge_action merge_raw_motion_events( XIRawEvent *prev, XIRawE
  */
 static enum event_merge_action merge_events( XEvent *prev, XEvent *next )
 {
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
+    struct x11drv_thread_data *thread_data = x11drv_thread_data();
+#endif
+
     switch (prev->type)
     {
     case ConfigureNotify:
@@ -342,19 +374,21 @@ static enum event_merge_action merge_events( XEvent *prev, XEvent *next )
         case GenericEvent:
             if (next->xcookie.extension != xinput2_opcode) break;
             if (next->xcookie.evtype != XI_RawMotion) break;
-            if (x11drv_thread_data()->warp_serial) break;
+            if (thread_data->xi2_rawinput_only) break;
+            if (thread_data->warp_serial) break;
             return MERGE_KEEP;
         }
         break;
     case GenericEvent:
         if (prev->xcookie.extension != xinput2_opcode) break;
         if (prev->xcookie.evtype != XI_RawMotion) break;
+        if (thread_data->xi2_rawinput_only) break;
         switch (next->type)
         {
         case GenericEvent:
             if (next->xcookie.extension != xinput2_opcode) break;
             if (next->xcookie.evtype != XI_RawMotion) break;
-            if (x11drv_thread_data()->warp_serial) break;
+            if (thread_data->warp_serial) break;
             return merge_raw_motion_events( prev->xcookie.data, next->xcookie.data );
 #endif
         }
@@ -405,13 +439,23 @@ static BOOL process_events( Display *display, Bool (*filter)(Display*, XEvent*,X
 {
     XEvent event, prev_event;
     int count = 0;
-    BOOL queued = FALSE;
+    BOOL queued = FALSE, overlay_enabled = FALSE, steam_keyboard_opened = FALSE;
     enum event_merge_action action = MERGE_DISCARD;
+    ULONG_PTR overlay_filter = QS_KEY | QS_MOUSEBUTTON | QS_MOUSEMOVE;
+    ULONG_PTR keyboard_filter = QS_MOUSEBUTTON | QS_MOUSEMOVE;
+    LARGE_INTEGER timeout = {0};
+
+    if (NtWaitForSingleObject(steam_overlay_event, FALSE, &timeout) == WAIT_OBJECT_0)
+        overlay_enabled = TRUE;
+    if (NtWaitForSingleObject(steam_keyboard_event, FALSE, &timeout) == WAIT_OBJECT_0)
+        steam_keyboard_opened = TRUE;
 
     prev_event.type = 0;
     while (XCheckIfEvent( display, &event, filter, (char *)arg ))
     {
         count++;
+        if (overlay_enabled && filter_event( display, &event, (char *)overlay_filter )) continue;
+        if (steam_keyboard_opened && filter_event( display, &event, (char *)keyboard_filter )) continue;
         if (XFilterEvent( &event, None ))
         {
             /*
@@ -483,12 +527,12 @@ BOOL X11DRV_ProcessEvents( DWORD mask )
 }
 
 /***********************************************************************
- *           EVENT_x11_time_to_win32_time
+ *           x11drv_time_to_ticks
  *
  * Make our timer and the X timer line up as best we can
  *  Pass 0 to retrieve the current adjustment value (times -1)
  */
-DWORD EVENT_x11_time_to_win32_time(Time time)
+DWORD x11drv_time_to_ticks( Time time )
 {
   static DWORD adjust = 0;
   DWORD now = NtGetTickCount();
@@ -549,10 +593,10 @@ static void set_input_focus( struct x11drv_win_data *data )
 
     if (!data->whole_window) return;
 
-    if (EVENT_x11_time_to_win32_time(0))
+    if (x11drv_time_to_ticks(0))
         /* ICCCM says don't use CurrentTime, so try to use last message time if possible */
         /* FIXME: this is not entirely correct */
-        timestamp = NtUserGetThreadInfo()->message_time - EVENT_x11_time_to_win32_time(0);
+        timestamp = NtUserGetThreadInfo()->message_time - x11drv_time_to_ticks(0);
     else
         timestamp = CurrentTime;
 
@@ -576,6 +620,8 @@ static void set_focus( Display *display, HWND hwnd, Time time )
     Window win;
     GUITHREADINFO threadinfo;
 
+    wait_grab_pointer( display );
+
     TRACE( "setting foreground window to %p\n", hwnd );
     NtUserSetForegroundWindow( hwnd );
 
@@ -597,18 +643,16 @@ static void set_focus( Display *display, HWND hwnd, Time time )
 /**********************************************************************
  *              handle_manager_message
  */
-static void handle_manager_message( HWND hwnd, XClientMessageEvent *event )
+static void handle_manager_message( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
+
     if (hwnd != NtUserGetDesktopWindow()) return;
 
     if (systray_atom && event->data.l[1] == systray_atom)
     {
-        struct systray_change_owner_params params;
-
         TRACE( "new owner %lx\n", event->data.l[2] );
-
-        params.event_handle = (UINT_PTR)event;
-        x11drv_client_func( client_func_systray_change_owner, &params, sizeof(params) );
+        NtUserPostMessage( systray_hwnd, WM_USER + 1, 0, 0 );
     }
 }
 
@@ -616,8 +660,9 @@ static void handle_manager_message( HWND hwnd, XClientMessageEvent *event )
 /**********************************************************************
  *              handle_wm_protocols
  */
-static void handle_wm_protocols( HWND hwnd, XClientMessageEvent *event )
+static void handle_wm_protocols( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
     Atom protocol = (Atom)event->data.l[0];
     Time event_time = (Time)event->data.l[1];
 
@@ -775,6 +820,19 @@ static BOOL X11DRV_FocusIn( HWND hwnd, XEvent *xev )
     if (is_virtual_desktop() && hwnd == NtUserGetDesktopWindow()) retry_grab_clipping_window();
     if (hwnd == NtUserGetDesktopWindow()) return FALSE;
 
+    /* Focus was just restored but it can be right after super was
+     * pressed and gnome-shell needs a bit of time to respond and
+     * toggle the activity view. If we grab the cursor right away
+     * it will cancel it and super key will do nothing.
+     */
+    if (event->mode == NotifyUngrab && wm_is_mutter(event->display))
+    {
+        LARGE_INTEGER timeout = {.QuadPart = 100 * -10000};
+        NtDelayExecution( FALSE, &timeout );
+    }
+
+    x11drv_thread_data()->keymapnotify_hwnd = hwnd;
+
     /* when keyboard grab is released, re-apply the cursor clipping rect */
     was_grabbed = keyboard_grabbed;
     keyboard_grabbed = event->mode == NotifyGrab || event->mode == NotifyWhileGrabbed;
@@ -794,7 +852,12 @@ static BOOL X11DRV_FocusIn( HWND hwnd, XEvent *xev )
         if (!hwnd) hwnd = x11drv_thread_data()->last_focus;
         if (hwnd && can_activate_window(hwnd)) set_focus( event->display, hwnd, CurrentTime );
     }
-    else NtUserSetForegroundWindow( hwnd );
+    else
+    {
+        wait_grab_pointer( event->display );
+        NtUserSetForegroundWindow( hwnd );
+    }
+
     return TRUE;
 }
 
@@ -803,7 +866,29 @@ static BOOL X11DRV_FocusIn( HWND hwnd, XEvent *xev )
  */
 static void focus_out( Display *display , HWND hwnd )
  {
+    struct x11drv_win_data *data;
+
     if (xim_in_compose_mode()) return;
+
+    data = get_win_data(hwnd);
+    if(data){
+        LARGE_INTEGER frequency, counter;
+        ULONGLONG now;
+        NtQueryPerformanceCounter( &counter, &frequency );
+        now = 1000 * counter.QuadPart / frequency.QuadPart;
+        if(data->take_focus_back > 0 &&
+                now >= data->take_focus_back &&
+                now - data->take_focus_back < 1000){
+            data->take_focus_back = 0;
+            TRACE("workaround mutter bug, taking focus back\n");
+            XSetInputFocus( data->display, data->whole_window, RevertToParent, CurrentTime);
+            release_win_data(data);
+            /* don't inform win32 client */
+            return;
+        }
+        data->take_focus_back = 0;
+        release_win_data(data);
+    }
 
     x11drv_thread_data()->last_focus = hwnd;
     xim_set_focus( hwnd, FALSE );
@@ -838,12 +923,30 @@ static void focus_out( Display *display , HWND hwnd )
 static BOOL X11DRV_FocusOut( HWND hwnd, XEvent *xev )
 {
     XFocusChangeEvent *event = &xev->xfocus;
+    struct x11drv_win_data *data;
 
     TRACE( "win %p xwin %lx detail=%s mode=%s\n", hwnd, event->window, focus_details[event->detail], focus_modes[event->mode] );
 
+    if ((data = get_win_data( hwnd )))
+    {
+        if (data->fake_unmap_serial == event->serial)
+        {
+            release_win_data( data );
+            TRACE( "Ignoring event from intermediate unmap.\n" );
+            return FALSE;
+        }
+        release_win_data( data );
+    }
+
     if (event->detail == NotifyPointer)
     {
-        if (!hwnd && event->window == x11drv_thread_data()->clip_window) NtUserClipCursor( NULL );
+        if (!hwnd && event->window == x11drv_thread_data()->clip_window)
+        {
+            NtUserClipCursor( NULL );
+            /* NtUserClipCursor will ask the foreground window to ungrab the cursor, but
+             * it might not be responsive, so unmap the clipping window ourselves too */
+            XUnmapWindow( event->display, event->window );
+        }
         return TRUE;
     }
     if (!hwnd) return FALSE;
@@ -888,7 +991,10 @@ static BOOL X11DRV_Expose( HWND hwnd, XEvent *xev )
     rect.right  = pos.x + event->width;
     rect.bottom = pos.y + event->height;
 
-    if (event->window != data->client_window)
+    if (layered_window_client_hack && event->window == data->client_window)
+        OffsetRect( &rect, data->client_rect.left - data->whole_rect.left,
+                    data->client_rect.top - data->whole_rect.top );
+    if (layered_window_client_hack || event->window != data->client_window)
     {
         if (data->surface)
         {
@@ -1060,6 +1166,12 @@ static BOOL X11DRV_ConfigureNotify( HWND hwnd, XEvent *xev )
                event->serial, data->configure_serial );
         goto done;
     }
+    if (data->pending_fullscreen)
+    {
+        TRACE( "win %p/%lx event %d,%d,%dx%d pending_fullscreen is pending, so ignoring\n", hwnd,
+               data->whole_window, event->x, event->y, event->width, event->height );
+        goto done;
+    }
 
     /* Get geometry */
 
@@ -1081,8 +1193,21 @@ static BOOL X11DRV_ConfigureNotify( HWND hwnd, XEvent *xev )
     }
     else pos = root_to_virtual_screen( x, y );
 
-    X11DRV_X_to_window_rect( data, &rect, pos.x, pos.y, event->width, event->height );
-    if (root_coords) NtUserMapWindowPoints( 0, parent, (POINT *)&rect, 2 );
+    if (data->fs_hack)
+    {
+        MONITORINFO info = {.cbSize = sizeof(MONITORINFO)};
+        HMONITOR monitor;
+
+        monitor = fs_hack_monitor_from_hwnd( hwnd );
+        NtUserGetMonitorInfo( monitor, &info );
+        rect = info.rcMonitor;
+        TRACE( "monitor %p rect: %s\n", monitor, wine_dbgstr_rect( &rect ) );
+    }
+    else
+    {
+        X11DRV_X_to_window_rect( data, &rect, pos.x, pos.y, event->width, event->height );
+        if (root_coords) NtUserMapWindowPoints( 0, parent, (POINT *)&rect, 2 );
+    }
 
     TRACE( "win %p/%lx new X rect %d,%d,%dx%d (event %d,%d,%dx%d)\n",
            hwnd, data->whole_window, (int)rect.left, (int)rect.top,
@@ -1090,6 +1215,35 @@ static BOOL X11DRV_ConfigureNotify( HWND hwnd, XEvent *xev )
            event->x, event->y, event->width, event->height );
 
     /* Compare what has changed */
+
+    {
+        const char *steamgameid = getenv( "SteamGameId" );
+        const char *preserve_window_size = getenv( "FULLSCREEN_PRESERVE_WINDOW_SIZE" );
+
+        if ((preserve_window_size && *preserve_window_size == '1') ||
+            (steamgameid && (!strcmp( steamgameid, "590380" ) || !strcmp( steamgameid, "307690" ))))
+        {
+            /* Into The Breach and Sleeping Dogs are extremely picky about the size of its window. */
+            if (NtUserIsWindowRectFullScreen( &data->whole_rect ) && NtUserIsWindowRectFullScreen( &rect ))
+            {
+                TRACE( "window is fullscreen and new size is also fullscreen, so preserving window size\n" );
+                rect.right = rect.left + (data->whole_rect.right - data->whole_rect.left);
+                rect.bottom = rect.top + (data->whole_rect.bottom - data->whole_rect.top);
+            }
+        }
+        else if (steamgameid && !strcmp( steamgameid, "863550" ))
+        {
+            /* When going fullscreen WMs may set intermediate window sizes (e. g., excluding taskbar) before finally
+             * settle with the correct fullscreen window size. Hitman 2 is quick to react on window size change
+             * and trigger window resize again which randomly triggers the process to repeat. */
+            if (data->net_wm_state & (1 << NET_WM_STATE_FULLSCREEN) && NtUserIsWindowRectFullScreen( &data->whole_rect )
+                && !NtUserIsWindowRectFullScreen( &rect ))
+            {
+                TRACE( "Window is fullscreen, ignoring.\n" );
+                goto done;
+            }
+        }
+    }
 
     x     = rect.left;
     y     = rect.top;
@@ -1270,7 +1424,7 @@ static void handle_wm_state_notify( HWND hwnd, XPropertyEvent *event, BOOL updat
                 TRACE( "restoring win %p/%lx\n", data->hwnd, data->whole_window );
                 release_win_data( data );
                 if ((style & (WS_MINIMIZE | WS_VISIBLE)) == (WS_MINIMIZE | WS_VISIBLE))
-                    NtUserSetActiveWindow( hwnd );
+                    NtUserSetForegroundWindow( hwnd );
                 send_message( hwnd, WM_SYSCOMMAND, SC_RESTORE, 0 );
                 return;
             }
@@ -1294,15 +1448,92 @@ done:
 }
 
 
+static void handle__net_wm_state_notify( HWND hwnd, XPropertyEvent *event )
+{
+    struct x11drv_win_data *data = get_win_data( hwnd );
+
+    if (data->pending_fullscreen)
+    {
+        read_net_wm_states( event->display, data );
+        if (data->net_wm_state & (1 << NET_WM_STATE_FULLSCREEN))
+        {
+            data->pending_fullscreen = FALSE;
+            TRACE( "PropertyNotify _NET_WM_STATE, now %#x, pending_fullscreen no longer pending.\n", (UINT)data->net_wm_state );
+        }
+        else TRACE( "PropertyNotify _NET_WM_STATE, now %#x, pending_fullscreen still pending.\n", (UINT)data->net_wm_state );
+    }
+
+    release_win_data( data );
+}
+
+static int handle_gamescope_focused_app_error( Display *dpy, XErrorEvent *event, void *arg )
+{
+    WARN( "Failed to read GAMESCOPE_FOCUSED_APP property, ignoring.\n" );
+    return 1;
+}
+
+static void handle_gamescope_focused_app( XPropertyEvent *event )
+{
+    static const char *sgi = NULL;
+    static BOOL steam_keyboard_opened;
+
+    unsigned long count, remaining, *property;
+    int format, app_id, focused_app_id;
+    BOOL keyboard_opened;
+    Atom type;
+
+    if (!sgi && !(sgi = getenv( "SteamGameId" ))) return;
+    app_id = atoi( sgi );
+
+    X11DRV_expect_error( event->display, handle_gamescope_focused_app_error, NULL );
+    XGetWindowProperty( event->display, DefaultRootWindow( event->display ), x11drv_atom( GAMESCOPE_FOCUSED_APP ),
+                        0, ~0UL, False, XA_CARDINAL, &type, &format, &count, &remaining, (unsigned char **)&property );
+    if (X11DRV_check_error()) focused_app_id = app_id;
+    else
+    {
+        if (!property) focused_app_id = app_id;
+        else focused_app_id = *property;
+        XFree( property );
+    }
+
+    keyboard_opened = app_id != focused_app_id;
+    if (steam_keyboard_opened == keyboard_opened) return;
+    steam_keyboard_opened = keyboard_opened;
+
+    FIXME( "HACK: Got app id %u, focused app %u\n", app_id, focused_app_id );
+    if (keyboard_opened)
+    {
+        FIXME( "HACK: Steam Keyboard is opened, filtering events.\n" );
+        NtSetEvent( steam_keyboard_event, NULL );
+    }
+    else
+    {
+        FIXME( "HACK: Steam Keyboard is closed, stopping events filter.\n" );
+        NtResetEvent( steam_keyboard_event, NULL );
+    }
+}
+
 /***********************************************************************
  *           X11DRV_PropertyNotify
  */
 static BOOL X11DRV_PropertyNotify( HWND hwnd, XEvent *xev )
 {
     XPropertyEvent *event = &xev->xproperty;
+    char *name;
+
+    if (event->atom == x11drv_atom( GAMESCOPE_FOCUSED_APP )) handle_gamescope_focused_app( event );
 
     if (!hwnd) return FALSE;
+
+    name = XGetAtomName( event->display, event->atom );
+    if (name)
+    {
+        TRACE( "win %p PropertyNotify atom: %s, state: 0x%x\n", hwnd, name, event->state );
+        XFree( name );
+    }
+
     if (event->atom == x11drv_atom(WM_STATE)) handle_wm_state_notify( hwnd, event, TRUE );
+    else if (event->atom == x11drv_atom( _NET_WM_STATE )) handle__net_wm_state_notify( hwnd, event );
     return TRUE;
 }
 
@@ -1456,6 +1687,7 @@ static void EVENT_DropFromOffiX( HWND hWnd, XClientMessageEvent *event )
     Window		win, w_aux_root, w_aux_child;
 
     if (!(data = get_win_data( hWnd ))) return;
+    ERR( "TODO: fs hack\n" );
     cx = data->whole_rect.right - data->whole_rect.left;
     cy = data->whole_rect.bottom - data->whole_rect.top;
     win = data->whole_window;
@@ -1563,8 +1795,10 @@ static void EVENT_DropURLs( HWND hWnd, XClientMessageEvent *event )
 /**********************************************************************
  *              handle_xembed_protocol
  */
-static void handle_xembed_protocol( HWND hwnd, XClientMessageEvent *event )
+static void handle_xembed_protocol( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
+
     switch (event->data.l[1])
     {
     case XEMBED_EMBEDDED_NOTIFY:
@@ -1619,8 +1853,9 @@ static void handle_xembed_protocol( HWND hwnd, XClientMessageEvent *event )
 /**********************************************************************
  *              handle_dnd_protocol
  */
-static void handle_dnd_protocol( HWND hwnd, XClientMessageEvent *event )
+static void handle_dnd_protocol( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
     Window root, child;
     int root_x, root_y, child_x, child_y;
     unsigned int u;
@@ -1642,8 +1877,9 @@ static void handle_dnd_protocol( HWND hwnd, XClientMessageEvent *event )
  *
  * Handle an XdndEnter event.
  */
-static void handle_xdnd_enter_event( HWND hWnd, XClientMessageEvent *event )
+static void handle_xdnd_enter_event( HWND hWnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
     struct format_entry *data;
     unsigned long count = 0;
     Atom *xdndtypes;
@@ -1746,17 +1982,23 @@ static long drop_effect_to_xdnd_action( UINT effect )
 }
 
 
-static void handle_xdnd_position_event( HWND hwnd, XClientMessageEvent *event )
+static void handle_xdnd_position_event( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
     struct dnd_position_event_params params;
     XClientMessageEvent e;
+    void *ret_ptr;
+    ULONG ret_len;
     UINT effect;
 
     params.hwnd = HandleToUlong( hwnd );
     params.point = root_to_virtual_screen( event->data.l[2] >> 16, event->data.l[2] & 0xFFFF );
     params.effect = effect = xdnd_action_to_drop_effect( event->data.l[4] );
 
-    effect = x11drv_client_func( client_func_dnd_position_event, &params, sizeof(params) );
+    if (KeUserModeCallback( client_func_dnd_position_event, &params, sizeof(params),
+                            &ret_ptr, &ret_len ) || ret_len != sizeof(effect))
+        return;
+    effect = *(UINT *)ret_ptr;
 
     TRACE( "actionRequested(%ld) chosen(0x%x) at x(%d),y(%d)\n",
            event->data.l[4], effect, (int)params.point.x, (int)params.point.y );
@@ -1779,12 +2021,19 @@ static void handle_xdnd_position_event( HWND hwnd, XClientMessageEvent *event )
 }
 
 
-static void handle_xdnd_drop_event( HWND hwnd, XClientMessageEvent *event )
+static void handle_xdnd_drop_event( HWND hwnd, XEvent *xev )
 {
+    XClientMessageEvent *event = &xev->xclient;
     XClientMessageEvent e;
-    DWORD effect;
+    void *ret_ptr;
+    ULONG ret_len;
+    ULONG arg = HandleToUlong( hwnd );
+    UINT effect;
 
-    effect = x11drv_client_call( client_dnd_drop_event, HandleToUlong( hwnd ));
+    if (KeUserModeCallback( client_func_dnd_drop_event, &arg, sizeof(arg),
+                            &ret_ptr, &ret_len ) || ret_len != sizeof(effect))
+        return;
+    effect = *(UINT *)ret_ptr;
 
     /* Tell the target we are finished. */
     memset( &e, 0, sizeof(e) );
@@ -1800,16 +2049,16 @@ static void handle_xdnd_drop_event( HWND hwnd, XClientMessageEvent *event )
 }
 
 
-static void handle_xdnd_leave_event( HWND hwnd, XClientMessageEvent *event )
+static void handle_xdnd_leave_event( HWND hwnd, XEvent *xev )
 {
-    x11drv_client_call( client_dnd_leave_event, 0 );
+    x11drv_client_func( client_func_dnd_leave_event, NULL, 0 );
 }
 
 
 struct client_message_handler
 {
-    int    atom;                                  /* protocol atom */
-    void (*handler)(HWND, XClientMessageEvent *); /* corresponding handler function */
+    int    atom;                     /* protocol atom */
+    void (*handler)(HWND, XEvent *); /* corresponding handler function */
 };
 
 static const struct client_message_handler client_messages[] =
@@ -1845,7 +2094,7 @@ static BOOL X11DRV_ClientMessage( HWND hwnd, XEvent *xev )
     {
         if (event->message_type == X11DRV_Atoms[client_messages[i].atom - FIRST_XATOM])
         {
-            client_messages[i].handler( hwnd, event );
+            client_messages[i].handler( hwnd, xev );
             return TRUE;
         }
     }

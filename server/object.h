@@ -78,6 +78,10 @@ struct object_ops
     void (*remove_queue)(struct object *,struct wait_queue_entry *);
     /* is object signaled? */
     int  (*signaled)(struct object *,struct wait_queue_entry *);
+    /* return the esync fd for this object */
+    int (*get_esync_fd)(struct object *, enum esync_type *type);
+    /* return the fsync shm idx for this object */
+    unsigned int (*get_fsync_idx)(struct object *, enum fsync_type *type);
     /* wait satisfied */
     void (*satisfied)(struct object *,struct wait_queue_entry *);
     /* signal an object */
@@ -171,6 +175,9 @@ extern struct fd *no_get_fd( struct object *obj );
 extern unsigned int default_map_access( struct object *obj, unsigned int access );
 extern struct security_descriptor *default_get_sd( struct object *obj );
 extern int default_set_sd( struct object *obj, const struct security_descriptor *sd, unsigned int set_info );
+extern struct security_descriptor *set_sd_from_token_internal( const struct security_descriptor *sd,
+                                                               const struct security_descriptor *old_sd,
+                                                               unsigned int set_info, struct token *token );
 extern int set_sd_defaults_from_token( struct object *obj, const struct security_descriptor *sd,
                                        unsigned int set_info, struct token *token );
 extern WCHAR *no_get_full_name( struct object *obj, data_size_t *ret_len );
@@ -253,6 +260,7 @@ static inline int is_machine_supported( unsigned short machine )
 {
     unsigned int i;
     for (i = 0; i < supported_machines_count; i++) if (supported_machines[i] == machine) return 1;
+    if (native_machine == IMAGE_FILE_MACHINE_ARM64) return machine == IMAGE_FILE_MACHINE_AMD64;
     return 0;
 }
 
@@ -276,6 +284,10 @@ extern struct object *get_root_directory(void);
 extern struct object *get_directory_obj( struct process *process, obj_handle_t handle );
 extern int directory_link_name( struct object *obj, struct object_name *name, struct object *parent );
 extern void init_directories( struct fd *intl_fd );
+
+/* thread functions */
+
+extern void init_threading(void);
 
 /* symbolic link functions */
 

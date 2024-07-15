@@ -5,7 +5,7 @@ msgstr ""
 "Project-Id-Version: Wine\n"
 "Report-Msgid-Bugs-To: https://bugs.winehq.org\n"
 "POT-Creation-Date: N/A\n"
-"PO-Revision-Date: 2022-12-15 12:32-0700\n"
+"PO-Revision-Date: 2023-12-18 23:58-0700\n"
 "Last-Translator: Alex Henrie <alexhenrie24@gmail.com>\n"
 "Language-Team: Catalan\n"
 "Language: ca\n"
@@ -13,7 +13,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 3.2.2\n"
+"X-Generator: Poedit 3.4.1\n"
 
 #: dlls/aclui/aclui.rc:29 dlls/inetcpl.cpl/inetcpl.rc:90
 #: programs/winefile/winefile.rc:114
@@ -22,7 +22,7 @@ msgstr "Seguretat"
 
 #: dlls/aclui/aclui.rc:32
 msgid "&Group or user names:"
-msgstr "Noms de &grups i d'usuaris:"
+msgstr "Noms de &grups o d'usuaris:"
 
 #: dlls/aclui/aclui.rc:38
 msgid "Allow"
@@ -98,24 +98,24 @@ msgstr "Informació de suport"
 #: dlls/shell32/shell32.rc:274 dlls/shell32/shell32.rc:298
 #: dlls/shell32/shell32.rc:320 dlls/shell32/shell32.rc:339
 #: dlls/shlwapi/shlwapi.rc:44 dlls/twain_32/twain.rc:32
-#: dlls/user32/user32.rc:83 dlls/user32/user32.rc:98 dlls/wininet/wininet.rc:62
-#: dlls/wininet/wininet.rc:82 dlls/winspool.drv/winspool.rc:42
-#: programs/net/net.rc:47 programs/notepad/notepad.rc:124
-#: programs/oleview/oleview.rc:161 programs/oleview/oleview.rc:174
-#: programs/progman/progman.rc:106 programs/progman/progman.rc:124
-#: programs/progman/progman.rc:142 programs/progman/progman.rc:158
-#: programs/progman/progman.rc:180 programs/progman/progman.rc:199
-#: programs/progman/progman.rc:216 programs/regedit/regedit.rc:301
-#: programs/regedit/regedit.rc:312 programs/regedit/regedit.rc:325
-#: programs/regedit/regedit.rc:341 programs/regedit/regedit.rc:354
-#: programs/regedit/regedit.rc:367 programs/taskmgr/taskmgr.rc:442
-#: programs/taskmgr/taskmgr.rc:517 programs/winecfg/winecfg.rc:219
-#: programs/winecfg/winecfg.rc:229 programs/winefile/winefile.rc:127
-#: programs/winefile/winefile.rc:150 programs/winefile/winefile.rc:180
-#: programs/winemine/winemine.rc:73 programs/winemine/winemine.rc:84
-#: programs/winemine/winemine.rc:98 programs/wordpad/wordpad.rc:215
-#: programs/wordpad/wordpad.rc:226 programs/wordpad/wordpad.rc:244
-#: programs/wordpad/wordpad.rc:257
+#: dlls/user32/user32.rc:94 dlls/user32/user32.rc:109 dlls/user32/user32.rc:73
+#: dlls/wininet/wininet.rc:62 dlls/wininet/wininet.rc:82
+#: dlls/winspool.drv/winspool.rc:42 programs/net/net.rc:48
+#: programs/notepad/notepad.rc:124 programs/oleview/oleview.rc:161
+#: programs/oleview/oleview.rc:174 programs/progman/progman.rc:106
+#: programs/progman/progman.rc:124 programs/progman/progman.rc:142
+#: programs/progman/progman.rc:158 programs/progman/progman.rc:180
+#: programs/progman/progman.rc:199 programs/progman/progman.rc:216
+#: programs/regedit/regedit.rc:301 programs/regedit/regedit.rc:312
+#: programs/regedit/regedit.rc:325 programs/regedit/regedit.rc:341
+#: programs/regedit/regedit.rc:354 programs/regedit/regedit.rc:367
+#: programs/taskmgr/taskmgr.rc:442 programs/taskmgr/taskmgr.rc:517
+#: programs/winecfg/winecfg.rc:219 programs/winecfg/winecfg.rc:229
+#: programs/winefile/winefile.rc:127 programs/winefile/winefile.rc:150
+#: programs/winefile/winefile.rc:180 programs/winemine/winemine.rc:73
+#: programs/winemine/winemine.rc:84 programs/winemine/winemine.rc:98
+#: programs/wordpad/wordpad.rc:215 programs/wordpad/wordpad.rc:226
+#: programs/wordpad/wordpad.rc:244 programs/wordpad/wordpad.rc:257
 msgid "OK"
 msgstr "D'acord"
 
@@ -204,24 +204,24 @@ msgstr "&Instal·la"
 #: dlls/setupapi/setupapi.rc:60 dlls/shell32/shell32.rc:275
 #: dlls/shell32/shell32.rc:299 dlls/shell32/shell32.rc:310
 #: dlls/shell32/shell32.rc:340 dlls/shlwapi/shlwapi.rc:45
-#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:84 dlls/user32/user32.rc:99
-#: dlls/wininet/wininet.rc:63 dlls/wininet/wininet.rc:83
-#: dlls/winspool.drv/winspool.rc:43 programs/notepad/notepad.rc:125
-#: programs/notepad/notepad.rc:138 programs/oleview/oleview.rc:162
-#: programs/oleview/oleview.rc:175 programs/progman/progman.rc:107
-#: programs/progman/progman.rc:125 programs/progman/progman.rc:143
-#: programs/progman/progman.rc:159 programs/progman/progman.rc:181
-#: programs/progman/progman.rc:200 programs/progman/progman.rc:217
-#: programs/regedit/regedit.rc:302 programs/regedit/regedit.rc:313
-#: programs/regedit/regedit.rc:326 programs/regedit/regedit.rc:342
-#: programs/regedit/regedit.rc:355 programs/regedit/regedit.rc:368
-#: programs/taskmgr/taskmgr.rc:443 programs/taskmgr/taskmgr.rc:518
-#: programs/wineboot/wineboot.rc:34 programs/winecfg/winecfg.rc:220
-#: programs/winecfg/winecfg.rc:230 programs/winefile/winefile.rc:128
-#: programs/winefile/winefile.rc:151 programs/winefile/winefile.rc:181
-#: programs/winemine/winemine.rc:99 programs/wordpad/wordpad.rc:216
-#: programs/wordpad/wordpad.rc:227 programs/wordpad/wordpad.rc:245
-#: programs/wordpad/wordpad.rc:258
+#: dlls/twain_32/twain.rc:33 dlls/user32/user32.rc:95 dlls/user32/user32.rc:110
+#: dlls/user32/user32.rc:74 dlls/wininet/wininet.rc:63
+#: dlls/wininet/wininet.rc:83 dlls/winspool.drv/winspool.rc:43
+#: programs/notepad/notepad.rc:125 programs/notepad/notepad.rc:138
+#: programs/oleview/oleview.rc:162 programs/oleview/oleview.rc:175
+#: programs/progman/progman.rc:107 programs/progman/progman.rc:125
+#: programs/progman/progman.rc:143 programs/progman/progman.rc:159
+#: programs/progman/progman.rc:181 programs/progman/progman.rc:200
+#: programs/progman/progman.rc:217 programs/regedit/regedit.rc:302
+#: programs/regedit/regedit.rc:313 programs/regedit/regedit.rc:326
+#: programs/regedit/regedit.rc:342 programs/regedit/regedit.rc:355
+#: programs/regedit/regedit.rc:368 programs/taskmgr/taskmgr.rc:443
+#: programs/taskmgr/taskmgr.rc:518 programs/wineboot/wineboot.rc:34
+#: programs/winecfg/winecfg.rc:220 programs/winecfg/winecfg.rc:230
+#: programs/winefile/winefile.rc:128 programs/winefile/winefile.rc:151
+#: programs/winefile/winefile.rc:181 programs/winemine/winemine.rc:99
+#: programs/wordpad/wordpad.rc:216 programs/wordpad/wordpad.rc:227
+#: programs/wordpad/wordpad.rc:245 programs/wordpad/wordpad.rc:258
 msgid "Cancel"
 msgstr "Cancel·la"
 
@@ -329,6 +329,8 @@ msgstr ""
 #: dlls/appwiz.cpl/appwiz.rc:47
 msgid "Please wait until the current uninstall/modify process is complete."
 msgstr ""
+"Si us plau, espereu fins que es termini el procès actual d'instal·lació o de "
+"modificació."
 
 #: dlls/avifil32/avifil32.rc:42
 msgid "Compress options"
@@ -415,7 +417,8 @@ msgid "&Apply"
 msgstr "&Aplica"
 
 #: dlls/comctl32/comctl32.rc:74 dlls/comctl32/comctl32.rc:88
-#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:88
+#: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:99
+#: dlls/user32/user32.rc:81
 msgid "Help"
 msgstr "Ajuda"
 
@@ -441,9 +444,9 @@ msgstr "Personalitza la barra d'eines"
 
 #: dlls/comctl32/comctl32.rc:100 dlls/comctl32/comctl32.rc:57
 #: dlls/cryptui/cryptui.rc:356 dlls/ieframe/ieframe.rc:43
-#: programs/oleview/oleview.rc:83 programs/oleview/oleview.rc:187
-#: programs/oleview/oleview.rc:200 programs/oleview/oleview.rc:212
-#: programs/taskmgr/taskmgr.rc:139
+#: dlls/user32/user32.rc:80 programs/oleview/oleview.rc:83
+#: programs/oleview/oleview.rc:187 programs/oleview/oleview.rc:200
+#: programs/oleview/oleview.rc:212 programs/taskmgr/taskmgr.rc:139
 msgid "&Close"
 msgstr "&Tanca"
 
@@ -505,16 +508,17 @@ msgid "None"
 msgstr "Cap"
 
 #: dlls/comctl32/comctl32.rc:52 dlls/shell32/shell32.rc:307
-#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:79
+#: dlls/shlwapi/shlwapi.rc:46 dlls/user32/user32.rc:90 dlls/user32/user32.rc:78
 msgid "&Yes"
 msgstr "&Sí"
 
 #: dlls/comctl32/comctl32.rc:53 dlls/shell32/shell32.rc:309
-#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:80
+#: dlls/shlwapi/shlwapi.rc:47 dlls/user32/user32.rc:91 dlls/user32/user32.rc:79
 msgid "&No"
 msgstr "&No"
 
-#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:82
+#: dlls/comctl32/comctl32.rc:54 dlls/user32/user32.rc:93
+#: dlls/user32/user32.rc:76
 msgid "&Retry"
 msgstr "&Reintenta"
 
@@ -3729,16 +3733,12 @@ msgid "High"
 msgstr "Alt"
 
 #: dlls/ir50_32/ir50_32.rc:28
-#, fuzzy
-#| msgid "Index"
 msgid "Indeo5"
-msgstr "Índex"
+msgstr "Indeo5"
 
 #: dlls/ir50_32/ir50_32.rc:29
-#, fuzzy
-#| msgid "Wine Video 1 video codec"
 msgid "Indeo Video Interactive version 5 video codec"
-msgstr "Còdec de vídeo Wine Video 1"
+msgstr "Còdec de vídeo Indeo Video Interactive versió 5"
 
 #: dlls/joy.cpl/joy.rc:37
 msgid "Joysticks"
@@ -4042,10 +4042,8 @@ msgid "Syntax error in regular expression"
 msgstr "Error de sintaxi en l'expressió regular"
 
 #: dlls/jscript/jscript.rc:66
-#, fuzzy
-#| msgid "Expected identifier"
 msgid "Unexpected quantifier"
-msgstr "S'esperava un identificador"
+msgstr "Quantificador inesperat"
 
 #: dlls/jscript/jscript.rc:67
 msgid "Exception thrown and not caught"
@@ -4108,10 +4106,8 @@ msgid "'this' is not a | object"
 msgstr "'this' no és un objecte de |"
 
 #: dlls/jscript/jscript.rc:81
-#, fuzzy
-#| msgid "'this' is not a | object"
 msgid "'key' is not an object"
-msgstr "'this' no és un objecte de |"
+msgstr "'clau' no és un objecte"
 
 #: dlls/jscript/jscript.rc:82
 msgid "Property cannot have both accessors and a value"
@@ -9540,7 +9536,7 @@ msgctxt "unit: bits"
 msgid "b"
 msgstr "b"
 
-#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:49
+#: dlls/sane.ds/sane.rc:34 dlls/wineps.drv/wineps.rc:52
 #: programs/winecfg/winecfg.rc:188
 msgctxt "unit: dots/inch"
 msgid "dpi"
@@ -12485,23 +12481,23 @@ msgstr "&Tanca\tCtrl+F4"
 msgid "Nex&t\tCtrl+F6"
 msgstr "&Següent\tCtrl+F6"
 
-#: dlls/user32/user32.rc:81
+#: dlls/user32/user32.rc:92 dlls/user32/user32.rc:75
 msgid "&Abort"
 msgstr "&Avorta"
 
-#: dlls/user32/user32.rc:85
+#: dlls/user32/user32.rc:96 dlls/user32/user32.rc:77
 msgid "&Ignore"
 msgstr "&Ignora"
 
-#: dlls/user32/user32.rc:86
+#: dlls/user32/user32.rc:97 dlls/user32/user32.rc:82
 msgid "&Try Again"
 msgstr "&Torna a intentar"
 
-#: dlls/user32/user32.rc:87
+#: dlls/user32/user32.rc:98 dlls/user32/user32.rc:83
 msgid "&Continue"
 msgstr "&Continua"
 
-#: dlls/user32/user32.rc:94
+#: dlls/user32/user32.rc:105
 msgid "Select Window"
 msgstr "Selecciona finestra"
 
@@ -12672,6 +12668,10 @@ msgstr "&Mida de paper:"
 #: dlls/wineps.drv/wineps.rc:39
 msgid "Duplex:"
 msgstr "Dúplex:"
+
+#: dlls/wineps.drv/wineps.rc:45
+msgid "Paper &Tray:"
+msgstr "&Safata de paper:"
 
 #: dlls/wininet/wininet.rc:53 dlls/wininet/wininet.rc:73
 msgid "Realm"
@@ -14823,25 +14823,32 @@ msgstr "Inici"
 msgid "&Run..."
 msgstr "&Executa..."
 
+#: programs/explorer/explorer.rc:36
+msgid "E&xit desktop"
+msgstr "&Surt de l'escriptori"
+
+#: programs/explorer/explorer.rc:37
+msgid ""
+"Are you sure you want to close all programs and exit the virtual desktop?"
+msgstr ""
+"Esteu segur que voleu tancar tots els programes i sortir de l'escriptori "
+"virtual?"
+
 #: programs/findstr/findstr.rc:28
-#, fuzzy
-#| msgid "Use c&onnection string"
 msgid "Usage: findstr /options string\n"
-msgstr "Utilitza una cadena de c&onnexió"
+msgstr "Ús: findstr /opcions cadena\n"
 
 #: programs/findstr/findstr.rc:29
-#, fuzzy
-#| msgid "Invalid command line.\n"
 msgid "FINDSTR: Bad command line\n"
-msgstr "La línia d'ordres no és vàlida.\n"
+msgstr "FINDSTR: Línia d'ordres dolenta\n"
 
 #: programs/findstr/findstr.rc:30
 msgid "FINDSTR: Cannot open %s\n"
-msgstr ""
+msgstr "FINDSTR: No es pot obrir %s\n"
 
 #: programs/findstr/findstr.rc:31
 msgid "FINDSTR: /%c ignored\n"
-msgstr ""
+msgstr "FINDSTR: /%c ignorat\n"
 
 #: programs/fsutil/fsutil.mc:28
 msgid ""
@@ -14963,52 +14970,39 @@ msgstr "Sufix DNS principal"
 
 #: programs/klist/klist.rc:28
 msgid "Usage: klist <tickets | tgt | purge | get [service principal name]>\n"
-msgstr ""
+msgstr "Ús: klist <tickets | tgt | purge | get [nom de principal de servei]>\n"
 
 #: programs/klist/klist.rc:29
-#, fuzzy
-#| msgid "Unknown error"
 msgid "Unknown error\n"
-msgstr "Error desconegut"
+msgstr "Error desconegut\n"
 
 #: programs/klist/klist.rc:30
-#, fuzzy
-#| msgid "Start Menu"
 msgid "Start Time"
-msgstr "Menú Inicia"
+msgstr "Hora d'inici"
 
 #: programs/klist/klist.rc:31
-#, fuzzy
-#| msgctxt "maximum 31 characters"
-#| msgid "FLE Standard Time"
 msgid "End Time"
-msgstr "Europa, central, hora estàndard"
+msgstr "Hora de finalització"
 
 #: programs/klist/klist.rc:32
-#, fuzzy
-#| msgid "Enter new time: "
 msgid "Renew Time"
-msgstr "Introduïu hora nova: "
+msgstr "Hora de renovació"
 
 #: programs/klist/klist.rc:33
 msgid "Ticket Flags"
-msgstr ""
+msgstr "Opcions de tiquet"
 
 #: programs/klist/klist.rc:34
 msgid "Cached Tickets"
-msgstr ""
+msgstr "Tiquets en memòria cau"
 
 #: programs/klist/klist.rc:36
-#, fuzzy
-#| msgid "Encryption Type"
 msgid "KerbTicket Encryption Type"
-msgstr "Tipus de xifratge"
+msgstr "Tipus de xifratge de KerbTicket"
 
 #: programs/klist/klist.rc:37
-#, fuzzy
-#| msgid "Current Connections"
 msgid "Current LogonId is"
-msgstr "Connexions actuals"
+msgstr "El LogonId actual és"
 
 #: programs/msinfo32/msinfo32.rc:28
 msgid "System Information"
@@ -15103,11 +15097,11 @@ msgstr "S'ha aturat el servei %1 amb èxit.\n"
 msgid "The %1 service failed to stop.\n"
 msgstr "El servei %1 ha fallat en aturar.\n"
 
-#: programs/net/net.rc:44
+#: programs/net/net.rc:45
 msgid "There are no entries in the list.\n"
 msgstr "No hi ha cap entrada en la llista.\n"
 
-#: programs/net/net.rc:45
+#: programs/net/net.rc:46
 msgid ""
 "\n"
 "Status  Local   Remote\n"
@@ -15117,33 +15111,37 @@ msgstr ""
 "Estat   Local   Remot\n"
 "---------------------------------------------------------------\n"
 
-#: programs/net/net.rc:46
+#: programs/net/net.rc:47
 msgid "%1      %2      %3      Open resources: %4!u!\n"
 msgstr "%1      %2      %3      Recursos oberts: %4!u!\n"
 
-#: programs/net/net.rc:48
+#: programs/net/net.rc:49
 msgid "Paused"
 msgstr "En pausa"
 
-#: programs/net/net.rc:49
+#: programs/net/net.rc:50
 msgid "Disconnected"
 msgstr "Desconnectat"
 
-#: programs/net/net.rc:50
+#: programs/net/net.rc:51
 msgid "A network error occurred"
 msgstr "Ha ocorregut un error de xarxa"
 
-#: programs/net/net.rc:51
+#: programs/net/net.rc:52
 msgid "Connection is being made"
 msgstr "S'està fent la connexió"
 
-#: programs/net/net.rc:52
+#: programs/net/net.rc:53
 msgid "Reconnecting"
 msgstr "S'està reconnectant"
 
 #: programs/net/net.rc:43
 msgid "The following services are running:\n"
 msgstr "Els següents serveis s'estan executant:\n"
+
+#: programs/net/net.rc:44
+msgid "A command was used with conflicting switches.\n"
+msgstr "S'ha usat un ordre amb commutadors en conflicte.\n"
 
 #: programs/netstat/netstat.rc:30
 msgid "Active Connections"
@@ -17331,38 +17329,6 @@ msgid "regsvr32: Successfully uninstalled DLL '%1'\n"
 msgstr "regsvr32: S'ha desinstal·lat el DLL '%1' amb èxit\n"
 
 #: programs/start/start.rc:56
-#, fuzzy
-#| msgid ""
-#| "Start a program, or open a document in the program normally used for "
-#| "files\n"
-#| "with that suffix.\n"
-#| "Usage:\n"
-#| "start [options] program_filename [...]\n"
-#| "start [options] document_filename\n"
-#| "\n"
-#| "Options:\n"
-#| "\"title\"        Specifies the title of the child windows.\n"
-#| "/d directory   Start the program in the specified directory.\n"
-#| "/b             Don't create a new console for the program.\n"
-#| "/i             Start the program with fresh environment variables.\n"
-#| "/min           Start the program minimized.\n"
-#| "/max           Start the program maximized.\n"
-#| "/low           Start the program in the idle priority class.\n"
-#| "/normal        Start the program in the normal priority class.\n"
-#| "/high          Start the program in the high priority class.\n"
-#| "/realtime      Start the program in the realtime priority class.\n"
-#| "/abovenormal   Start the program in the abovenormal priority class.\n"
-#| "/belownormal   Start the program in the belownormal priority class.\n"
-#| "/node n        Start the program on the specified NUMA node.\n"
-#| "/affinity mask Start the program with the specified affinity mask.\n"
-#| "/wait          Wait for the started program to finish, then exit with "
-#| "its\n"
-#| "exit code.\n"
-#| "/unix          Use a Unix filename and start the file like Windows\n"
-#| "Explorer.\n"
-#| "/exec          Exec the specified file (for internal Wine usage).\n"
-#| "/ProgIDOpen    Open a document using the specified progID.\n"
-#| "/?             Display this help and exit.\n"
 msgid ""
 "Start a program, or open a document in the program normally used for files\n"
 "with that suffix.\n"
@@ -17394,36 +17360,41 @@ msgid ""
 "/ProgIDOpen    Open a document using the specified progID.\n"
 "/?             Display this help and exit.\n"
 msgstr ""
-"Inicia un programa, o obre un document en el programa que normalment "
-"s'utilitza\n"
-"per als fitxers amb aquell sufix.\n"
+"Inicia un programa, o obre un document en el programa que normalment\n"
+"s'utilitza per als fitxers amb aquell sufix.\n"
 "Ús:\n"
 "start [opcions] nom_de_fitxer_de_programa [...]\n"
 "start [opcions] nom_de_fitxer_de_document\n"
 "\n"
 "Opcions:\n"
-"\"títol\"           Especifica el títol de les finestres filles.\n"
-"/d directori      Inicia el programa en el directori especificat.\n"
-"/b                No creïs una consola nova per al programa.\n"
-"/i                Inicia el programa amb variables d'entorn fresques.\n"
-"/min              Inicia el programa minimitzat.\n"
-"/max              Inicia el programa maximitzat.\n"
-"/low              Inicia el programa en la classe de prioritat idle.\n"
-"/normal           Inicia el programa en la classe de prioritat normal.\n"
-"/high             Inicia el programa en la classe de prioritat high.\n"
-"/realtime         Inicia el programa en la classe de prioritat realtime.\n"
-"/abovenormal      Inicia el programa en la classe de prioritat abovenormal.\n"
-"/belownormal      Inicia el programa en la classe de prioritat belownormal.\n"
-"/node n           Inicia el programa en el node NUMA especificat.\n"
-"/affinity màscara Inicia el programa amb la màscara d'afinitat\n"
-"                  especificada.\n"
-"/wait             Espera que el programa iniciat termini, llavors surt amb\n"
-"                  el seu codi de sortida.\n"
-"/unix             Utilitza un nom de fitxer d'Unix i inicia el fitxer com\n"
-"                  el Windows Explorer.\n"
-"/exec             Executa el fitxer especificat (per a ús intern del Wine).\n"
-"/ProgIDOpen       Obre un document utilitzant el progID especificat.\n"
-"/?                Mostra aquesta ajuda i surt.\n"
+"\"títol\"               Especifica el títol de les finestres filles.\n"
+"/d directori          Inicia el programa en el directori especificat.\n"
+"/b                    No creïs una consola nova per al programa.\n"
+"/i                    Inicia el programa amb variables d'entorn fresques.\n"
+"/min                  Inicia el programa minimitzat.\n"
+"/max                  Inicia el programa maximitzat.\n"
+"/low                  Inicia el programa en la classe de prioritat idle.\n"
+"/normal               Inicia el programa en la classe de prioritat normal.\n"
+"/high                 Inicia el programa en la classe de prioritat high.\n"
+"/realtime             Inicia el programa en la classe de prioritat\n"
+"                      realtime.\n"
+"/abovenormal          Inicia el programa en la classe de prioritat\n"
+"                      abovenormal.\n"
+"/belownormal          Inicia el programa en la classe de prioritat\n"
+"                      belownormal.\n"
+"/node n               Inicia el programa en el node NUMA especificat.\n"
+"/affinity màscara     Inicia el programa amb la màscara d'afinitat\n"
+"                      especificada.\n"
+"/machine arquitectura Força utilitzar una arquitectura específica (x86,arm,\n"
+"                      amd64,arm64).\n"
+"/wait                 Espera que el programa iniciat termini, llavors surt\n"
+"                      amb el seu codi de sortida.\n"
+"/unix                 Utilitza un nom de fitxer d'Unix i inicia el fitxer\n"
+"                      com el Windows Explorer.\n"
+"/exec                 Executa el fitxer especificat (per a ús intern del\n"
+"                      Wine).\n"
+"/ProgIDOpen           Obre un document utilitzant el progID especificat.\n"
+"/?                    Mostra aquesta ajuda i surt.\n"
 
 #: programs/start/start.rc:58
 msgid ""
@@ -17505,27 +17476,26 @@ msgid "Error: Process self-termination is not permitted.\n"
 msgstr "Error: No es permet l'autoterminació de procés.\n"
 
 #: programs/taskkill/taskkill.rc:44
-#, fuzzy
-#| msgid "Process with PID %1!u! was forcibly terminated.\n"
 msgid ""
 "The process with PID %1!u! (child process of PID %2!u!) has been "
 "terminated.\n"
-msgstr "El procés amb PID %1!u! s'ha terminat a la força.\n"
+msgstr ""
+"El procés amb PID %1!u! (fil del procès amb PID %2!u!) s'ha terminat.\n"
 
 #: programs/taskkill/taskkill.rc:45
 msgid ""
 "Sent termination signal to process with PID %1!u!, child of PID %2!u!.\n"
 msgstr ""
+"S'han enviat el senyal de terminació al procès amb PID %1!u!, fil del PID %2!"
+"u!.\n"
 
 #: include/wine/wine_common_ver.rc:138
-#, fuzzy
-#| msgid "page tab list"
 msgid "Wine tasklist"
-msgstr "llista de tabuladors de pàgina"
+msgstr "Llista de tasques del Wine"
 
 #: programs/tasklist/tasklist.rc:29
 msgid "Usage: tasklist [/?]\n"
-msgstr ""
+msgstr "Ús: tasklist [/?]\n"
 
 #: programs/tasklist/tasklist.rc:30 programs/taskmgr/taskmgr.rc:272
 msgid "Image Name"
@@ -17536,38 +17506,28 @@ msgid "PID"
 msgstr "PID"
 
 #: programs/tasklist/tasklist.rc:32
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session Name"
-msgstr "ID de sessió"
+msgstr "Nom de sessió"
 
 #: programs/tasklist/tasklist.rc:33
-#, fuzzy
-#| msgid "Session ID"
 msgid "Session#"
-msgstr "ID de sessió"
+msgstr "Número de sessió"
 
 #: programs/tasklist/tasklist.rc:34 programs/taskmgr/taskmgr.rc:276
 msgid "Mem Usage"
 msgstr "Ús de memòria"
 
 #: programs/tasklist/tasklist.rc:35
-#, fuzzy
-#| msgid "OK"
 msgid "K"
-msgstr "D'acord"
+msgstr "K"
 
 #: programs/tasklist/tasklist.rc:36
-#, fuzzy
-#| msgid "reg: Invalid syntax. "
 msgid "ERROR: Invalid syntax\n"
-msgstr "reg: La sintaxi no és vàlida. "
+msgstr "ERROR: Sintaxi no vàlida\n"
 
 #: programs/tasklist/tasklist.rc:37
-#, fuzzy
-#| msgid "The filename cannot be resolved.\n"
 msgid "ERROR: The search filter cannot be recognized.\n"
-msgstr "No es pot resoldre el nom de fitxer.\n"
+msgstr "ERROR: No es pot reconèixer el filtre de cerca.\n"
 
 #: programs/taskmgr/taskmgr.rc:37 programs/taskmgr/taskmgr.rc:108
 msgid "&New Task (Run...)"
@@ -18710,8 +18670,8 @@ msgid "&Theme:"
 msgstr "&Tema:"
 
 #: programs/winecfg/winecfg.rc:295
-msgid "&WinRT app theme:"
-msgstr ""
+msgid "&WinRT theme:"
+msgstr "Tema &WinRT:"
 
 #: programs/winecfg/winecfg.rc:297
 msgid "&Install theme..."
@@ -18730,8 +18690,8 @@ msgid "MIME types"
 msgstr "Tipus MIME"
 
 #: programs/winecfg/winecfg.rc:311
-msgid "Manage file &associations"
-msgstr "Gestiona &associacions de fitxer"
+msgid "Manage file and protocol &associations"
+msgstr "Gestiona &associacions de fitxer i protocol"
 
 #: programs/winecfg/winecfg.rc:314
 msgid "Folders"
@@ -18834,14 +18794,12 @@ msgid "Mono"
 msgstr "Mono"
 
 #: programs/winecfg/winecfg.rc:98
-#, fuzzy
-#| msgid "Right"
 msgid "Light"
-msgstr "Dreta"
+msgstr "Clar"
 
 #: programs/winecfg/winecfg.rc:99
 msgid "Dark"
-msgstr ""
+msgstr "Fosc"
 
 #: programs/winecfg/winecfg.rc:53
 msgid ""

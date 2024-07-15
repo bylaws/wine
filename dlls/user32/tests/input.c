@@ -2029,7 +2029,7 @@ static void test_GetRawInputDeviceList(void)
                 (info.dwType != RIM_TYPEHID && sz == 0),
                 "Got wrong PPD size for type 0x%lx: %u\n", info.dwType, sz);
 
-        ppd = HeapAlloc(GetProcessHeap(), 0, sz);
+        ppd = malloc(sz);
         ret = pGetRawInputDeviceInfoW(devices[i].hDevice, RIDI_PREPARSEDDATA, ppd, &sz);
         ok(ret == sz, "GetRawInputDeviceInfo gave wrong return: %u, should be %u\n", ret, sz);
 
@@ -2056,7 +2056,7 @@ static void test_GetRawInputDeviceList(void)
                 HidD_FreePreparsedData(preparsed);
         }
 
-        HeapFree(GetProcessHeap(), 0, ppd);
+        free(ppd);
 
         CloseHandle(file);
     }
@@ -2591,7 +2591,7 @@ static LRESULT CALLBACK rawinput_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPA
 
         ret = GetRawInputData((HRAWINPUT)lparam, RID_INPUT, NULL, &raw_size, sizeof(RAWINPUTHEADER));
         ok(ret == 0, "GetRawInputData failed\n");
-        ok(raw_size <= sizeof(raw), "Unexpected rawinput data size: %u", raw_size);
+        ok(raw_size <= sizeof(raw), "Unexpected rawinput data size: %u\n", raw_size);
 
         raw_size = sizeof(raw);
         ret = GetRawInputData((HRAWINPUT)lparam, RID_INPUT, &raw, &raw_size, sizeof(RAWINPUTHEADER));
@@ -3369,6 +3369,16 @@ static void test_keyboard_layout_name(void)
     ok(GetLastError() == ERROR_NOACCESS, "got %ld\n", GetLastError());
 
     layout = GetKeyboardLayout(0);
+    if (broken( layout == (HKL)0x040a0c0a ))
+    {
+        /* The testbot w7u_es has a broken layout configuration, its active layout is 040a:0c0a,
+         * with 0c0a its user locale and 040a its layout langid. Its layout preload list contains
+         * a 00000c0a layout but the system layouts OTOH only contains the standard 0000040a layout.
+         * Later, after activating 0409:0409 layout, GetKeyboardLayoutNameW returns 00000c0a.
+         */
+        win_skip( "broken keyboard layout, skipping tests\n" );
+        return;
+    }
 
     len = GetKeyboardLayoutList(0, NULL);
     ok(len > 0, "GetKeyboardLayoutList returned %d\n", len);
@@ -3379,7 +3389,7 @@ static void test_keyboard_layout_name(void)
     len = GetKeyboardLayoutList(len, layouts);
     ok(len > 0, "GetKeyboardLayoutList returned %d\n", len);
 
-    layouts_preload = calloc(len, sizeof(HKL));
+    layouts_preload = calloc(1, sizeof(HKL));
     ok(layouts_preload != NULL, "Could not allocate memory\n");
 
     if (!RegOpenKeyW( HKEY_CURRENT_USER, L"Keyboard Layout\\Preload", &hkey ))
@@ -3388,24 +3398,26 @@ static void test_keyboard_layout_name(void)
         type = REG_SZ;
         klid_size = sizeof(klid);
         value_size = ARRAY_SIZE(value);
-        while (i < len && !RegEnumValueW( hkey, i++, value, &value_size, NULL, &type, (void *)&klid, &klid_size ))
+        while (!RegEnumValueW( hkey, i++, value, &value_size, NULL, &type, (void *)&klid, &klid_size ))
         {
             klid_size = sizeof(klid);
             value_size = ARRAY_SIZE(value);
+            layouts_preload = realloc( layouts_preload, (i + 1) * sizeof(*layouts_preload) );
+            ok(layouts_preload != NULL, "Could not allocate memory\n");
             layouts_preload[i - 1] = UlongToHandle( wcstoul( klid, NULL, 16 ) );
+            layouts_preload[i] = 0;
 
             id = (DWORD_PTR)layouts_preload[i - 1];
             if (id & 0x80000000) todo_wine_if(HIWORD(id) == 0xe001) ok((id & 0xf0000000) == 0xd0000000, "Unexpected preloaded keyboard layout high bits %#lx\n", id);
             else ok(!(id & 0xf0000000), "Unexpected preloaded keyboard layout high bits %#lx\n", id);
         }
 
-        ok(i <= len, "Unexpected keyboard count %d in preload list\n", i);
         RegCloseKey( hkey );
     }
 
     if (!RegOpenKeyW( HKEY_CURRENT_USER, L"Keyboard Layout\\Substitutes", &hkey ))
     {
-        for (i = 0; i < len && layouts_preload[i]; ++i)
+        for (i = 0; layouts_preload[i]; ++i)
         {
             type = REG_SZ;
             klid_size = sizeof(klid);
@@ -3447,7 +3459,7 @@ static void test_keyboard_layout_name(void)
 
         GetKeyboardLayoutNameW(klid);
 
-        for (j = 0; j < len; ++j)
+        for (j = 0; layouts_preload[j]; ++j)
         {
             swprintf( tmpklid, KL_NAMELENGTH, L"%08X", layouts_preload[j] );
             if (!wcscmp( tmpklid, klid )) break;
@@ -3547,6 +3559,13 @@ static void test_ActivateKeyboardLayout( char **argv )
     DWORD ret;
 
     layout = GetKeyboardLayout( 0 );
+    if (broken( layout == (HKL)0x040a0c0a ))
+    {
+        /* The testbot w7u_es has a broken layout configuration, see test_keyboard_layout_name above. */
+        win_skip( "broken keyboard layout, skipping tests\n" );
+        return;
+    }
+
     count = GetKeyboardLayoutList( 0, NULL );
     ok( count > 0, "GetKeyboardLayoutList returned %d\n", count );
     layouts = malloc( count * sizeof(HKL) );
@@ -5367,6 +5386,23 @@ static void test_ClipCursor( char **argv )
     if (!EqualRect( &rect, &virtual_rect )) ok_ret( 1, ClipCursor( NULL ) );
 }
 
+static void test_GetKeyboardLayout(void)
+{
+    LANGID lang_id;
+    BOOL is_cjk;
+    HKL hkl;
+
+    /* Test that the high word of the keyboard layout in CJK locale on Vista+ is the same as the low
+     * word, even when IME is on */
+    lang_id = PRIMARYLANGID(GetUserDefaultLCID());
+    is_cjk = (lang_id == LANG_CHINESE || lang_id == LANG_JAPANESE || lang_id == LANG_KOREAN);
+    if (is_cjk && LOBYTE(LOWORD(GetVersion())) > 5)
+    {
+        hkl = GetKeyboardLayout(0);
+        ok(HIWORD(hkl) == LOWORD(hkl), "Got unexpected hkl %p.\n", hkl);
+    }
+}
+
 START_TEST(input)
 {
     char **argv;
@@ -5412,6 +5448,7 @@ START_TEST(input)
     test_RegisterRawInputDevices();
     test_rawinput(argv[0]);
     test_DefRawInputProc();
+    test_GetKeyboardLayout();
 
     if(pGetMouseMovePointsEx)
         test_GetMouseMovePointsEx( argv );

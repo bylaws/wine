@@ -38,26 +38,27 @@
 
 #include "unix_private.h"
 
-BOOL is_xbox_gamepad(WORD vid, WORD pid)
+BOOL is_wine_blacklisted(WORD vid, WORD pid)
 {
-    if (vid != 0x045e) return FALSE;
-    if (pid == 0x0202) return TRUE; /* Xbox Controller */
-    if (pid == 0x0285) return TRUE; /* Xbox Controller S */
-    if (pid == 0x0289) return TRUE; /* Xbox Controller S */
-    if (pid == 0x028e) return TRUE; /* Xbox360 Controller */
-    if (pid == 0x028f) return TRUE; /* Xbox360 Wireless Controller */
-    if (pid == 0x02d1) return TRUE; /* Xbox One Controller */
-    if (pid == 0x02dd) return TRUE; /* Xbox One Controller (Covert Forces/Firmware 2015) */
-    if (pid == 0x02e0) return TRUE; /* Xbox One X Controller */
-    if (pid == 0x02e3) return TRUE; /* Xbox One Elite Controller */
-    if (pid == 0x02e6) return TRUE; /* Wireless XBox Controller Dongle */
-    if (pid == 0x02ea) return TRUE; /* Xbox One S Controller */
-    if (pid == 0x02fd) return TRUE; /* Xbox One S Controller (Firmware 2017) */
-    if (pid == 0x0b00) return TRUE; /* Xbox Elite 2 */
-    if (pid == 0x0b05) return TRUE; /* Xbox Elite 2 Wireless */
-    if (pid == 0x0b12) return TRUE; /* Xbox Series */
-    if (pid == 0x0b13) return TRUE; /* Xbox Series Wireless */
-    if (pid == 0x0719) return TRUE; /* Xbox 360 Wireless Adapter */
+    if (vid == 0x056a) return TRUE; /* all Wacom devices */
+    return FALSE;
+}
+
+/* logic from SDL2's SDL_ShouldIgnoreGameController */
+BOOL is_sdl_blacklisted(WORD vid, WORD pid)
+{
+    const char *allow_virtual = getenv("SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD");
+    const char *whitelist = getenv("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT");
+    const char *blacklist = getenv("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+    char needle[16];
+
+    if (vid == 0x28de && pid == 0x11ff && allow_virtual && *allow_virtual &&
+        *allow_virtual != '0' && strcasecmp(allow_virtual, "false"))
+        return FALSE;
+
+    sprintf(needle, "0x%04x/0x%04x", vid, pid);
+    if (whitelist) return strcasestr(whitelist, needle) == NULL;
+    if (blacklist) return strcasestr(blacklist, needle) != NULL;
     return FALSE;
 }
 
@@ -72,7 +73,95 @@ BOOL is_dualshock4_gamepad(WORD vid, WORD pid)
 
 BOOL is_dualsense_gamepad(WORD vid, WORD pid)
 {
-    if (vid == 0x054c && pid == 0x0ce6) return TRUE;
+    if (vid != 0x054c) return FALSE;
+    if (pid == 0x0ce6) return TRUE; /* DualSense */
+    if (pid == 0x0df2) return TRUE; /* DualSense Edge */
+    return FALSE;
+}
+
+BOOL is_logitech_g920(WORD vid, WORD pid)
+{
+    return vid == 0x046D && pid == 0xC262;
+}
+
+static BOOL is_thrustmaster_hotas(WORD vid, WORD pid)
+{
+    return vid == 0x044F && (pid == 0xB679 || pid == 0xB687 || pid == 0xB10A);
+}
+
+static BOOL is_simucube_wheel(WORD vid, WORD pid)
+{
+    if (vid != 0x16D0) return FALSE;
+    if (pid == 0x0D61) return TRUE; /* Simucube 2 Sport */
+    if (pid == 0x0D60) return TRUE; /* Simucube 2 Pro */
+    if (pid == 0x0D5F) return TRUE; /* Simucube 2 Ultimate */
+    if (pid == 0x0D5A) return TRUE; /* Simucube 1 */
+    return FALSE;
+}
+
+static BOOL is_fanatec_pedals(WORD vid, WORD pid)
+{
+    if (vid != 0x0EB7) return FALSE;
+    if (pid == 0x183B) return TRUE; /* Fanatec ClubSport Pedals v3 */
+    if (pid == 0x1839) return TRUE; /* Fanatec ClubSport Pedals v1/v2 */
+    return FALSE;
+}
+
+static BOOL is_vkb_controller(WORD vid, WORD pid, INT buttons)
+{
+    if (vid != 0x231D) return FALSE;
+
+    /* comes with 128 buttons in the default configuration */
+    if (buttons == 128) return TRUE;
+
+    /* if customized, less than 128 buttons may be shown, decide by PID */
+    if (pid == 0x0126) return TRUE; /* VKB-Sim Space Gunfighter */
+    if (pid == 0x0127) return TRUE; /* VKB-Sim Space Gunfighter L */
+    if (pid == 0x0200) return TRUE; /* VKBsim Gladiator EVO Right Grip */
+    if (pid == 0x0201) return TRUE; /* VKBsim Gladiator EVO Left Grip */
+    return FALSE;
+}
+
+static BOOL is_virpil_controller(WORD vid, WORD pid, INT buttons)
+{
+    switch (vid)
+    {
+    case 0x03eb:
+        /* users may have configured button limits, usually 32/50/64 */
+        if ((buttons == 32) || (buttons == 50) || (buttons == 64)) return TRUE;
+
+        if (pid == 0x2055) return TRUE; /* ATMEL/VIRPIL/200325 VPC Throttle MT-50 CM2 */
+        break;
+    case 0x3344:
+        /* comes with 31 buttons in the default configuration, or 128 max */
+        if ((buttons == 31) || (buttons == 128)) return TRUE;
+
+        /* users may have configured button limits, usually 32/50/64 */
+        if ((buttons == 32) || (buttons == 50) || (buttons == 64)) return TRUE;
+
+        /* if customized, arbitrary amount of buttons may be shown, decide by PID */
+        if (pid == 0x412f) return TRUE; /* Virpil Constellation ALPHA-R */
+        if (pid == 0x812c) return TRUE; /* Virpil Constellation ALPHA-L */
+        break;
+    }
+    return FALSE;
+}
+
+BOOL is_hidraw_enabled(WORD vid, WORD pid, INT axes, INT buttons)
+{
+    const char *enabled = getenv("PROTON_ENABLE_HIDRAW");
+    char needle[16];
+
+    if (is_dualshock4_gamepad(vid, pid)) return TRUE;
+    if (is_dualsense_gamepad(vid, pid)) return TRUE;
+    if (is_thrustmaster_hotas(vid, pid)) return TRUE;
+    if (is_simucube_wheel(vid, pid)) return TRUE;
+    if (is_fanatec_pedals(vid, pid)) return TRUE;
+    if (is_vkb_controller(vid, pid, buttons)) return TRUE;
+    if (is_virpil_controller(vid, pid, buttons)) return TRUE;
+
+    sprintf(needle, "0x%04x/0x%04x", vid, pid);
+    if (enabled) return strcasestr(enabled, needle) != NULL;
     return FALSE;
 }
 
@@ -350,6 +439,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     unix_device_get_feature_report,
     unix_device_set_feature_report,
 };
+
+C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
 
 void bus_event_cleanup(struct bus_event *event)
 {

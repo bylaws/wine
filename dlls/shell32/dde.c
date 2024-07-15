@@ -165,6 +165,7 @@ static inline HDDEDATA Dde_OnRequest(UINT uFmt, HCONV hconv, HSZ hszTopic,
                     {
                         free(groups_data);
                         free(programs);
+                        FindClose(hfind);
                         return NULL;
                     }
                     groups_data = new_groups_data;
@@ -391,7 +392,7 @@ static DWORD parse_dde_command(HSZ hszTopic, WCHAR *command)
                 else
                 {
                     if (!(p = wcspbrk(command, L",()[]"))) goto error;
-                    while (p[-1] == ' ') p--;
+                    while (p > command && p[-1] == ' ') p--;
                 }
 
                 new_argv = realloc(argv, (argc + 1) * sizeof(*argv));

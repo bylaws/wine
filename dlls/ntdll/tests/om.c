@@ -19,13 +19,18 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "ntdll_test.h"
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winbase.h"
 #include "winternl.h"
 #include "winuser.h"
 #include "ddk/wdm.h"
-#include "stdio.h"
-#include "winnt.h"
-#include "stdlib.h"
+#include "wine/test.h"
 
 static VOID     (WINAPI *pRtlInitUnicodeString)( PUNICODE_STRING, LPCWSTR );
 static NTSTATUS (WINAPI *pNtCreateEvent) ( PHANDLE, ACCESS_MASK, const POBJECT_ATTRIBUTES, EVENT_TYPE, BOOLEAN);
@@ -412,6 +417,16 @@ static void test_name_collisions(void)
     ok( iosb.Information == FILE_OPENED, "wrong info %Ix\n", iosb.Information );
     pNtClose(h1);
 
+    memset( &iosb, 0xcc, sizeof(iosb) );
+    status = pNtCreateNamedPipeFile( &h1, GENERIC_READ|GENERIC_WRITE, &attr, &iosb,
+                                     FILE_SHARE_READ|FILE_SHARE_WRITE,
+                                     FILE_OPEN_IF, FILE_PIPE_FULL_DUPLEX,
+                                     FALSE, FALSE, FALSE, 10, 256, 256, NULL );
+    ok(status == STATUS_SUCCESS, "failed to create pipe %08lx\n", status);
+    ok( iosb.Status == STATUS_SUCCESS, "wrong status %08lx\n", status);
+    ok( iosb.Information == FILE_OPENED, "wrong info %Ix\n", iosb.Information );
+    pNtClose(h1);
+
     h1 = CreateNamedPipeA( "\\\\.\\pipe\\named_pipe", PIPE_ACCESS_DUPLEX,
                           PIPE_READMODE_BYTE, 10, 256, 256, 1000, NULL );
     winerr = GetLastError();
@@ -746,7 +761,7 @@ static void test_name_limits(void)
     test_all_kernel_objects( __LINE__, &attr2, STATUS_ACCESS_VIOLATION, STATUS_ACCESS_VIOLATION );
     test_all_kernel_objects( __LINE__, &attr3, STATUS_ACCESS_VIOLATION, STATUS_ACCESS_VIOLATION );
     attr2.ObjectName = attr3.ObjectName = &str2;
-    str2.Buffer = (WCHAR *)0xdeadbeef;
+    str2.Buffer = (WCHAR *)((char *)pipeW + 1); /* misaligned buffer */
     str2.Length = 3;
     test_all_kernel_objects( __LINE__, &attr2, STATUS_DATATYPE_MISALIGNMENT, STATUS_DATATYPE_MISALIGNMENT );
     test_all_kernel_objects( __LINE__, &attr3, STATUS_DATATYPE_MISALIGNMENT, STATUS_DATATYPE_MISALIGNMENT );
@@ -1398,9 +1413,15 @@ static void test_symboliclink(void)
     pNtClose(link);
 
     RtlInitUnicodeString(&str, L"\\");
+    attr.Attributes = OBJ_OPENIF;
     status = pNtCreateSymbolicLinkObject(&h, SYMBOLIC_LINK_QUERY, &attr, &target);
-    todo_wine ok(status == STATUS_OBJECT_TYPE_MISMATCH,
-                 "NtCreateSymbolicLinkObject should have failed with STATUS_OBJECT_TYPE_MISMATCH got(%08lx)\n", status);
+    ok(status == STATUS_OBJECT_TYPE_MISMATCH,
+       "NtCreateSymbolicLinkObject should have failed with STATUS_OBJECT_TYPE_MISMATCH got(%08lx)\n", status);
+    attr.Attributes = 0;
+    status = pNtCreateSymbolicLinkObject(&h, SYMBOLIC_LINK_QUERY, &attr, &target);
+    todo_wine
+    ok(status == STATUS_OBJECT_TYPE_MISMATCH,
+       "NtCreateSymbolicLinkObject should have failed with STATUS_OBJECT_TYPE_MISMATCH got(%08lx)\n", status);
 
     RtlInitUnicodeString( &target, L"->Somewhere");
 
@@ -1468,6 +1489,16 @@ static void test_symboliclink(void)
 
     status = pNtOpenSymbolicLinkObject( &h, SYMBOLIC_LINK_QUERY, &attr );
     ok(status == STATUS_SUCCESS, "Got unexpected status %#lx.\n", status);
+    pNtClose(h);
+
+    attr.Attributes = OBJ_OPENIF;
+    status = pNtCreateSymbolicLinkObject( &h, SYMBOLIC_LINK_QUERY, &attr, &target );
+    ok(status == STATUS_SUCCESS || broken( status == STATUS_OBJECT_NAME_EXISTS ), /* <= win10 1507 */
+       "Got unexpected status %#lx.\n", status);
+    pNtClose(h);
+    attr.Attributes = 0;
+    status = pNtCreateSymbolicLinkObject( &h, SYMBOLIC_LINK_QUERY, &attr, &target );
+    ok(status == STATUS_OBJECT_NAME_COLLISION, "Got unexpected status %#lx.\n", status);
     pNtClose(h);
 
     InitializeObjectAttributes(&attr, &str, 0, 0, NULL);
@@ -2237,7 +2268,7 @@ static void test_token(void)
 
 static void *align_ptr( void *ptr )
 {
-    ULONG align = sizeof(DWORD_PTR) - 1;
+    ULONG_PTR align = sizeof(DWORD_PTR) - 1;
     return (void *)(((DWORD_PTR)ptr + align) & ~align);
 }
 

@@ -26,7 +26,6 @@
 #include "winnls.h"
 #include "winreg.h"
 #include "wine/debug.h"
-#include "wine/heap.h"
 #include "wine/list.h"
 #include "wine/unixlib.h"
 
@@ -113,7 +112,7 @@ exit:
         RegCloseKey(drv_key);
 }
 
-static void get_device_guid(EDataFlow flow, const char *dev, GUID *guid)
+void WINAPI get_device_guid(EDataFlow flow, const char *dev, GUID *guid)
 {
     HKEY key = NULL, dev_key;
     DWORD type, size = sizeof(*guid);
@@ -125,7 +124,7 @@ static void get_device_guid(EDataFlow flow, const char *dev, GUID *guid)
         key_name[0] = '0';
     key_name[1] = ',';
 
-    MultiByteToWideChar(CP_UNIXCP, 0, dev, -1, key_name + 2, ARRAY_SIZE(key_name) - 2);
+    MultiByteToWideChar(CP_UTF8, 0, dev, -1, key_name + 2, ARRAY_SIZE(key_name) - 2);
 
     if(RegOpenKeyExW(HKEY_CURRENT_USER, drv_key_devicesW, 0, KEY_WRITE|KEY_READ, &key) == ERROR_SUCCESS){
         if(RegOpenKeyExW(key, key_name, 0, KEY_READ, &dev_key) == ERROR_SUCCESS){
@@ -149,66 +148,6 @@ static void get_device_guid(EDataFlow flow, const char *dev, GUID *guid)
 
     if(key)
         RegCloseKey(key);
-}
-
-HRESULT WINAPI AUDDRV_GetEndpointIDs(EDataFlow flow, WCHAR ***ids_out,
-        GUID **guids_out, UINT *num, UINT *def_index)
-{
-    struct get_endpoint_ids_params params;
-    unsigned int i;
-    GUID *guids = NULL;
-    WCHAR **ids = NULL;
-
-    TRACE("%d %p %p %p\n", flow, ids_out, num, def_index);
-
-    params.flow = flow;
-    params.size = 1000;
-    params.endpoints = NULL;
-    do{
-        heap_free(params.endpoints);
-        params.endpoints = heap_alloc(params.size);
-        UNIX_CALL(get_endpoint_ids, &params);
-    }while(params.result == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER));
-
-    if(FAILED(params.result)) goto end;
-
-    ids = heap_alloc_zero(params.num * sizeof(*ids));
-    guids = heap_alloc(params.num * sizeof(*guids));
-    if(!ids || !guids){
-        params.result = E_OUTOFMEMORY;
-        goto end;
-    }
-
-    for(i = 0; i < params.num; i++){
-        const WCHAR *name = (WCHAR *)((char *)params.endpoints + params.endpoints[i].name);
-        const char *device = (char *)params.endpoints + params.endpoints[i].device;
-        const unsigned int size = (wcslen(name) + 1) * sizeof(WCHAR);
-
-        ids[i] = heap_alloc(size);
-        if(!ids[i]){
-            params.result = E_OUTOFMEMORY;
-            goto end;
-        }
-        memcpy(ids[i], name, size);
-        get_device_guid(flow, device, guids + i);
-    }
-    *def_index = params.default_idx;
-
-end:
-    heap_free(params.endpoints);
-    if(FAILED(params.result)){
-        heap_free(guids);
-        if(ids){
-            for(i = 0; i < params.num; i++) heap_free(ids[i]);
-            heap_free(ids);
-        }
-    }else{
-        *ids_out = ids;
-        *guids_out = guids;
-        *num = params.num;
-    }
-
-    return params.result;
 }
 
 BOOL WINAPI get_device_name_from_guid(const GUID *guid, char **name, EDataFlow *flow)
@@ -256,13 +195,13 @@ BOOL WINAPI get_device_name_from_guid(const GUID *guid, char **name, EDataFlow *
                     return FALSE;
                 }
 
-                if(!(size = WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, NULL, 0, NULL, NULL)))
+                if(!(size = WideCharToMultiByte(CP_UTF8, 0, key_name + 2, -1, NULL, 0, NULL, NULL)))
                     return FALSE;
 
                 if(!(*name = malloc(size)))
                     return FALSE;
 
-                if(!WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, *name, size, NULL, NULL)){
+                if(!WideCharToMultiByte(CP_UTF8, 0, key_name + 2, -1, *name, size, NULL, NULL)){
                     free(*name);
                     return FALSE;
                 }

@@ -456,7 +456,7 @@ typedef struct tagMSIPACKAGE
     float center_y;
 
     UINT WordCount;
-    UINT Context;
+    MSIINSTALLCONTEXT Context;
 
     struct list subscriptions;
 
@@ -1165,6 +1165,32 @@ static inline LPWSTR strdupAtoW( LPCSTR str )
     ret = malloc( len * sizeof(WCHAR) );
     if (ret)
         MultiByteToWideChar( CP_ACP, 0, str, -1, ret, len );
+    return ret;
+}
+
+static inline char *strdupWtoU( LPCWSTR str )
+{
+    LPSTR ret = NULL;
+    DWORD len;
+
+    if (!str) return ret;
+    len = WideCharToMultiByte( CP_UTF8, 0, str, -1, NULL, 0, NULL, NULL);
+    ret = malloc( len );
+    if (ret)
+        WideCharToMultiByte( CP_UTF8, 0, str, -1, ret, len, NULL, NULL );
+    return ret;
+}
+
+static inline LPWSTR strdupUtoW( LPCSTR str )
+{
+    LPWSTR ret = NULL;
+    DWORD len;
+
+    if (!str) return ret;
+    len = MultiByteToWideChar( CP_UTF8, 0, str, -1, NULL, 0 );
+    ret = malloc( len * sizeof(WCHAR) );
+    if (ret)
+        MultiByteToWideChar( CP_UTF8, 0, str, -1, ret, len );
     return ret;
 }
 

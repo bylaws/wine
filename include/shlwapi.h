@@ -1089,7 +1089,7 @@ typedef HRESULT (CALLBACK *DLLGETVERSIONPROC)(DLLVERSIONINFO *);
 
 #ifdef __WINESRC__
 /* shouldn't be here, but is nice for type checking */
-HRESULT WINAPI DllGetVersion(DLLVERSIONINFO *) DECLSPEC_HIDDEN;
+HRESULT WINAPI DllGetVersion(DLLVERSIONINFO *);
 #endif
 
 typedef struct _DLLVERSIONINFO2 {
@@ -1106,7 +1106,7 @@ typedef struct _DLLVERSIONINFO2 {
 #define MAKEDLLVERULL(mjr, mnr, bld, qfe) (((ULONGLONG)(mjr)<< 48)| \
   ((ULONGLONG)(mnr)<< 32) | ((ULONGLONG)(bld)<< 16) | (ULONGLONG)(qfe))
 
-HRESULT WINAPI DllInstall(BOOL,LPCWSTR) DECLSPEC_HIDDEN;
+HRESULT WINAPI DllInstall(BOOL,LPCWSTR);
 
 
 /* IsOS definitions */
@@ -1166,8 +1166,8 @@ WINSHLWAPI BOOL WINAPI IsOS(DWORD);
 #define FDTF_RTLDATE            0x00000200
 #define FDTF_NOAUTOREADINGORDER 0x00000400
 
-WINSHLWAPI int WINAPI SHFormatDateTimeA(const FILETIME UNALIGNED *filetime, DWORD *flags, LPSTR buffer, UINT size);
-WINSHLWAPI int WINAPI SHFormatDateTimeW(const FILETIME UNALIGNED *filetime, DWORD *flags, LPWSTR buffer, UINT size);
+WINSHLWAPI int WINAPI SHFormatDateTimeA(const FILETIME *filetime, DWORD *flags, LPSTR buffer, UINT size);
+WINSHLWAPI int WINAPI SHFormatDateTimeW(const FILETIME *filetime, DWORD *flags, LPWSTR buffer, UINT size);
 
 typedef struct
 {

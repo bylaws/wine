@@ -19,14 +19,22 @@
  *
  */
 
-#include "ntdll_test.h"
+#include <stdarg.h>
+
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winbase.h"
+#include "winternl.h"
 #include "winioctl.h"
 #include "winuser.h"
 #include "ddk/wdm.h"
+#include "wine/test.h"
 
 static NTSTATUS (WINAPI *pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS,void*,ULONG,ULONG*);
 static NTSTATUS (WINAPI *pNtQuerySystemInformationEx)(SYSTEM_INFORMATION_CLASS,void*,ULONG,void*,ULONG,ULONG*);
 static NTSTATUS (WINAPI *pRtlGetNativeSystemInformation)(SYSTEM_INFORMATION_CLASS,void*,ULONG,ULONG*);
+static void     (WINAPI *pRtlOpenCrossProcessEmulatorWorkConnection)(HANDLE,HANDLE*,void**);
 static USHORT   (WINAPI *pRtlWow64GetCurrentMachine)(void);
 static NTSTATUS (WINAPI *pRtlWow64GetProcessMachines)(HANDLE,WORD*,WORD*);
 static NTSTATUS (WINAPI *pRtlWow64GetSharedInfoProcess)(HANDLE,BOOLEAN*,WOW64INFO*);
@@ -34,8 +42,14 @@ static NTSTATUS (WINAPI *pRtlWow64GetThreadContext)(HANDLE,WOW64_CONTEXT*);
 static NTSTATUS (WINAPI *pRtlWow64IsWowGuestMachineSupported)(USHORT,BOOLEAN*);
 static NTSTATUS (WINAPI *pNtMapViewOfSectionEx)(HANDLE,HANDLE,PVOID*,const LARGE_INTEGER*,SIZE_T*,ULONG,ULONG,MEM_EXTENDED_PARAMETER*,ULONG);
 #ifdef _WIN64
+static NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*);
 static NTSTATUS (WINAPI *pRtlWow64GetCpuAreaInfo)(WOW64_CPURESERVED*,ULONG,WOW64_CPU_AREA_INFO*);
 static NTSTATUS (WINAPI *pRtlWow64GetThreadSelectorEntry)(HANDLE,THREAD_DESCRIPTOR_INFORMATION*,ULONG,ULONG*);
+static CROSS_PROCESS_WORK_ENTRY * (WINAPI *pRtlWow64PopAllCrossProcessWorkFromWorkList)(CROSS_PROCESS_WORK_HDR*,BOOLEAN*);
+static CROSS_PROCESS_WORK_ENTRY * (WINAPI *pRtlWow64PopCrossProcessWorkFromFreeList)(CROSS_PROCESS_WORK_HDR*);
+static BOOLEAN (WINAPI *pRtlWow64PushCrossProcessWorkOntoFreeList)(CROSS_PROCESS_WORK_HDR*,CROSS_PROCESS_WORK_ENTRY*);
+static BOOLEAN (WINAPI *pRtlWow64PushCrossProcessWorkOntoWorkList)(CROSS_PROCESS_WORK_HDR*,CROSS_PROCESS_WORK_ENTRY*,void**);
+static BOOLEAN (WINAPI *pRtlWow64RequestCrossProcessHeavyFlush)(CROSS_PROCESS_WORK_HDR*);
 #else
 static NTSTATUS (WINAPI *pNtWow64AllocateVirtualMemory64)(HANDLE,ULONG64*,ULONG64,ULONG64*,ULONG,ULONG);
 static NTSTATUS (WINAPI *pNtWow64GetNativeSystemInformation)(SYSTEM_INFORMATION_CLASS,void*,ULONG,ULONG*);
@@ -44,6 +58,7 @@ static NTSTATUS (WINAPI *pNtWow64ReadVirtualMemory64)(HANDLE,ULONG64,void*,ULONG
 static NTSTATUS (WINAPI *pNtWow64WriteVirtualMemory64)(HANDLE,ULONG64,const void *,ULONG64,ULONG64*);
 #endif
 
+static BOOL is_win64 = sizeof(void *) > sizeof(int);
 static BOOL is_wow64;
 static BOOL old_wow64;  /* Wine old-style wow64 */
 static void *code_mem;
@@ -64,6 +79,11 @@ static USHORT native_machine = IMAGE_FILE_MACHINE_ARM64;
 static USHORT current_machine;
 static USHORT native_machine;
 #endif
+
+static BOOL is_machine_32bit( USHORT machine )
+{
+    return machine == IMAGE_FILE_MACHINE_I386 || machine == IMAGE_FILE_MACHINE_ARMNT;
+}
 
 static void init(void)
 {
@@ -87,14 +107,21 @@ static void init(void)
     GET_PROC( NtQuerySystemInformation );
     GET_PROC( NtQuerySystemInformationEx );
     GET_PROC( RtlGetNativeSystemInformation );
+    GET_PROC( RtlOpenCrossProcessEmulatorWorkConnection );
     GET_PROC( RtlWow64GetCurrentMachine );
     GET_PROC( RtlWow64GetProcessMachines );
     GET_PROC( RtlWow64GetSharedInfoProcess );
     GET_PROC( RtlWow64GetThreadContext );
     GET_PROC( RtlWow64IsWowGuestMachineSupported );
 #ifdef _WIN64
+    GET_PROC( KiUserExceptionDispatcher );
     GET_PROC( RtlWow64GetCpuAreaInfo );
     GET_PROC( RtlWow64GetThreadSelectorEntry );
+    GET_PROC( RtlWow64PopAllCrossProcessWorkFromWorkList );
+    GET_PROC( RtlWow64PopCrossProcessWorkFromFreeList );
+    GET_PROC( RtlWow64PushCrossProcessWorkOntoFreeList );
+    GET_PROC( RtlWow64PushCrossProcessWorkOntoWorkList );
+    GET_PROC( RtlWow64RequestCrossProcessHeavyFlush );
 #else
     GET_PROC( NtWow64AllocateVirtualMemory64 );
     GET_PROC( NtWow64GetNativeSystemInformation );
@@ -103,6 +130,19 @@ static void init(void)
     GET_PROC( NtWow64WriteVirtualMemory64 );
 #endif
 #undef GET_PROC
+
+    if (pNtQuerySystemInformationEx)
+    {
+        SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION machines[8];
+        HANDLE process = GetCurrentProcess();
+        NTSTATUS status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process,
+                                                       sizeof(process), machines, sizeof(machines), NULL );
+        if (!status)
+            for (int i = 0; machines[i].Machine; i++)
+                trace( "machine %04x kernel %u user %u native %u process %u wow64 %u\n",
+                       machines[i].Machine, machines[i].KernelMode, machines[i].UserMode,
+                       machines[i].Native, machines[i].Process, machines[i].WoW64Container );
+    }
 
     if (pRtlGetNativeSystemInformation)
     {
@@ -121,46 +161,65 @@ static void init(void)
         }
     }
 
+    trace( "current %04x native %04x\n", current_machine, native_machine );
+
     if (native_machine == IMAGE_FILE_MACHINE_AMD64)
         code_mem = VirtualAlloc( NULL, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE );
 }
 
+static BOOL create_process_machine( char *cmdline, DWORD flags, USHORT machine, PROCESS_INFORMATION *pi )
+{
+    struct _PROC_THREAD_ATTRIBUTE_LIST *list;
+    STARTUPINFOEXA si = {{ sizeof(si) }};
+    SIZE_T size = 1024;
+    BOOL ret;
+
+    si.lpAttributeList = list = malloc( size );
+    InitializeProcThreadAttributeList( list, 1, 0, &size );
+    UpdateProcThreadAttribute( list, 0, PROC_THREAD_ATTRIBUTE_MACHINE_TYPE,
+                               &machine, sizeof(machine), NULL, NULL );
+    ret = CreateProcessA( NULL, cmdline, NULL, NULL, FALSE,
+                          EXTENDED_STARTUPINFO_PRESENT | flags, NULL, NULL, &si.StartupInfo, pi );
+    DeleteProcThreadAttributeList( list );
+    free( list );
+    return ret;
+}
+
 static void test_process_architecture( HANDLE process, USHORT expect_machine, USHORT expect_native )
 {
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION machines[8];
     NTSTATUS status;
-    ULONG i, len, buffer[8];
+    ULONG i, len;
 
     len = 0xdead;
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, sizeof(process),
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     ok( !status, "failed %lx\n", status );
     ok( !(len & 3), "wrong len %lx\n", len );
-    len /= sizeof(DWORD);
+    len /= sizeof(machines[0]);
     for (i = 0; i < len - 1; i++)
     {
-        USHORT flags = HIWORD(buffer[i]);
-        USHORT machine = LOWORD(buffer[i]);
-
-        if (flags & 8)
-            ok( machine == expect_machine, "wrong current machine %lx\n", buffer[i]);
+        if (machines[i].Process)
+            ok( machines[i].Machine == expect_machine, "wrong process machine %x\n", machines[i].Machine);
         else
-            ok( machine != expect_machine, "wrong machine %lx\n", buffer[i]);
+            ok( machines[i].Machine != expect_machine, "wrong machine %x\n", machines[i].Machine);
 
-        /* FIXME: not quite sure what the other flags mean,
-         * observed on amd64 Windows: (flags & 7) == 7 for MACHINE_AMD64 and 2 for MACHINE_I386
-         */
-        if (flags & 4)
-            ok( machine == expect_native, "wrong native machine %lx\n", buffer[i]);
+        if (machines[i].Native)
+            ok( machines[i].Machine == expect_native, "wrong native machine %x\n", machines[i].Machine);
         else
-            ok( machine != expect_native, "wrong machine %lx\n", buffer[i]);
+            ok( machines[i].Machine != expect_native, "wrong machine %x\n", machines[i].Machine);
+
+        if (machines[i].WoW64Container)
+            ok( is_machine_32bit( machines[i].Machine ) && !is_machine_32bit( native_machine ),
+                "wrong wow64 %x\n", machines[i].Machine);
     }
-    ok( !buffer[i], "missing terminating null\n" );
+    ok( !*(DWORD *)&machines[i], "missing terminating null\n" );
 
-    len = i * sizeof(DWORD);
+    len = i * sizeof(machines[0]);
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, sizeof(process),
-                                          &buffer, len, &len );
+                                          machines, len, &len );
     ok( status == STATUS_BUFFER_TOO_SMALL, "failed %lx\n", status );
-    ok( len == (i + 1) * sizeof(DWORD), "wrong len %lu\n", len );
+    ok( len == (i + 1) * sizeof(machines[0]), "wrong len %lu\n", len );
 
     if (pRtlWow64GetProcessMachines)
     {
@@ -175,19 +234,81 @@ static void test_process_architecture( HANDLE process, USHORT expect_machine, US
     }
 }
 
+static void test_process_machine( HANDLE process, HANDLE thread,
+                                  USHORT expect_machine, USHORT expect_image )
+{
+    PROCESS_BASIC_INFORMATION basic;
+    SECTION_IMAGE_INFORMATION image;
+    IMAGE_DOS_HEADER dos;
+    IMAGE_NT_HEADERS nt;
+    PEB peb;
+    ULONG len;
+    SIZE_T size;
+    NTSTATUS status;
+    void *entry_point = NULL;
+    void *win32_entry = NULL;
+
+    status = NtQueryInformationProcess( process, ProcessBasicInformation, &basic, sizeof(basic), &len );
+    ok( !status, "ProcessBasicInformation failed %lx\n", status );
+    if (ReadProcessMemory( process, basic.PebBaseAddress, &peb, sizeof(peb), &size ) &&
+        ReadProcessMemory( process, peb.ImageBaseAddress, &dos, sizeof(dos), &size ) &&
+        ReadProcessMemory( process, (char *)peb.ImageBaseAddress + dos.e_lfanew, &nt, sizeof(nt), &size ))
+    {
+        ok( nt.FileHeader.Machine == expect_machine, "wrong nt machine %x / %x\n",
+            nt.FileHeader.Machine, expect_machine );
+        entry_point = (char *)peb.ImageBaseAddress + nt.OptionalHeader.AddressOfEntryPoint;
+    }
+
+    status = NtQueryInformationProcess( process, ProcessImageInformation, &image, sizeof(image), &len );
+    ok( !status, "ProcessImageInformation failed %lx\n", status );
+    ok( image.Machine == expect_image, "wrong image info %x / %x\n", image.Machine, expect_image );
+
+    status = NtQueryInformationThread( thread, ThreadQuerySetWin32StartAddress,
+                                       &win32_entry, sizeof(win32_entry), &len );
+    ok( !status, "ThreadQuerySetWin32StartAddress failed %lx\n", status );
+
+    if (!entry_point) return;
+
+    if (image.Machine == expect_machine)
+    {
+        ok( image.TransferAddress == entry_point, "wrong entry %p / %p\n",
+            image.TransferAddress, entry_point );
+        ok( win32_entry == entry_point, "wrong win32 entry %p / %p\n",
+            win32_entry, entry_point );
+    }
+    else
+    {
+        /* image.TransferAddress is the ARM64 entry, entry_point is the x86-64 one,
+           win32_entry is the redirected x86-64 -> ARM64EC one */
+        ok( image.TransferAddress != entry_point, "wrong entry %p\n", image.TransferAddress );
+        ok( image.TransferAddress != win32_entry, "wrong entry %p\n", image.TransferAddress );
+        todo_wine
+        ok( win32_entry != entry_point, "wrong win32 entry %p\n", win32_entry );
+    }
+}
+
 static void test_query_architectures(void)
 {
+    static char cmd_sysnative[] = "C:\\windows\\sysnative\\cmd.exe /c exit";
+    static char cmd_system32[] = "C:\\windows\\system32\\cmd.exe /c exit";
+    static char cmd_syswow64[] = "C:\\windows\\syswow64\\cmd.exe /c exit";
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION machines[8];
     PROCESS_INFORMATION pi;
     STARTUPINFOA si = { sizeof(si) };
     NTSTATUS status;
     HANDLE process;
-    ULONG len, buffer[8];
+    ULONG i, len;
+#ifdef __arm64ec__
+    BOOL is_arm64ec = TRUE;
+#else
+    BOOL is_arm64ec = FALSE;
+#endif
 
     if (!pNtQuerySystemInformationEx) return;
 
     process = GetCurrentProcess();
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, sizeof(process),
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     if (status == STATUS_INVALID_INFO_CLASS)
     {
         win_skip( "SystemSupportedProcessorArchitectures not supported\n" );
@@ -197,40 +318,70 @@ static void test_query_architectures(void)
 
     process = (HANDLE)0xdeadbeef;
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, sizeof(process),
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     ok( status == STATUS_INVALID_HANDLE, "failed %lx\n", status );
     process = (HANDLE)0xdeadbeef;
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, 3,
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     ok( status == STATUS_INVALID_PARAMETER || broken(status == STATUS_INVALID_HANDLE),
         "failed %lx\n", status );
     process = GetCurrentProcess();
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, 3,
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     ok( status == STATUS_INVALID_PARAMETER || broken( status == STATUS_SUCCESS),
         "failed %lx\n", status );
     status = pNtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, NULL, 0,
-                                          &buffer, sizeof(buffer), &len );
+                                          machines, sizeof(machines), &len );
     ok( status == STATUS_INVALID_PARAMETER, "failed %lx\n", status );
 
-    test_process_architecture( GetCurrentProcess(), current_machine, native_machine );
-    test_process_architecture( 0, 0, native_machine );
+    winetest_push_context( "current" );
+    test_process_architecture( GetCurrentProcess(), is_win64 ? native_machine : current_machine,
+                               native_machine );
+    test_process_machine( GetCurrentProcess(), GetCurrentThread(), current_machine,
+                          is_arm64ec ? native_machine : current_machine );
+    winetest_pop_context();
 
-    if (CreateProcessA( "C:\\Program Files\\Internet Explorer\\iexplore.exe", NULL, NULL, NULL,
+    winetest_push_context( "zero" );
+    test_process_architecture( 0, 0, native_machine );
+    winetest_pop_context();
+
+    if (CreateProcessA( NULL, is_win64 ? cmd_system32 : cmd_sysnative, NULL, NULL,
                         FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi ))
     {
+        winetest_push_context( "system32" );
         test_process_architecture( pi.hProcess, native_machine, native_machine );
+        test_process_machine( pi.hProcess, pi.hThread,
+                              is_win64 ? current_machine : native_machine, native_machine );
         TerminateProcess( pi.hProcess, 0 );
         CloseHandle( pi.hProcess );
         CloseHandle( pi.hThread );
+        winetest_pop_context();
     }
-    if (CreateProcessA( "C:\\Program Files (x86)\\Internet Explorer\\iexplore.exe", NULL, NULL, NULL,
+    if (CreateProcessA( NULL, is_win64 ? cmd_syswow64 : cmd_system32, NULL, NULL,
                         FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi ))
     {
+        winetest_push_context( "syswow64" );
         test_process_architecture( pi.hProcess, IMAGE_FILE_MACHINE_I386, native_machine );
+        test_process_machine( pi.hProcess, pi.hThread, IMAGE_FILE_MACHINE_I386, IMAGE_FILE_MACHINE_I386 );
         TerminateProcess( pi.hProcess, 0 );
         CloseHandle( pi.hProcess );
         CloseHandle( pi.hThread );
+        winetest_pop_context();
+    }
+    if (is_win64 && native_machine == IMAGE_FILE_MACHINE_ARM64)
+    {
+        USHORT machine = IMAGE_FILE_MACHINE_ARM64 + IMAGE_FILE_MACHINE_AMD64 - current_machine;
+
+        if (create_process_machine( cmd_system32, CREATE_SUSPENDED, machine, &pi ))
+        {
+            winetest_push_context( "%04x", machine );
+            test_process_architecture( pi.hProcess, native_machine, native_machine );
+            test_process_machine( pi.hProcess, pi.hThread, machine, native_machine );
+            TerminateProcess( pi.hProcess, 0 );
+            CloseHandle( pi.hProcess );
+            CloseHandle( pi.hThread );
+            winetest_pop_context();
+        }
     }
 
     if (pRtlWow64GetCurrentMachine)
@@ -240,28 +391,329 @@ static void test_query_architectures(void)
     }
     if (pRtlWow64IsWowGuestMachineSupported)
     {
-        BOOLEAN ret = 0xcc;
-        status = pRtlWow64IsWowGuestMachineSupported( IMAGE_FILE_MACHINE_I386, &ret );
-        ok( !status, "failed %lx\n", status );
-        ok( ret == (native_machine == IMAGE_FILE_MACHINE_AMD64 ||
-                    native_machine == IMAGE_FILE_MACHINE_ARM64), "wrong result %u\n", ret );
-        ret = 0xcc;
-        status = pRtlWow64IsWowGuestMachineSupported( IMAGE_FILE_MACHINE_ARMNT, &ret );
-        ok( !status, "failed %lx\n", status );
-        ok( !ret || native_machine == IMAGE_FILE_MACHINE_ARM64, "wrong result %u\n", ret );
-        ret = 0xcc;
-        status = pRtlWow64IsWowGuestMachineSupported( IMAGE_FILE_MACHINE_AMD64, &ret );
-        ok( !status, "failed %lx\n", status );
-        ok( !ret || native_machine == IMAGE_FILE_MACHINE_ARM64, "wrong result %u\n", ret );
-        ret = 0xcc;
-        status = pRtlWow64IsWowGuestMachineSupported( IMAGE_FILE_MACHINE_ARM64, &ret );
-        ok( !status, "failed %lx\n", status );
-        ok( !ret, "wrong result %u\n", ret );
-        ret = 0xcc;
-        status = pRtlWow64IsWowGuestMachineSupported( 0xdead, &ret );
-        ok( !status, "failed %lx\n", status );
-        ok( !ret, "wrong result %u\n", ret );
+        static const WORD machines[] = { IMAGE_FILE_MACHINE_I386, IMAGE_FILE_MACHINE_ARMNT,
+                                         IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64, 0xdead };
+
+        for (i = 0; i < ARRAY_SIZE(machines); i++)
+        {
+            BOOLEAN ret = 0xcc;
+            status = pRtlWow64IsWowGuestMachineSupported( machines[i], &ret );
+            ok( !status, "failed %lx\n", status );
+            if (is_machine_32bit( machines[i] ) && !is_machine_32bit( native_machine ))
+                ok( ret || machines[i] == IMAGE_FILE_MACHINE_ARMNT ||
+                    broken(current_machine == IMAGE_FILE_MACHINE_I386), /* win10-1607 wow64 */
+                    "%04x: got %u\n", machines[i], ret );
+            else
+                ok( !ret, "%04x: got %u\n", machines[i], ret );
+        }
     }
+}
+
+static void push_onto_free_list( CROSS_PROCESS_WORK_HDR *list, CROSS_PROCESS_WORK_ENTRY *entry )
+{
+#ifdef _WIN64
+    pRtlWow64PushCrossProcessWorkOntoFreeList( list, entry );
+#else
+    entry->next = list->first;
+    list->first = (char *)entry - (char *)list;
+#endif
+}
+
+CROSS_PROCESS_WORK_ENTRY *pop_from_work_list( CROSS_PROCESS_WORK_HDR *list )
+{
+#ifdef _WIN64
+    BOOLEAN flush;
+
+    return pRtlWow64PopAllCrossProcessWorkFromWorkList( list, &flush );
+#else
+    UINT pos = list->first, prev_pos = 0;
+
+    list->first = 0;
+    if (!pos) return NULL;
+
+    for (;;)  /* reverse the list */
+    {
+        CROSS_PROCESS_WORK_ENTRY *entry = CROSS_PROCESS_LIST_ENTRY( list, pos );
+        UINT next = entry->next;
+        entry->next = prev_pos;
+        if (!next) return entry;
+        prev_pos = pos;
+        pos = next;
+    }
+#endif
+}
+
+#define expect_cross_work_entry(list,entry,id,addr,size,arg0,arg1,arg2,arg3) \
+    expect_cross_work_entry_(list,entry,id,addr,size,arg0,arg1,arg2,arg3,__LINE__)
+static CROSS_PROCESS_WORK_ENTRY *expect_cross_work_entry_( CROSS_PROCESS_WORK_LIST *list,
+                                                           CROSS_PROCESS_WORK_ENTRY *entry,
+                                                           UINT id, void *addr, SIZE_T size,
+                                                           UINT arg0, UINT arg1, UINT arg2, UINT arg3,
+                                                           int line )
+{
+    CROSS_PROCESS_WORK_ENTRY *next;
+
+    ok_(__FILE__,line)( entry != NULL, "no more entries in list\n" );
+    if (!entry) return NULL;
+    ok_(__FILE__,line)( entry->addr == (ULONG_PTR)addr, "wrong address %s / %p\n",
+                        wine_dbgstr_longlong(entry->addr), addr );
+    ok_(__FILE__,line)( entry->size == size, "wrong size %s / %Ix\n",
+                        wine_dbgstr_longlong(entry->size), size );
+    ok_(__FILE__,line)( entry->args[0] == arg0, "wrong args[0] %x / %x\n", entry->args[0], arg0 );
+    ok_(__FILE__,line)( entry->args[1] == arg1, "wrong args[1] %x / %x\n", entry->args[1], arg1 );
+    ok_(__FILE__,line)( entry->args[2] == arg2, "wrong args[2] %x / %x\n", entry->args[2], arg2 );
+    ok_(__FILE__,line)( entry->args[3] == arg3, "wrong args[3] %x / %x\n", entry->args[3], arg3 );
+    next = entry->next ? CROSS_PROCESS_LIST_ENTRY( &list->work_list, entry->next ) : NULL;
+    memset( entry, 0xcc, sizeof(*entry) );
+    push_onto_free_list( &list->free_list, entry );
+    return next;
+}
+
+static void test_cross_process_notifications( HANDLE process, void *ptr )
+{
+    CROSS_PROCESS_WORK_ENTRY *entry;
+    CROSS_PROCESS_WORK_LIST *list = ptr;
+    UINT pos;
+    void *addr, *addr2;
+    SIZE_T size;
+    DWORD old_prot;
+    LARGE_INTEGER offset;
+    HANDLE file, mapping;
+    NTSTATUS status;
+    BYTE data[] = { 0xcc, 0xcc, 0xcc };
+
+    NtSuspendProcess( process );
+
+    /* set argument values in free list to detect changes */
+    for (pos = list->free_list.first; pos; pos = entry->next )
+    {
+        entry = CROSS_PROCESS_LIST_ENTRY( &list->free_list, pos );
+        memset( entry->args, 0xcc, sizeof(entry->args) );
+    }
+
+    addr = VirtualAllocEx( process, NULL, 0x1234, MEM_COMMIT, PAGE_READWRITE );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualAlloc, NULL, 0x1234,
+                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE, 0, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualAlloc, addr, 0x2000,
+                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE, 0, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    VirtualProtectEx( process, (char *)addr + 0x333, 17, PAGE_READONLY, &old_prot );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                         (char *)addr + 0x333, 17,
+                                         PAGE_READONLY, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect, addr, 0x1000,
+                                         PAGE_READONLY, 0, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    VirtualFreeEx( process, addr, 0, MEM_RELEASE );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualFree, addr, 0,
+                                         MEM_RELEASE, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualFree, addr, 0x2000,
+                                         MEM_RELEASE, 0, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr = (void *)0x123;
+    size = 0x321;
+    status = NtAllocateVirtualMemory( process, &addr, 0, &size, MEM_COMMIT, PAGE_EXECUTE_READ );
+    ok( status == STATUS_CONFLICTING_ADDRESSES || status == STATUS_INVALID_PARAMETER,
+        "NtAllocateVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualAlloc, addr, 0x321,
+                                         MEM_COMMIT, PAGE_EXECUTE_READ, 0, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualAlloc, addr, 0x321,
+                                         MEM_COMMIT, PAGE_EXECUTE_READ, status, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr = NULL;
+    size = 0x321;
+    status = NtAllocateVirtualMemory( process, &addr, 0, &size, 0, PAGE_EXECUTE_READ );
+    ok( status == STATUS_INVALID_PARAMETER, "NtAllocateVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualAlloc, addr, 0x321,
+                                         0, PAGE_EXECUTE_READ, 0, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualAlloc, addr, 0x321,
+                                         0, PAGE_EXECUTE_READ, status, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr = NULL;
+    size = 0x4321;
+    status = NtAllocateVirtualMemory( process, &addr, 0, &size, MEM_RESERVE, PAGE_EXECUTE_READWRITE );
+    ok( !status, "NtAllocateVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualAlloc, NULL, 0x4321,
+                                         MEM_RESERVE, PAGE_EXECUTE_READWRITE, 0, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualAlloc, addr, 0x5000,
+                                         MEM_RESERVE, PAGE_EXECUTE_READWRITE, 0, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    size = 0x4321;
+    status = NtAllocateVirtualMemory( process, &addr, 0, &size, MEM_COMMIT, PAGE_READWRITE );
+    ok( !status, "NtAllocateVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualAlloc, addr, 0x4321,
+                                         MEM_COMMIT, PAGE_READWRITE, 0, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualAlloc, addr, 0x5000,
+                                         MEM_COMMIT, PAGE_READWRITE, 0, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr2 = (char *)addr + 0x111;
+    size = 23;
+    status = NtProtectVirtualMemory( process, &addr2, &size, PAGE_EXECUTE_READWRITE, &old_prot );
+    ok( !status, "NtProtectVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect, (char *)addr + 0x111, 23,
+                                         PAGE_EXECUTE_READWRITE, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect, addr, 0x1000,
+                                         PAGE_EXECUTE_READWRITE, 0, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr2 = (char *)addr + 0x222;
+    size = 34;
+    status = NtProtectVirtualMemory( process, &addr2, &size, PAGE_EXECUTE_WRITECOPY, &old_prot );
+    ok( status == STATUS_INVALID_PARAMETER_4 || status == STATUS_INVALID_PAGE_PROTECTION,
+        "NtProtectVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                         (char *)addr + 0x222, 34,
+                                         PAGE_EXECUTE_WRITECOPY, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect,
+                                         (char *)addr + 0x222, 34,
+                                         PAGE_EXECUTE_WRITECOPY, status, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    status = NtWriteVirtualMemory( process, (char *)addr + 0x1111, data, sizeof(data), &size );
+    ok( !status, "NtWriteVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    ok( !entry, "not at end of list\n" );
+
+    addr2 = (char *)addr + 0x1234;
+    size = 45;
+    status = NtFreeVirtualMemory( process, &addr2, &size, MEM_DECOMMIT );
+    ok( !status, "NtFreeVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualFree, (char *)addr + 0x1234, 45,
+                                         MEM_DECOMMIT, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualFree, addr2, 0x1000,
+                                         MEM_DECOMMIT, 0, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    size = 0;
+    status = NtFreeVirtualMemory( process, &addr, &size, MEM_RELEASE );
+    ok( !status, "NtFreeVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualFree, addr, 0,
+                                         MEM_RELEASE, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualFree, addr, 0x5000,
+                                         MEM_RELEASE, 0, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    addr = (void *)0x123;
+    size = 0;
+    status = NtFreeVirtualMemory( process, &addr, &size, MEM_RELEASE );
+    ok( status == STATUS_MEMORY_NOT_ALLOCATED || status == STATUS_INVALID_PARAMETER,
+        "NtFreeVirtualMemory failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualFree, addr, 0,
+                                         MEM_RELEASE, 0, 0xcccccccc, 0xcccccccc );
+        entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualFree, addr, 0,
+                                         MEM_RELEASE, status, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    file = CreateFileA( "c:\\windows\\syswow64\\version.dll", GENERIC_READ | GENERIC_EXECUTE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
+    ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
+    mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
+    ok( mapping != 0, "CreateFileMapping failed\n" );
+    addr = NULL;
+    size = 0;
+    offset.QuadPart = 0;
+    status = NtMapViewOfSection( mapping, process, &addr, 0, 0, &offset, &size, ViewShare, 0, PAGE_READONLY );
+    ok( NT_SUCCESS(status), "NtMapViewOfSection failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    ok( !entry, "list not empty\n" );
+
+    FlushInstructionCache( process, addr, 0x1234 );
+    entry = pop_from_work_list( &list->work_list );
+    entry = expect_cross_work_entry( list, entry, CrossProcessFlushCache, addr, 0x1234,
+                                     0xcccccccc, 0xcccccccc, 0xcccccccc, 0xcccccccc );
+    ok( !entry, "not at end of list\n" );
+
+    NtFlushInstructionCache( process, addr, 0x1234 );
+    entry = pop_from_work_list( &list->work_list );
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        entry = expect_cross_work_entry( list, entry, CrossProcessFlushCache, addr, 0x1234,
+                                         0xcccccccc, 0xcccccccc, 0xcccccccc, 0xcccccccc );
+    }
+    ok( !entry, "not at end of list\n" );
+
+    WriteProcessMemory( process, (char *)addr + 0x1ffe, data, sizeof(data), &size );
+    entry = pop_from_work_list( &list->work_list );
+    entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_WRITECOPY,
+                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
+                                     0xcccccccc, 0xcccccccc );
+    entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000,
+                                     0x60000000 | PAGE_EXECUTE_WRITECOPY, 0, 0xcccccccc, 0xcccccccc );
+    entry = expect_cross_work_entry( list, entry, CrossProcessFlushCache,
+                                     (char *)addr + 0x1ffe, sizeof(data),
+                                     0xcccccccc, 0xcccccccc, 0xcccccccc, 0xcccccccc );
+    entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_READ,
+                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
+                                     0xcccccccc, 0xcccccccc );
+    entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000,
+                                     0x60000000 | PAGE_EXECUTE_READ, 0, 0xcccccccc, 0xcccccccc );
+    ok( !entry, "not at end of list\n" );
+
+    status = NtUnmapViewOfSection( process, addr );
+    ok( !status, "NtUnmapViewOfSection failed %lx\n", status );
+    entry = pop_from_work_list( &list->work_list );
+    ok( !entry, "list not empty\n" );
+
+    CloseHandle( mapping );
+    CloseHandle( file );
 }
 
 static void test_peb_teb(void)
@@ -414,6 +866,55 @@ static void test_peb_teb(void)
                 }
                 ok( i < limit, "wow64info not found in PEB\n" );
             }
+            if (wow64info->SectionHandle && wow64info->CrossProcessWorkList)
+            {
+                HANDLE handle;
+                void *data, *addr = NULL;
+                SIZE_T size = 0;
+
+                ret = DuplicateHandle( pi.hProcess, (HANDLE)(ULONG_PTR)wow64info->SectionHandle,
+                                       GetCurrentProcess(), &handle, 0, FALSE, DUPLICATE_SAME_ACCESS );
+                ok( ret, "DuplicateHandle failed %lu\n", GetLastError() );
+                status = NtMapViewOfSection( handle, GetCurrentProcess(), &addr, 0, 0, NULL,
+                                             &size, ViewShare, 0, PAGE_READWRITE );
+                ok( !status, "NtMapViewOfSection failed %lx\n", status );
+                ok( size == 0x4000, "unexpected size %Ix\n", size );
+                data = malloc( size );
+                ret = ReadProcessMemory( pi.hProcess, (void *)(ULONG_PTR)wow64info->CrossProcessWorkList,
+                                         data, size, &size );
+                ok( ret, "ReadProcessMemory failed %lu\n", GetLastError() );
+                ok( !memcmp( data, addr, size ), "wrong data\n" );
+                free( data );
+                CloseHandle( handle );
+
+                if (pRtlOpenCrossProcessEmulatorWorkConnection)
+                {
+                    pRtlOpenCrossProcessEmulatorWorkConnection( pi.hProcess, &handle, &data );
+                    ok( handle != 0, "got 0 handle\n" );
+                    ok( data != NULL, "got NULL data\n" );
+                    ok( !memcmp( data, addr, size ), "wrong data\n" );
+                    UnmapViewOfFile( data );
+                    data = NULL;
+                    size = 0;
+                    status = NtMapViewOfSection( handle, GetCurrentProcess(), &data, 0, 0, NULL,
+                                                 &size, ViewShare, 0, PAGE_READWRITE );
+                    ok( !status, "NtMapViewOfSection failed %lx\n", status );
+                    ok( !memcmp( data, addr, size ), "wrong data\n" );
+                    ok( CloseHandle( handle ), "invalid handle\n" );
+                    UnmapViewOfFile( data );
+
+                    handle = (HANDLE)0xdead;
+                    data = (void *)0xdeadbeef;
+                    pRtlOpenCrossProcessEmulatorWorkConnection( GetCurrentProcess(), &handle, &data );
+                    ok( !handle, "got handle %p\n", handle );
+                    ok( !data, "got data %p\n", data );
+                }
+                else skip( "RtlOpenCrossProcessEmulatorWorkConnection not supported\n" );
+
+                test_cross_process_notifications( pi.hProcess, addr );
+                UnmapViewOfFile( addr );
+            }
+            else trace( "no WOW64INFO section handle\n" );
         }
         else win_skip( "RtlWow64GetSharedInfoProcess not supported\n" );
 
@@ -518,6 +1019,15 @@ static void test_peb_teb(void)
             peb64->OSBuildNumber, NtCurrentTeb()->Peb->OSBuildNumber );
         ok( peb64->OSPlatformId == NtCurrentTeb()->Peb->OSPlatformId, "wrong OSPlatformId %lx / %lx\n",
             peb64->OSPlatformId, NtCurrentTeb()->Peb->OSPlatformId );
+        ok( peb64->AnsiCodePageData == PtrToUlong( NtCurrentTeb()->Peb->AnsiCodePageData ),
+            "wrong AnsiCodePageData %I64x / %p\n",
+            peb64->AnsiCodePageData, NtCurrentTeb()->Peb->AnsiCodePageData );
+        ok( peb64->OemCodePageData == PtrToUlong( NtCurrentTeb()->Peb->OemCodePageData ),
+            "wrong OemCodePageData %I64x / %p\n",
+            peb64->OemCodePageData, NtCurrentTeb()->Peb->OemCodePageData );
+        ok( peb64->UnicodeCaseTableData == PtrToUlong( NtCurrentTeb()->Peb->UnicodeCaseTableData ),
+            "wrong UnicodeCaseTableData %I64x / %p\n",
+            peb64->UnicodeCaseTableData, NtCurrentTeb()->Peb->UnicodeCaseTableData );
         return;
     }
 #endif
@@ -528,6 +1038,7 @@ static void test_peb_teb(void)
 
 static void test_selectors(void)
 {
+#ifndef __arm__
     THREAD_DESCRIPTOR_INFORMATION info;
     NTSTATUS status;
     ULONG base, limit, sel, retlen;
@@ -542,7 +1053,11 @@ static void test_selectors(void)
     if (!pRtlWow64GetThreadContext || pRtlWow64GetThreadContext( GetCurrentThread(), &context ))
     {
         /* hardcoded values */
-#ifdef __x86_64__
+#ifdef __arm64ec__
+        context.SegCs = 0x23;
+        context.SegSs = 0x2b;
+        context.SegFs = 0x53;
+#elif defined __x86_64__
         context.SegCs = 0x23;
         __asm__( "movw %%fs,%0" : "=m" (context.SegFs) );
         __asm__( "movw %%ss,%0" : "=m" (context.SegSs) );
@@ -662,6 +1177,7 @@ static void test_selectors(void)
         }
     }
 #undef GET_ENTRY
+#endif /* __arm__ */
 }
 
 static void test_image_mappings(void)
@@ -680,7 +1196,7 @@ static void test_image_mappings(void)
     }
 
     offset.QuadPart = 0;
-    file = CreateFileA( "c:\\windows\\system32\\version.dll", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
+    file = CreateFileA( "c:\\windows\\system32\\version.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
     ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
     mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
     ok( mapping != 0, "CreateFileMapping failed\n" );
@@ -704,6 +1220,7 @@ static void test_image_mappings(void)
     }
     else if (current_machine == IMAGE_FILE_MACHINE_ARM64)
     {
+        todo_wine
         ok( status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH, "NtMapViewOfSection returned %08lx\n", status );
         NtUnmapViewOfSection( process, ptr );
     }
@@ -787,7 +1304,7 @@ static void test_image_mappings(void)
     }
     else if (native_machine == IMAGE_FILE_MACHINE_AMD64 || native_machine == IMAGE_FILE_MACHINE_ARM64)
     {
-        file = CreateFileA( "c:\\windows\\syswow64\\version.dll", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
+        file = CreateFileA( "c:\\windows\\syswow64\\version.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
         ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
 
         mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
@@ -811,6 +1328,142 @@ static void test_image_mappings(void)
 }
 
 #ifdef _WIN64
+
+static void test_cross_process_work_list(void)
+{
+    UINT i, next, count = 10, size = offsetof( CROSS_PROCESS_WORK_LIST, entries[count] );
+    BOOLEAN res, flush;
+    CROSS_PROCESS_WORK_ENTRY *ptr, *ret;
+    CROSS_PROCESS_WORK_LIST *list = calloc( size, 1 );
+
+    if (!pRtlWow64PopAllCrossProcessWorkFromWorkList)
+    {
+        win_skip( "cross process list not supported\n" );
+        return;
+    }
+
+    list = calloc( size, 1 );
+    for (i = 0; i < count; i++)
+    {
+        res = pRtlWow64PushCrossProcessWorkOntoFreeList( &list->free_list, &list->entries[i] );
+        ok( res == TRUE, "%u: RtlWow64PushCrossProcessWorkOntoFreeList failed\n", i );
+    }
+
+    ok( list->free_list.counter == count, "wrong counter %u\n", list->free_list.counter );
+    ok( CROSS_PROCESS_LIST_ENTRY( &list->free_list, list->free_list.first ) == &list->entries[count - 1],
+        "wrong offset %u\n", list->free_list.first );
+    for (i = count; i > 1; i--)
+        ok( CROSS_PROCESS_LIST_ENTRY( &list->free_list, list->entries[i - 1].next ) == &list->entries[i - 2],
+            "%u: wrong offset %x / %x\n", i, list->entries[i - 1].next,
+            (UINT)((char *)&list->entries[i - 2] - (char *)&list->free_list) );
+    ok( !list->entries[0].next, "wrong last offset %x\n", list->entries[0].next );
+
+    next = list->entries[count - 1].next;
+    ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
+    ok( ptr == (void *)&list->entries[count - 1], "wrong ptr %p (%p)\n", ptr, list );
+    ok( !ptr->next, "next not reset %x\n", ptr->next );
+    ok( list->free_list.first == next, "wrong offset %x / %x\n", list->free_list.first, next );
+    ok( list->free_list.counter == count + 1, "wrong counter %u\n", list->free_list.counter );
+
+    ptr->next = 0xdead;
+    ptr->id = 3;
+    ptr->addr = 0xdeadbeef;
+    ptr->size = 0x1000;
+    ptr->args[0] = 7;
+    ret = (void *)0xdeadbeef;
+    res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
+    ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
+    ok( !ret, "got ret ptr %p\n", ret );
+    ok( list->work_list.counter == 1, "wrong counter %u\n", list->work_list.counter );
+    ok( ptr == CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first), "wrong ptr %p / %p\n",
+        ptr, CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first ));
+    ok( !ptr->next, "got next %x\n", ptr->next );
+
+    next = list->work_list.first;
+    ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
+    ok( list->free_list.counter == count + 2, "wrong counter %u\n", list->free_list.counter );
+    ptr->id = 20;
+    ptr->addr = 0x123456;
+    ptr->size = 0x2345;
+    res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
+    ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
+    ok( !ret, "got ret ptr %p\n", ret );
+    ok( list->work_list.counter == 2, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.first == (char *)ptr - (char *)&list->work_list, "wrong ptr %p / %p\n",
+        ptr, (char *)list + list->work_list.first );
+    ok( ptr->next == next, "got wrong next %x / %x\n", ptr->next, next );
+
+    flush = 0xcc;
+    ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
+    ok( !flush, "RtlWow64PopAllCrossProcessWorkFromWorkList flush is TRUE\n" );
+    ok( list->work_list.counter == 3, "wrong counter %u\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( ptr->addr == 0xdeadbeef, "wrong addr %s\n", wine_dbgstr_longlong(ptr->addr) );
+    ok( ptr->size == 0x1000, "wrong size %s\n", wine_dbgstr_longlong(ptr->size) );
+    ok( ptr->next, "next not set\n" );
+
+    ptr = CROSS_PROCESS_LIST_ENTRY( &list->work_list, ptr->next );
+    ok( ptr->addr == 0x123456, "wrong addr %s\n", wine_dbgstr_longlong(ptr->addr) );
+    ok( ptr->size == 0x2345, "wrong size %s\n", wine_dbgstr_longlong(ptr->size) );
+    ok( !ptr->next, "list not terminated\n" );
+
+    res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
+    ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
+    ok( !ret, "got ret ptr %p\n", ret );
+    ok( list->work_list.counter == 4, "wrong counter %u\n", list->work_list.counter );
+
+    res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
+    ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
+    ok( list->work_list.counter == 5, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+    ok( ptr == CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first), "wrong ptr %p / %p\n",
+        ptr, CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first ));
+
+    flush = 0xcc;
+    ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
+    ok( flush == TRUE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush not set\n" );
+    ok( list->work_list.counter == 6, "wrong counter %u\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( ptr->addr == 0x123456, "wrong addr %s\n", wine_dbgstr_longlong(ptr->addr) );
+    ok( ptr->size == 0x2345, "wrong size %s\n", wine_dbgstr_longlong(ptr->size) );
+    ok( !ptr->next, "next not set\n" );
+
+    flush = 0xcc;
+    ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
+    ok( flush == FALSE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush set\n" );
+    ok( list->work_list.counter == 6, "wrong counter %u\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( !ptr, "got ptr %p\n", ptr );
+
+    res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
+    ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
+    ok( list->work_list.counter == 7, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+
+    res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
+    ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
+    ok( list->work_list.counter == 8, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+
+    flush = 0xcc;
+    ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
+    ok( flush == TRUE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush set\n" );
+    ok( list->work_list.counter == 9, "wrong counter %u\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( !ptr, "got ptr %p\n", ptr );
+
+    for (i = 0; i < count; i++)
+    {
+        ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
+        if (!ptr) break;
+        ok( list->free_list.counter == count + 3 + i, "wrong counter %u\n", list->free_list.counter );
+    }
+    ok( list->free_list.counter == count + 2 + i, "wrong counter %u\n", list->free_list.counter );
+    ok( !list->free_list.first, "first still set %x\n", list->free_list.first );
+
+    free( list );
+}
+
 
 static void test_cpu_area(void)
 {
@@ -847,8 +1500,10 @@ static void test_cpu_area(void)
                 status = pRtlWow64GetCpuAreaInfo( cpu, 0, &info );
                 ok( status == tests[i].expect, "%lu:%lu: failed %lx\n", i, j, status );
                 if (status) continue;
-                ok( info.Context == ALIGN( cpu + 1, tests[i].align ), "%lu:%lu: wrong offset %lu\n",
-                    i, j, (ULONG)((char *)info.Context - (char *)cpu) );
+                ok( info.Context == ALIGN( cpu + 1, tests[i].align ) ||
+                    broken( (ULONG_PTR)info.Context == (ULONG)(ULONG_PTR)ALIGN( cpu + 1, tests[i].align ) ), /* win10 <= 1709 */
+                    "%lu:%lu: wrong offset %Iu cpu %p context %p\n",
+                    i, j, (ULONG_PTR)((char *)info.Context - (char *)cpu), cpu, info.Context );
                 ok( info.ContextEx == ALIGN( (char *)info.Context + tests[i].size, sizeof(void*) ),
                     "%lu:%lu: wrong ex offset %lu\n", i, j, (ULONG)((char *)info.ContextEx - (char *)cpu) );
                 ok( info.ContextFlagsLocation == (char *)info.Context + tests[i].offset,
@@ -862,6 +1517,20 @@ static void test_cpu_area(void)
 #undef ALIGN
     }
     else win_skip( "RtlWow64GetCpuAreaInfo not supported\n" );
+}
+
+static void test_exception_dispatcher(void)
+{
+#ifdef __x86_64__
+    BYTE *code = (BYTE *)pKiUserExceptionDispatcher;
+    void **hook;
+
+    /* cld; mov xxx(%rip),%rax */
+    ok( code[0] == 0xfc && code[1] == 0x48 && code[2] == 0x8b && code[3] == 0x05,
+        "wrong opcodes %02x %02x %02x %02x\n", code[0], code[1], code[2], code[3] );
+    hook = (void **)(code + 8 + *(int *)(code + 4));
+    ok( !*hook, "hook %p set to %p\n", hook, *hook );
+#endif
 }
 
 #else  /* _WIN64 */
@@ -1286,7 +1955,7 @@ static void test_init_block(void)
             CHECK_FUNC( init_block[14], "EtwpNotificationThread" );
             ok( init_block[15] == (ULONG_PTR)ntdll, "got %p for ntdll %p\n",
                 (void *)(ULONG_PTR)init_block[15], ntdll );
-            CHECK_FUNC( init_block[16], "LdrSystemDllInitBlock" );
+            /* CHECK_FUNC( init_block[16], "LdrSystemDllInitBlock" ); not always present */
             size = 17 * sizeof(*init_block);
             break;
         case 0x70:  /* win8 */
@@ -1602,8 +2271,62 @@ static void test_cpu_area(void)
 
 }
 
+static void test_exception_dispatcher(void)
+{
+    ULONG64 ptr, hook_ptr, hook, expect, res;
+    NTSTATUS status;
+    BYTE code[8];
+
+    if (!is_wow64) return;
+    if (!code_mem) return;
+    if (!ntdll_module) return;
+
+    ptr = get_proc_address64( ntdll_module, "KiUserExceptionDispatcher" );
+    ok( ptr, "KiUserExceptionDispatcher not found\n" );
+
+    if (pNtWow64ReadVirtualMemory64)
+    {
+        HANDLE process = OpenProcess( PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId() );
+
+        ok( process != 0, "failed to open current process %lu\n", GetLastError() );
+        status = pNtWow64ReadVirtualMemory64( process, ptr, &code, sizeof(code), &res );
+        ok( !status, "NtWow64ReadVirtualMemory64 failed %lx\n", status );
+
+        /* cld; mov xxx(%rip),%rax */
+        ok( code[0] == 0xfc && code[1] == 0x48 && code[2] == 0x8b && code[3] == 0x05,
+            "wrong opcodes %02x %02x %02x %02x\n", code[0], code[1], code[2], code[3] );
+        hook_ptr = ptr + 8 + *(int *)(code + 4);
+        status = pNtWow64ReadVirtualMemory64( process, hook_ptr, &hook, sizeof(hook), &res );
+        ok( !status, "NtWow64ReadVirtualMemory64 failed %lx\n", status );
+
+        expect = get_proc_address64( wow64_module, "Wow64PrepareForException" );
+        ok( hook == expect, "hook %I64x set to %I64x / %I64x\n", hook_ptr, hook, expect );
+        NtClose( process );
+    }
+}
+
 #endif  /* _WIN64 */
 
+static void test_arm64ec(void)
+{
+#ifdef __aarch64__
+    PROCESS_INFORMATION pi;
+    char cmdline[MAX_PATH];
+    char **argv;
+
+    trace( "restarting test as arm64ec\n" );
+
+    winetest_get_mainargs( &argv );
+    sprintf( cmdline, "%s %s", argv[0], argv[1] );
+    if (create_process_machine( cmdline, 0, IMAGE_FILE_MACHINE_AMD64, &pi ))
+    {
+        wait_child_process( pi.hProcess );
+        CloseHandle( pi.hProcess );
+        CloseHandle( pi.hThread );
+    }
+    else skip( "could not start arm64ec process: %lu\n", GetLastError() );
+#endif
+}
 
 START_TEST(wow64)
 {
@@ -1612,7 +2335,9 @@ START_TEST(wow64)
     test_peb_teb();
     test_selectors();
     test_image_mappings();
-#ifndef _WIN64
+#ifdef _WIN64
+    test_cross_process_work_list();
+#else
     test_nt_wow64();
     test_modules();
     test_init_block();
@@ -1620,4 +2345,6 @@ START_TEST(wow64)
     test_syscalls();
 #endif
     test_cpu_area();
+    test_exception_dispatcher();
+    test_arm64ec();
 }

@@ -120,13 +120,14 @@ BOOL WINAPI DECLSPEC_HOTPATCH DebugActiveProcessStop( DWORD pid )
  */
 #ifdef __i386__
 __ASM_STDCALL_FUNC( DebugBreak, 0, "jmp " __ASM_STDCALL("DbgBreakPoint", 0) )
+#elif defined(__aarch64__)
+__ASM_GLOBAL_FUNC( DebugBreak, "brk #0xf000; ret" )
+#elif defined(__arm64ec__)
+void __attribute__((naked)) WINAPI DebugBreak(void) { asm( "brk #0xf000; ret" ); }
 #elif defined(__x86_64__)
 __ASM_GLOBAL_FUNC( DebugBreak, "jmp " __ASM_NAME("DbgBreakPoint") )
-#else
-void WINAPI DebugBreak(void)
-{
-    DbgBreakPoint();
-}
+#elif defined(__arm__)
+__ASM_GLOBAL_FUNC( DebugBreak, "udf #0xfe; bx lr" )
 #endif
 
 
@@ -264,6 +265,11 @@ void WINAPI DECLSPEC_HOTPATCH OutputDebugStringA( LPCSTR str )
     }
 }
 
+static LONG WINAPI debug_exception_handler_wide( EXCEPTION_POINTERS *eptr )
+{
+    EXCEPTION_RECORD *rec = eptr->ExceptionRecord;
+    return (rec->ExceptionCode == DBG_PRINTEXCEPTION_WIDE_C) ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
+}
 
 /***********************************************************************
  *           OutputDebugStringW   (kernelbase.@)
@@ -273,10 +279,32 @@ void WINAPI DECLSPEC_HOTPATCH OutputDebugStringW( LPCWSTR str )
     UNICODE_STRING strW;
     STRING strA;
 
+    WARN( "%s\n", debugstr_w(str) );
+
     RtlInitUnicodeString( &strW, str );
     if (!RtlUnicodeStringToAnsiString( &strA, &strW, TRUE ))
     {
-        OutputDebugStringA( strA.Buffer );
+        BOOL exc_handled;
+
+        __TRY
+        {
+            ULONG_PTR args[4];
+            args[0] = wcslen(str) + 1;
+            args[1] = (ULONG_PTR)str;
+            args[2] = strlen(strA.Buffer) + 1;
+            args[3] = (ULONG_PTR)strA.Buffer;
+            RaiseException( DBG_PRINTEXCEPTION_WIDE_C, 0, 4, args );
+            exc_handled = TRUE;
+        }
+        __EXCEPT(debug_exception_handler_wide)
+        {
+            exc_handled = FALSE;
+        }
+        __ENDTRY
+
+        if (!exc_handled)
+            OutputDebugStringA( strA.Buffer );
+
         RtlFreeAnsiString( &strA );
     }
 }
@@ -285,7 +313,34 @@ void WINAPI DECLSPEC_HOTPATCH OutputDebugStringW( LPCWSTR str )
 /*******************************************************************
  *           RaiseException  (kernelbase.@)
  */
-#if defined(__x86_64__)
+#ifdef __x86_64__
+#ifdef __arm64ec__
+void __attribute__((naked)) RaiseException( DWORD code, DWORD flags, DWORD count, const ULONG_PTR *args )
+{
+    asm( ".seh_proc RaiseException\n\t"
+         "stp x29, x30, [sp, #-0xb0]!\n\t"
+         ".seh_save_fplr_x 0xb0\n\t"
+         ".seh_endprologue\n\t"
+         "and w1, w1, #0x01\n\t"        /* EXCEPTION_NONCONTINUABLE */
+         "stp w0, w1, [sp, #0x10]\n\t"  /* ExceptionCode, ExceptionFlags */
+         "adr x4, RaiseException\n\t"
+         "stp xzr, x4, [sp, #0x18]\n\t" /* ExceptionRecord, ExceptionAddress */
+         "mov w5, #0x0f\n\t"            /* EXCEPTION_MAXIMUM_PARAMETERS */
+         "cmp w2, w5\n\t"
+         "csel w2, w2, w5, lo\n\t"
+         "str x2, [sp, #0x28]\n\t"      /* NumberParameters */
+         "cbz x3, 1f\n\t"
+         "lsl w2, w2, #3\n\t"
+         "add x0, sp, #0x30\n\t"        /* ExceptionInformation */
+         "mov x1, x3\n\t"               /* args */
+         "bl \"#memcpy\"\n"
+         "1:\tadd x0, sp, #0x10\n\t"    /* rec */
+         "bl \"#RtlRaiseException\"\n\t"
+         "ldp x29, x30, [sp], #0xb0\n\t"
+         "ret\n\t"
+         ".seh_endproc" );
+}
+#else
 /* Some DRMs depend on RaiseException not altering non-volatile registers. */
 __ASM_GLOBAL_FUNC( RaiseException,
                    ".byte 0x48,0x8d,0xa4,0x24,0x00,0x00,0x00,0x00\n\t" /* hotpatch prolog */
@@ -322,20 +377,20 @@ __ASM_GLOBAL_FUNC( RaiseException,
                    "add $0xc8,%rsp\n\t"
                    __ASM_CFI(".cfi_adjust_cfa_offset -0xc8\n\t")
                    "ret" )
-
+#endif  /* __arm64ec__ */
 C_ASSERT( offsetof(EXCEPTION_RECORD, ExceptionCode) == 0 );
 C_ASSERT( offsetof(EXCEPTION_RECORD, ExceptionFlags) == 4 );
 C_ASSERT( offsetof(EXCEPTION_RECORD, ExceptionRecord) == 8 );
 C_ASSERT( offsetof(EXCEPTION_RECORD, ExceptionAddress) == 0x10 );
 C_ASSERT( offsetof(EXCEPTION_RECORD, NumberParameters) == 0x18 );
 C_ASSERT( offsetof(EXCEPTION_RECORD, ExceptionInformation) == 0x20 );
-#else
+#else  /* __x86_64__ */
 void WINAPI DECLSPEC_HOTPATCH RaiseException( DWORD code, DWORD flags, DWORD count, const ULONG_PTR *args )
 {
     EXCEPTION_RECORD record;
 
     record.ExceptionCode    = code;
-    record.ExceptionFlags   = flags & EH_NONCONTINUABLE;
+    record.ExceptionFlags   = flags & EXCEPTION_NONCONTINUABLE;
     record.ExceptionRecord  = NULL;
     record.ExceptionAddress = RaiseException;
     if (count && args)
@@ -572,7 +627,7 @@ static BOOL start_debugger( EXCEPTION_POINTERS *epointers, HANDLE event )
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW;
     startup.wShowWindow = SW_SHOWNORMAL;
-    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, 0, env, NULL, &startup, &info );
+    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW, env, NULL, &startup, &info );
     FreeEnvironmentStringsW( env );
 
     if (ret)
@@ -606,6 +661,8 @@ exit:
 static BOOL start_debugger_atomic( EXCEPTION_POINTERS *epointers )
 {
     static HANDLE once;
+
+    if (!ERR_ON(seh)) return FALSE;
 
     if (once == 0)
     {
@@ -1637,7 +1694,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetWsChangesEx( HANDLE process, PSAPI_WS_WATCH_INF
 BOOL WINAPI /* DECLSPEC_HOTPATCH */ InitializeProcessForWsWatch( HANDLE process )
 {
     FIXME( "(process=%p): stub\n", process );
-    return TRUE;
+    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+    return FALSE;
 }
 
 

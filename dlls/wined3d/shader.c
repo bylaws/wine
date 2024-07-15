@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d_shader);
 
@@ -637,9 +638,10 @@ static void shader_set_limits(struct wined3d_shader *shader)
     }
     if (!shader->limits)
     {
-        FIXME("Unexpected shader version \"%u.%u\".\n",
+        FIXME("Unexpected shader version \"%u.%u\" (shader type %u).\n",
                 shader->reg_maps.shader_version.major,
-                shader->reg_maps.shader_version.minor);
+                shader->reg_maps.shader_version.minor,
+                shader->reg_maps.shader_version.type);
         shader->limits = &limits_array[max(0, i - 1)].limits;
     }
 }
@@ -1920,7 +1922,6 @@ struct shader_none_priv
 {
     const struct wined3d_vertex_pipe_ops *vertex_pipe;
     const struct wined3d_fragment_pipe_ops *fragment_pipe;
-    BOOL ffp_proj_control;
 };
 
 static void shader_none_handle_instruction(const struct wined3d_shader_instruction *ins) {}
@@ -1964,7 +1965,6 @@ static void shader_none_disable(void *shader_priv, struct wined3d_context *conte
 static HRESULT shader_none_alloc(struct wined3d_device *device, const struct wined3d_vertex_pipe_ops *vertex_pipe,
         const struct wined3d_fragment_pipe_ops *fragment_pipe)
 {
-    struct fragment_caps fragment_caps;
     void *vertex_priv, *fragment_priv;
     struct shader_none_priv *priv;
 
@@ -1988,8 +1988,6 @@ static HRESULT shader_none_alloc(struct wined3d_device *device, const struct win
 
     priv->vertex_pipe = vertex_pipe;
     priv->fragment_pipe = fragment_pipe;
-    fragment_pipe->get_caps(device->adapter, &fragment_caps);
-    priv->ffp_proj_control = fragment_caps.wined3d_caps & WINED3D_FRAGMENT_CAP_PROJ_CONTROL;
 
     device->vertex_priv = vertex_priv;
     device->fragment_priv = fragment_priv;
@@ -2025,13 +2023,6 @@ static BOOL shader_none_color_fixup_supported(struct color_fixup_desc fixup)
     return TRUE;
 }
 
-static BOOL shader_none_has_ffp_proj_control(void *shader_priv)
-{
-    struct shader_none_priv *priv = shader_priv;
-
-    return priv->ffp_proj_control;
-}
-
 static uint64_t shader_none_shader_compile(struct wined3d_context *context, const struct wined3d_shader_desc *shader_desc,
         enum wined3d_shader_type shader_type)
 {
@@ -2056,7 +2047,6 @@ const struct wined3d_shader_backend_ops none_shader_backend =
     shader_none_init_context_state,
     shader_none_get_caps,
     shader_none_color_fixup_supported,
-    shader_none_has_ffp_proj_control,
     shader_none_shader_compile,
 };
 
@@ -2776,6 +2766,7 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
         BOOL position_transformed, struct ps_compile_args *args, const struct wined3d_context *context)
 {
     const struct wined3d_d3d_info *d3d_info = context->d3d_info;
+    struct wined3d_shader_resource_view *view;
     struct wined3d_texture *texture;
     unsigned int i;
 
@@ -2857,8 +2848,9 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
             /* Treat unbound textures as 2D. The dummy texture will provide
              * the proper sample value. The tex_types bitmap defaults to
              * 2D because of the memset. */
-            if (!(texture = state->textures[i]))
+            if (!(view = state->shader_resource_view[WINED3D_SHADER_TYPE_PIXEL][i]))
                 continue;
+            texture = texture_from_resource(view->resource);
 
             switch (wined3d_texture_gl(texture)->target)
             {
@@ -2899,8 +2891,9 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
                     break;
             }
 
-            if ((texture = state->textures[i]))
+            if ((view = state->shader_resource_view[WINED3D_SHADER_TYPE_PIXEL][i]))
             {
+                texture = texture_from_resource(view->resource);
                 /* Star Wars: The Old Republic uses mismatched samplers for rendering water. */
                 if (texture->resource.type == WINED3D_RTYPE_TEXTURE_2D
                         && resource_type == WINED3D_SHADER_RESOURCE_TEXTURE_3D
@@ -2929,12 +2922,13 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
             if (!shader->reg_maps.resource_info[i].type)
                 continue;
 
-            texture = state->textures[i];
-            if (!texture)
+            if (!(view = state->shader_resource_view[WINED3D_SHADER_TYPE_PIXEL][i]))
             {
                 args->color_fixup[i] = COLOR_FIXUP_IDENTITY;
                 continue;
             }
+            texture = texture_from_resource(view->resource);
+
             if (can_use_texture_swizzle(d3d_info, texture->resource.format))
                 args->color_fixup[i] = COLOR_FIXUP_IDENTITY;
             else
@@ -2998,7 +2992,7 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
         const struct wined3d_shader *vs = state->shader[WINED3D_SHADER_TYPE_VERTEX];
 
         args->texcoords_initialized = 0;
-        for (i = 0; i < WINED3D_MAX_TEXTURES; ++i)
+        for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
         {
             if (vs)
             {
@@ -3012,14 +3006,14 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
 
                 if ((state->texture_states[i][WINED3D_TSS_TEXCOORD_INDEX] >> WINED3D_FFP_TCI_SHIFT)
                         & WINED3D_FFP_TCI_MASK
-                        || (coord_idx < WINED3D_MAX_TEXTURES && (si->use_map & (1u << (WINED3D_FFP_TEXCOORD0 + coord_idx)))))
+                        || (coord_idx < WINED3D_MAX_FFP_TEXTURES && (si->use_map & (1u << (WINED3D_FFP_TEXCOORD0 + coord_idx)))))
                     args->texcoords_initialized |= 1u << i;
             }
         }
     }
     else
     {
-        args->texcoords_initialized = wined3d_mask_from_size(WINED3D_MAX_TEXTURES);
+        args->texcoords_initialized = wined3d_mask_from_size(WINED3D_MAX_FFP_TEXTURES);
     }
 
     args->pointsprite = state->render_states[WINED3D_RS_POINTSPRITEENABLE]

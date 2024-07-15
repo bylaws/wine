@@ -44,8 +44,9 @@ extern const struct luid SeManageVolumePrivilege;
 extern const struct luid SeImpersonatePrivilege;
 extern const struct luid SeCreateGlobalPrivilege;
 
+extern const struct sid owner_rights_sid;
 extern const struct sid world_sid;
-extern const struct sid local_user_sid;
+extern       struct sid local_user_sid;
 extern const struct sid local_system_sid;
 extern const struct sid builtin_users_sid;
 extern const struct sid builtin_admins_sid;
@@ -59,6 +60,7 @@ struct ace
     unsigned short size;
     unsigned int   mask;
 };
+
 
 /* token functions */
 
@@ -122,6 +124,7 @@ static inline struct ace *set_ace( struct ace *ace, const struct sid *sid, unsig
 
 extern void security_set_thread_token( struct thread *thread, obj_handle_t handle );
 extern const struct sid *security_unix_uid_to_sid( uid_t uid );
+extern void init_user_sid(void);
 extern int check_object_access( struct token *token, struct object *obj, unsigned int *access );
 
 static inline int thread_single_check_privilege( struct thread *thread, struct luid priv )

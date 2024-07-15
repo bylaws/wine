@@ -1176,6 +1176,11 @@ if exist "subdir/" (
 ) else (
    echo ERROR exist subdir with / and quotes not working
 )
+if not exist "" (
+    echo exist empty string works
+) else (
+    echo exist empty string broken
+)
 del foo subdir\bar
 rd subdir
 
@@ -1271,9 +1276,32 @@ if ""=="" for %%i in (A) DO (echo %%i)
 if not ""=="" for %%i in (B) DO (echo %%i)
 
 echo ------------ Testing if/set ------------
+rem a left parenthesis is part of the value, not the start of an 'if' block
 set x=C:\Program Files (x86)
 if ""=="" set y=%x%\dummy
 echo %y%
+if 1 == 1 set z= (
+echo '%z%'
+rem 'set' in one-line 'if' statement does not interfere with other 'if' blocks
+setlocal enableDelayedExpansion
+if 1 == 1 (
+    if 1 == 1 set z=zeta
+    if 1 == 1 (
+         echo !z!
+    )
+)
+endlocal
+
+echo --- Testing if + var subst in delayed expansion mode
+setlocal enableDelayedExpansion
+for %%i in (abc 10.0 11.0) do (
+    set result=%%i
+    echo [DEBUG] checking {!result!}
+    if "!result:~0,3!"=="10." (
+        echo SDKVER=!result!
+    )
+)
+endlocal
 
 echo ------------ Testing for ------------
 echo --- plain FOR

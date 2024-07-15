@@ -25,6 +25,7 @@
  */
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 #include "wined3d_vk.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
@@ -1125,20 +1126,41 @@ bool wined3d_device_gl_create_bo(struct wined3d_device_gl *device_gl, struct win
 
     if (gl_info->supported[ARB_BUFFER_STORAGE])
     {
-        if (use_buffer_chunk_suballocation(device_gl, gl_info, binding))
+        /* Only suballocate dynamic buffers.
+         *
+         * We only need suballocation so that we can allocate GL buffers from
+         * the client thread and thereby accelerate DISCARD maps.
+         *
+         * For other buffer types, suballocating means that a whole-buffer
+         * upload won't be replacing the whole buffer anymore. If the driver
+         * isn't smart enough to track individual buffer ranges then it'll
+         * force synchronizing that BO with the GPU. Even using ARB_sync
+         * ourselves won't help here, because glBufferSubData() is still
+         * implicitly synchronized. */
+        if (flags & GL_CLIENT_STORAGE_BIT)
         {
-            if ((memory = wined3d_device_gl_allocate_memory(device_gl, context_gl, memory_type_idx, size, &id)))
-                buffer_offset = memory->offset;
+            if (use_buffer_chunk_suballocation(device_gl, gl_info, binding))
+            {
+                if ((memory = wined3d_device_gl_allocate_memory(device_gl, context_gl, memory_type_idx, size, &id)))
+                    buffer_offset = memory->offset;
+                else if (!context_gl)
+                    WARN_(d3d_perf)("Failed to suballocate buffer from the client thread.\n");
+            }
+            else if (context_gl)
+            {
+                WARN_(d3d_perf)("Not allocating chunk memory for binding type %#x.\n", binding);
+                id = wined3d_context_gl_allocate_vram_chunk_buffer(context_gl, memory_type_idx, size);
+            }
         }
-        else if (context_gl)
+        else
         {
-            WARN_(d3d_perf)("Not allocating chunk memory for binding type %#x.\n", binding);
             id = wined3d_context_gl_allocate_vram_chunk_buffer(context_gl, memory_type_idx, size);
         }
 
         if (!id)
         {
-            WARN("Failed to allocate buffer.\n");
+            if (context_gl)
+                WARN("Failed to allocate buffer.\n");
             return false;
         }
     }
@@ -3700,9 +3722,9 @@ HRESULT CDECL wined3d_device_update_texture(struct wined3d_device *device,
     return WINED3D_OK;
 }
 
-HRESULT CDECL wined3d_device_validate_device(const struct wined3d_device *device, DWORD *num_passes)
+HRESULT CDECL wined3d_device_validate_device(const struct wined3d_device *device, const struct wined3d_stateblock_state *state, DWORD *num_passes)
 {
-    const struct wined3d_state *state = device->cs->c.state;
+    const struct wined3d_state *device_state = device->cs->c.state;
     struct wined3d_texture *texture;
     unsigned i;
 
@@ -3743,11 +3765,10 @@ HRESULT CDECL wined3d_device_validate_device(const struct wined3d_device *device
         }
     }
 
-    if (wined3d_state_uses_depth_buffer(state)
-            || (state->depth_stencil_state && state->depth_stencil_state->desc.stencil))
+    if (state->rs[WINED3D_RS_ZENABLE] || state->rs[WINED3D_RS_ZWRITEENABLE] || state->rs[WINED3D_RS_STENCILENABLE])
     {
-        struct wined3d_rendertarget_view *rt = state->fb.render_targets[0];
-        struct wined3d_rendertarget_view *ds = state->fb.depth_stencil;
+        struct wined3d_rendertarget_view *rt = device_state->fb.render_targets[0];
+        struct wined3d_rendertarget_view *ds = device_state->fb.depth_stencil;
 
         if (ds && rt && (ds->width < rt->width || ds->height < rt->height))
         {
@@ -5108,19 +5129,6 @@ void device_resource_released(struct wined3d_device *device, struct wined3d_reso
 
     switch (type)
     {
-        case WINED3D_RTYPE_TEXTURE_1D:
-        case WINED3D_RTYPE_TEXTURE_2D:
-        case WINED3D_RTYPE_TEXTURE_3D:
-            for (i = 0; i < WINED3D_MAX_COMBINED_SAMPLERS; ++i)
-            {
-                if (&state->textures[i]->resource == resource)
-                {
-                    ERR("Texture resource %p is still in use, stage %u.\n", resource, i);
-                    state->textures[i] = NULL;
-                }
-            }
-            break;
-
         case WINED3D_RTYPE_BUFFER:
             for (i = 0; i < WINED3D_MAX_STREAMS; ++i)
             {
@@ -5338,7 +5346,10 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL 
     }
     else if (message == WM_DISPLAYCHANGE)
     {
+        BOOL inside_mode_change = wined3d_set_inside_mode_change(window, TRUE);
+
         device->device_parent->ops->mode_changed(device->device_parent);
+        wined3d_set_inside_mode_change(window, inside_mode_change);
     }
     else if (message == WM_ACTIVATEAPP)
     {
@@ -5348,8 +5359,12 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL 
          * (e.g. Deus Ex: GOTY) to destroy the device, so take care to
          * deactivate the implicit swapchain last, and to avoid accessing the
          * "device" pointer afterwards. */
-        while (i--)
-            wined3d_swapchain_activate(device->swapchains[i], wparam);
+        if (!wparam || !wined3d_get_activate_processed(window))
+        {
+            wined3d_set_activate_processed(window, !!wparam);
+            while (i--)
+                wined3d_swapchain_activate(device->swapchains[i], wparam);
+        }
     }
     else if (message == WM_SYSCOMMAND)
     {
@@ -5360,6 +5375,11 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL 
             else
                 DefWindowProcA(window, message, wparam, lparam);
         }
+    }
+    else if (message == WM_SIZE && !wined3d_get_inside_mode_change(window))
+    {
+        if (!IsIconic(window))
+            PostMessageW(window, WM_ACTIVATEAPP, 1, GetCurrentThreadId());
     }
 
     if (unicode)

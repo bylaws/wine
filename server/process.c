@@ -63,6 +63,8 @@
 #include "request.h"
 #include "user.h"
 #include "security.h"
+#include "esync.h"
+#include "fsync.h"
 
 /* process object */
 
@@ -95,7 +97,10 @@ static struct security_descriptor *process_get_sd( struct object *obj );
 static void process_poll_event( struct fd *fd, int event );
 static struct list *process_get_kernel_obj_list( struct object *obj );
 static void process_destroy( struct object *obj );
+static int process_get_esync_fd( struct object *obj, enum esync_type *type );
+static unsigned int process_get_fsync_idx( struct object *obj, enum fsync_type *type );
 static void terminate_process( struct process *process, struct thread *skip, int exit_code );
+static void set_process_affinity( struct process *process, affinity_t affinity );
 
 static const struct object_ops process_ops =
 {
@@ -105,6 +110,8 @@ static const struct object_ops process_ops =
     add_queue,                   /* add_queue */
     remove_queue,                /* remove_queue */
     process_signaled,            /* signaled */
+    process_get_esync_fd,        /* get_esync_fd */
+    process_get_fsync_idx,       /* get_fsync_idx */
     no_satisfied,                /* satisfied */
     no_signal,                   /* signal */
     no_get_fd,                   /* get_fd */
@@ -156,6 +163,8 @@ static const struct object_ops startup_info_ops =
     add_queue,                     /* add_queue */
     remove_queue,                  /* remove_queue */
     startup_info_signaled,         /* signaled */
+    NULL,                          /* get_esync_fd */
+    NULL,                          /* get_fsync_idx */
     no_satisfied,                  /* satisfied */
     no_signal,                     /* signal */
     no_get_fd,                     /* get_fd */
@@ -217,6 +226,8 @@ static const struct object_ops job_ops =
     add_queue,                     /* add_queue */
     remove_queue,                  /* remove_queue */
     job_signaled,                  /* signaled */
+    NULL,                          /* get_esync_fd */
+    NULL,                          /* get_fsync_idx */
     no_satisfied,                  /* satisfied */
     no_signal,                     /* signal */
     no_get_fd,                     /* get_fd */
@@ -656,6 +667,7 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     process->msg_fd          = NULL;
     process->sigkill_timeout = NULL;
     process->sigkill_delay   = TICKS_PER_SEC / 64;
+    process->machine         = native_machine;
     process->unix_pid        = -1;
     process->exit_code       = STILL_ACTIVE;
     process->running_threads = 0;
@@ -683,6 +695,9 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     process->rawinput_mouse  = NULL;
     process->rawinput_kbd    = NULL;
     memset( &process->image_info, 0, sizeof(process->image_info) );
+    process->esync_fd        = -1;
+    process->fsync_idx       = 0;
+    process->cpu_override.cpu_count = 0;
     list_init( &process->kernel_object );
     list_init( &process->thread_list );
     list_init( &process->locks );
@@ -739,6 +754,12 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     if (!token_assign_label( process->token, &high_label_sid ))
         goto error;
 
+    if (do_fsync())
+        process->fsync_idx = fsync_alloc_shm( 0, 0 );
+
+    if (do_esync())
+        process->esync_fd = esync_create_fd( 0, 0 );
+
     set_fd_events( process->msg_fd, POLLIN );  /* start listening to events */
     return process;
 
@@ -786,6 +807,12 @@ static void process_destroy( struct object *obj )
     free( process->rawinput_devices );
     free( process->dir_cache );
     free( process->image );
+    if (do_esync()) close( process->esync_fd );
+    if (process->fsync_idx)
+    {
+        fsync_cleanup_process_shm_indices( process->id );
+        fsync_free_shm_idx( process->fsync_idx );
+    }
 }
 
 /* dump a process on stdout for debugging purposes */
@@ -801,6 +828,20 @@ static int process_signaled( struct object *obj, struct wait_queue_entry *entry 
 {
     struct process *process = (struct process *)obj;
     return !process->running_threads;
+}
+
+static int process_get_esync_fd( struct object *obj, enum esync_type *type )
+{
+    struct process *process = (struct process *)obj;
+    *type = ESYNC_MANUAL_SERVER;
+    return process->esync_fd;
+}
+
+static unsigned int process_get_fsync_idx( struct object *obj, enum fsync_type *type )
+{
+    struct process *process = (struct process *)obj;
+    *type = FSYNC_MANUAL_SERVER;
+    return process->fsync_idx;
 }
 
 static unsigned int process_map_access( struct object *obj, unsigned int access )
@@ -1358,7 +1399,10 @@ DECL_HANDLER(new_process)
         /* debug_children is set to 1 by default */
     }
 
-    if (!info->data->console_flags) process->group_id = parent->group_id;
+    if (info->data->process_group_id == parent->group_id)
+        process->group_id = parent->group_id;
+    else
+        info->data->process_group_id = process->group_id;
 
     info->process = (struct process *)grab_object( process );
     reply->info = alloc_handle( current->process, info, SYNCHRONIZE, 0 );
@@ -1410,38 +1454,55 @@ DECL_HANDLER(get_startup_info)
 DECL_HANDLER(init_process_done)
 {
     struct process *process = current->process;
-    struct memory_view *view;
-    client_ptr_t base;
-    const pe_image_info_t *image_info;
+    const struct cpu_topology_override *cpu_override = get_req_data();
+    unsigned int have_cpu_override = get_req_data_size() / sizeof(*cpu_override);
+    unsigned int i;
+
+    if (have_cpu_override)
+    {
+        if (cpu_override->cpu_count > ARRAY_SIZE(process->wine_cpu_id_from_host))
+        {
+            set_error( STATUS_INVALID_PARAMETER );
+            return;
+        }
+        for (i = 0; i < cpu_override->cpu_count; ++i)
+        {
+            if (cpu_override->host_cpu_id[i] >= ARRAY_SIZE(process->wine_cpu_id_from_host))
+            {
+                set_error( STATUS_INVALID_PARAMETER );
+                return;
+            }
+        }
+    }
 
     if (is_process_init_done(process))
     {
         set_error( STATUS_INVALID_PARAMETER );
         return;
     }
-    if (!(view = get_exe_view( process )))
-    {
-        set_error( STATUS_DLL_NOT_FOUND );
-        return;
-    }
-    if (!(image_info = get_view_image_info( view, &base ))) return;
 
     current->teb      = req->teb;
     process->peb      = req->peb;
     process->ldt_copy = req->ldt_copy;
 
     process->start_time = current_time;
-    current->entry_point = base + image_info->entry_point;
 
     init_process_tracing( process );
     generate_startup_debug_events( process );
     set_process_startup_state( process, STARTUP_DONE );
 
-    if (image_info->subsystem != IMAGE_SUBSYSTEM_WINDOWS_CUI)
+    if (process->image_info.subsystem != IMAGE_SUBSYSTEM_WINDOWS_CUI)
         process->idle_event = create_event( NULL, NULL, 0, 1, 0, NULL );
     if (process->debug_obj) set_process_debug_flag( process, 1 );
-    reply->entry = current->entry_point;
     reply->suspend = (current->suspend || process->suspend);
+
+    if (have_cpu_override)
+    {
+        process->cpu_override = *cpu_override;
+        memset( process->wine_cpu_id_from_host, 0, sizeof(process->wine_cpu_id_from_host) );
+        for (i = 0; i < process->cpu_override.cpu_count; ++i)
+            process->wine_cpu_id_from_host[process->cpu_override.host_cpu_id[i]] = i;
+    }
 }
 
 /* open a handle to a process */
@@ -1515,7 +1576,10 @@ DECL_HANDLER(get_process_debug_info)
 /* fetch the name of the process image */
 DECL_HANDLER(get_process_image_name)
 {
-    struct process *process = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
+    struct process *process;
+
+    if (req->pid) process = get_process_from_id( req->pid );
+    else          process = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
 
     if (!process) return;
     if (process->image)
@@ -1640,6 +1704,8 @@ DECL_HANDLER(read_process_memory)
     data_size_t len = get_reply_max_size();
 
     if (!(process = get_process_from_handle( req->handle, PROCESS_VM_READ ))) return;
+
+    reply->unix_pid = process->unix_pid;
 
     if (len)
     {

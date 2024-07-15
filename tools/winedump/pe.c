@@ -176,6 +176,7 @@ static const void *get_hybrid_metadata(void)
         if (!cfg) return 0;
         size = min( size, cfg->Size );
         if (size <= offsetof( IMAGE_LOAD_CONFIG_DIRECTORY64, CHPEMetadataPointer )) return 0;
+        if (!cfg->CHPEMetadataPointer) return 0;
         return RVA( cfg->CHPEMetadataPointer - ((const IMAGE_OPTIONAL_HEADER64 *)&PE_nt_headers->OptionalHeader)->ImageBase, 1 );
     }
     else
@@ -184,6 +185,7 @@ static const void *get_hybrid_metadata(void)
         if (!cfg) return 0;
         size = min( size, cfg->Size );
         if (size <= offsetof( IMAGE_LOAD_CONFIG_DIRECTORY32, CHPEMetadataPointer )) return 0;
+        if (!cfg->CHPEMetadataPointer) return 0;
         return RVA( cfg->CHPEMetadataPointer - PE_nt_headers->OptionalHeader.ImageBase, 1 );
     }
 }
@@ -275,14 +277,14 @@ static inline void print_datadirectory(DWORD n, const IMAGE_DATA_DIRECTORY *dire
     }
 }
 
-static void dump_optional_header32(const IMAGE_OPTIONAL_HEADER32 *image_oh, UINT header_size)
+static void dump_optional_header32(const IMAGE_OPTIONAL_HEADER32 *image_oh)
 {
     IMAGE_OPTIONAL_HEADER32 oh;
     const IMAGE_OPTIONAL_HEADER32 *optionalHeader;
 
     /* in case optional header is missing or partial */
     memset(&oh, 0, sizeof(oh));
-    memcpy(&oh, image_oh, min(header_size, sizeof(oh)));
+    memcpy(&oh, image_oh, min(dump_total_len - ((char *)image_oh - (char *)dump_base), sizeof(oh)));
     optionalHeader = &oh;
 
     print_word("Magic", optionalHeader->Magic);
@@ -320,14 +322,14 @@ static void dump_optional_header32(const IMAGE_OPTIONAL_HEADER32 *image_oh, UINT
     printf("\n");
 }
 
-static void dump_optional_header64(const IMAGE_OPTIONAL_HEADER64 *image_oh, UINT header_size)
+static void dump_optional_header64(const IMAGE_OPTIONAL_HEADER64 *image_oh)
 {
     IMAGE_OPTIONAL_HEADER64 oh;
     const IMAGE_OPTIONAL_HEADER64 *optionalHeader;
 
     /* in case optional header is missing or partial */
     memset(&oh, 0, sizeof(oh));
-    memcpy(&oh, image_oh, min(header_size, sizeof(oh)));
+    memcpy(&oh, image_oh, min(dump_total_len - ((char *)image_oh - (char *)dump_base), sizeof(oh)));
     optionalHeader = &oh;
 
     print_word("Magic", optionalHeader->Magic);
@@ -364,16 +366,16 @@ static void dump_optional_header64(const IMAGE_OPTIONAL_HEADER64 *image_oh, UINT
     printf("\n");
 }
 
-void dump_optional_header(const IMAGE_OPTIONAL_HEADER32 *optionalHeader, UINT header_size)
+void dump_optional_header(const IMAGE_OPTIONAL_HEADER32 *optionalHeader)
 {
     printf("Optional Header (%s)\n", get_magic_type(optionalHeader->Magic));
 
     switch(optionalHeader->Magic) {
         case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
-            dump_optional_header32(optionalHeader, header_size);
+            dump_optional_header32(optionalHeader);
             break;
         case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
-            dump_optional_header64((const IMAGE_OPTIONAL_HEADER64 *)optionalHeader, header_size);
+            dump_optional_header64((const IMAGE_OPTIONAL_HEADER64 *)optionalHeader);
             break;
         default:
             printf("  Unknown optional header magic: 0x%-4X\n", optionalHeader->Magic);
@@ -428,8 +430,7 @@ void dump_file_header(const IMAGE_FILE_HEADER *fileHeader, BOOL is_hybrid)
 static	void	dump_pe_header(void)
 {
     dump_file_header(&PE_nt_headers->FileHeader, get_hybrid_metadata() != NULL);
-    dump_optional_header((const IMAGE_OPTIONAL_HEADER32*)&PE_nt_headers->OptionalHeader,
-                         PE_nt_headers->FileHeader.SizeOfOptionalHeader);
+    dump_optional_header((const IMAGE_OPTIONAL_HEADER32*)&PE_nt_headers->OptionalHeader);
 }
 
 void dump_section_characteristics(DWORD characteristics, const char* sep)
@@ -540,7 +541,8 @@ static void dump_sections(const void *base, const void* addr, unsigned num_sect)
 
         if (globals.do_dump_rawdata)
         {
-            dump_data((const unsigned char *)base + sectHead->PointerToRawData, sectHead->SizeOfRawData, "    " );
+            dump_data_offset((const unsigned char *)base + sectHead->PointerToRawData,
+                             sectHead->SizeOfRawData, sectHead->VirtualAddress, "    " );
             printf("\n");
         }
     }
@@ -695,9 +697,9 @@ static	void	dump_dir_exported_functions(void)
     printf("  Ordinal base:    %u\n", (UINT)dir->Base);
     printf("  # of functions:  %u\n", (UINT)dir->NumberOfFunctions);
     printf("  # of Names:      %u\n", (UINT)dir->NumberOfNames);
-    printf("Addresses of functions: %08X\n", (UINT)dir->AddressOfFunctions);
-    printf("Addresses of name ordinals: %08X\n", (UINT)dir->AddressOfNameOrdinals);
-    printf("Addresses of names: %08X\n", (UINT)dir->AddressOfNames);
+    printf("  Functions RVA:   %08X\n", (UINT)dir->AddressOfFunctions);
+    printf("  Ordinals RVA:    %08X\n", (UINT)dir->AddressOfNameOrdinals);
+    printf("  Names RVA:       %08X\n", (UINT)dir->AddressOfNames);
     printf("\n");
     printf("  Entry Pt  Ordn  Name\n");
 
@@ -714,7 +716,7 @@ static	void	dump_dir_exported_functions(void)
     for (i = 0; i < dir->NumberOfFunctions; i++)
     {
         if (!pFunc[i]) continue;
-        printf("  %08X %5u ", pFunc[i], (UINT)dir->Base + i);
+        printf("  %08X %5u  ", pFunc[i], (UINT)dir->Base + i);
         if (funcs[i])
             printf("%s", get_symbol_str((const char*)RVA(funcs[i], sizeof(DWORD))));
         else
@@ -833,6 +835,7 @@ struct unwind_info_epilogue_armnt
 #define UWOP_SET_FPREG       3
 #define UWOP_SAVE_NONVOL     4
 #define UWOP_SAVE_NONVOL_FAR 5
+#define UWOP_EPILOG          6
 #define UWOP_SAVE_XMM128     8
 #define UWOP_SAVE_XMM128_FAR 9
 #define UWOP_PUSH_MACHFRAME  10
@@ -861,7 +864,7 @@ static void dump_x86_64_unwind_info( const struct runtime_function_x86_64 *funct
     info = RVA( function->UnwindData, sizeof(*info) );
 
     printf( "  unwind info at %08x\n", function->UnwindData );
-    if (info->version != 1)
+    if (info->version > 2)
     {
         printf( "    *** unknown version %u\n", info->version );
         return;
@@ -878,6 +881,11 @@ static void dump_x86_64_unwind_info( const struct runtime_function_x86_64 *funct
 
     for (i = 0; i < info->count; i++)
     {
+        if (info->opcodes[i].code == UWOP_EPILOG)
+        {
+            i++;
+            continue;
+        }
         printf( "      0x%02x: ", info->opcodes[i].offset );
         switch (info->opcodes[i].code)
         {
@@ -931,6 +939,21 @@ static void dump_x86_64_unwind_info( const struct runtime_function_x86_64 *funct
         default:
             printf( "*** unknown code %u\n", info->opcodes[i].code );
             break;
+        }
+    }
+
+    if (info->version == 2 && info->opcodes[0].code == UWOP_EPILOG)  /* print the epilogs */
+    {
+        unsigned int end = function->EndAddress;
+        unsigned int size = info->opcodes[0].offset;
+
+        printf( "    epilog 0x%x bytes\n", size );
+        if (info->opcodes[0].info) printf( "      at %08x-%08x\n", end - size, end );
+        for (i = 1; i < info->count && info->opcodes[i].code == UWOP_EPILOG; i++)
+        {
+            unsigned int offset = (info->opcodes[i].info << 8) + info->opcodes[i].offset;
+            if (!offset) break;
+            printf( "      at %08x-%08x\n", end - offset, end - offset + size );
         }
     }
 
@@ -1253,7 +1276,15 @@ static void dump_armnt_unwind_info( const struct runtime_function_armnt *fnc )
                 printf( "}\n" );
             }
             else if (code == 0xee)
-                printf( "unknown 16\n" );
+            {
+                BYTE excodes = bytes[++b];
+                if (excodes == 0x01)
+                    printf( "MSFT_OP_MACHINE_FRAME\n");
+                else if (excodes == 0x02)
+                    printf( "MSFT_OP_CONTEXT\n");
+                else
+                    printf( "MSFT opcode %u\n", excodes );
+            }
             else if (code == 0xef)
             {
                 WORD excode;
@@ -1529,9 +1560,17 @@ static void dump_arm64_codes( const BYTE *ptr, unsigned int count )
         {
             printf( "MSFT_OP_CONTEXT\n" );
         }
+        else if (ptr[i] == 0xeb)  /* MSFT_OP_EC_CONTEXT */
+        {
+            printf( "MSFT_OP_EC_CONTEXT\n" );
+        }
         else if (ptr[i] == 0xec)  /* MSFT_OP_CLEAR_UNWOUND_TO_CALL */
         {
             printf( "MSFT_OP_CLEAR_UNWOUND_TO_CALL\n" );
+        }
+        else if (ptr[i] == 0xfc)  /* pac_sign_lr */
+        {
+            printf( "pac_sign_lr\n" );
         }
         else printf( "??\n");
     }
@@ -1687,14 +1726,13 @@ static void dump_arm64_unwind_info( const struct runtime_function_arm64 *func )
 
 static void dump_dir_exceptions(void)
 {
+    static const void *arm64_funcs;
     unsigned int i, size;
     const void *funcs;
-    const IMAGE_FILE_HEADER *file_header;
+    const IMAGE_FILE_HEADER *file_header = &PE_nt_headers->FileHeader;
+    const IMAGE_ARM64EC_METADATA *metadata;
 
     funcs = get_dir_and_size(IMAGE_FILE_EXCEPTION_DIRECTORY, &size);
-    if (!funcs) return;
-
-    file_header = &PE_nt_headers->FileHeader;
 
     switch (file_header->Machine)
     {
@@ -1702,16 +1740,22 @@ static void dump_dir_exceptions(void)
         size /= sizeof(struct runtime_function_x86_64);
         printf( "%s exception info (%u functions):\n", get_machine_str( file_header->Machine ), size );
         for (i = 0; i < size; i++) dump_x86_64_unwind_info( (struct runtime_function_x86_64*)funcs + i );
+        if (!(metadata = get_hybrid_metadata())) break;
+        if (!(size = metadata->ExtraRFETableSize)) break;
+        if (!(funcs = RVA( metadata->ExtraRFETable, size ))) break;
+        if (funcs == arm64_funcs) break; /* already dumped */
+        printf( "\n" );
+        /* fall through */
+    case IMAGE_FILE_MACHINE_ARM64:
+        arm64_funcs = funcs;
+        size /= sizeof(struct runtime_function_arm64);
+        printf( "%s exception info (%u functions):\n", get_machine_str( file_header->Machine ), size );
+        for (i = 0; i < size; i++) dump_arm64_unwind_info( (struct runtime_function_arm64*)funcs + i );
         break;
     case IMAGE_FILE_MACHINE_ARMNT:
         size /= sizeof(struct runtime_function_armnt);
         printf( "%s exception info (%u functions):\n", get_machine_str( file_header->Machine ), size );
         for (i = 0; i < size; i++) dump_armnt_unwind_info( (struct runtime_function_armnt*)funcs + i );
-        break;
-    case IMAGE_FILE_MACHINE_ARM64:
-        size /= sizeof(struct runtime_function_arm64);
-        printf( "%s exception info (%u functions):\n", get_machine_str( file_header->Machine ), size );
-        for (i = 0; i < size; i++) dump_arm64_unwind_info( (struct runtime_function_arm64*)funcs + i );
         break;
     default:
         printf( "Exception information not supported for %s binaries\n",
@@ -2170,17 +2214,58 @@ static	void	dump_dir_debug_dir(const IMAGE_DEBUG_DIRECTORY* idd, int idx)
 	dump_frame_pointer_omission(idd->PointerToRawData, idd->SizeOfData);
 	break;
     case IMAGE_DEBUG_TYPE_MISC:
-    {
-	const IMAGE_DEBUG_MISC* misc = PRD(idd->PointerToRawData, idd->SizeOfData);
-	if (!misc) {printf("Can't get misc debug information\n"); break;}
-	printf("    DataType:          %u (%s)\n",
-	       (UINT)misc->DataType, (misc->DataType == IMAGE_DEBUG_MISC_EXENAME) ? "Exe name" : "Unknown");
-	printf("    Length:            %u\n", (UINT)misc->Length);
-	printf("    Unicode:           %s\n", misc->Unicode ? "Yes" : "No");
-	printf("    Data:              %s\n", misc->Data);
-    }
-    break;
-    default: break;
+        {
+            const IMAGE_DEBUG_MISC* misc = PRD(idd->PointerToRawData, idd->SizeOfData);
+            if (!misc || idd->SizeOfData < sizeof(*misc)) {printf("Can't get MISC debug information\n"); break;}
+            printf("    DataType:          %u (%s)\n",
+                   (UINT)misc->DataType, (misc->DataType == IMAGE_DEBUG_MISC_EXENAME) ? "Exe name" : "Unknown");
+            printf("    Length:            %u\n", (UINT)misc->Length);
+            printf("    Unicode:           %s\n", misc->Unicode ? "Yes" : "No");
+            printf("    Data:              %s\n", misc->Data);
+        }
+        break;
+    case IMAGE_DEBUG_TYPE_POGO:
+        {
+            const unsigned* data = PRD(idd->PointerToRawData, idd->SizeOfData);
+            const unsigned* end = (const unsigned*)((const unsigned char*)data + idd->SizeOfData);
+            unsigned idx = 0;
+
+            if (!data || idd->SizeOfData < sizeof(unsigned)) {printf("Can't get PODO debug information\n"); break;}
+            printf("    Header:            %08x\n", *(const unsigned*)data);
+            data++;
+            printf("      Index            Name            Offset   Size\n");
+            while (data + 2 < end)
+            {
+                const char* ptr;
+                ptrdiff_t s;
+
+                if (!(ptr = memchr(&data[2], '\0', (const char*)end - (const char*)&data[2]))) break;
+                printf("      %-5u            %-16s %08x %08x\n", idx, (const char*)&data[2], data[0], data[1]);
+                s = ptr - (const char*)&data[2] + 1;
+                data += 2 + ((s + sizeof(unsigned) - 1) / sizeof(unsigned));
+                idx++;
+            }
+        }
+        break;
+    case IMAGE_DEBUG_TYPE_REPRO:
+        {
+            const IMAGE_DEBUG_REPRO* repro = PRD(idd->PointerToRawData, idd->SizeOfData);
+            if (!repro || idd->SizeOfData < sizeof(*repro)) {printf("Can't get REPRO debug information\n"); break;}
+            printf("    Flags:             %08X\n", repro->flags);
+            printf("    Guid:              %s\n", get_guid_str(&repro->guid));
+            printf("    _unk0:             %08X %u\n", repro->unk[0], repro->unk[0]);
+            printf("    _unk1:             %08X %u\n", repro->unk[1], repro->unk[1]);
+            printf("    _unk2:             %08X %u\n", repro->unk[2], repro->unk[2]);
+            printf("    Timestamp:         %08X\n", repro->debug_timestamp);
+        }
+        break;
+    default:
+        {
+            const unsigned char* data = PRD(idd->PointerToRawData, idd->SizeOfData);
+            if (!data) {printf("Can't get debug information for %s\n", str); break;}
+            dump_data(data, idd->SizeOfData, "    ");
+        }
+        break;
     }
     printf("\n");
 }

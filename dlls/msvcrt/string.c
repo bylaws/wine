@@ -2785,7 +2785,7 @@ int __cdecl memcmp(const void *ptr1, const void *ptr2, size_t n)
     return memcmp_blocks(p1, p2, n);
 }
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 
 #ifdef __i386__
 
@@ -3051,7 +3051,7 @@ __ASM_GLOBAL_FUNC( sse2_memmove,
 #endif
 void * __cdecl memmove(void *dst, const void *src, size_t n)
 {
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__arm64ec__)
     return sse2_memmove(dst, src, n);
 #else
     unsigned char *d = dst;
@@ -3313,11 +3313,15 @@ int __cdecl _strnicmp_l(const char *s1, const char *s2,
     pthreadlocinfo locinfo;
     int c1, c2;
 
-    if(s1==NULL || s2==NULL)
-        return _NLSCMPERROR;
-
     if(!count)
         return 0;
+#if _MSVCR_VER>=80
+    if(!MSVCRT_CHECK_PMT(s1 && s2 && count <= INT_MAX))
+#else
+    /* Old versions of msvcrt.dll didn't have count <= INT_MAX check */
+    if(!MSVCRT_CHECK_PMT(s1 && s2))
+#endif /* _MSVCR_VER>=140 */
+        return _NLSCMPERROR;
 
     if(!locale)
         locinfo = get_locinfo();
@@ -3349,7 +3353,7 @@ int __cdecl _strnicmp_l(const char *s1, const char *s2,
  */
 int __cdecl _stricmp_l(const char *s1, const char *s2, _locale_t locale)
 {
-    return _strnicmp_l(s1, s2, -1, locale);
+    return _strnicmp_l(s1, s2, INT_MAX, locale);
 }
 
 /*********************************************************************
@@ -3365,7 +3369,7 @@ int __cdecl _strnicmp(const char *s1, const char *s2, size_t count)
  */
 int __cdecl _stricmp(const char *s1, const char *s2)
 {
-    return _strnicmp_l(s1, s2, -1, NULL);
+    return _strnicmp_l(s1, s2, INT_MAX, NULL);
 }
 
 /*********************************************************************

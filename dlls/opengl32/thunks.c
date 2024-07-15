@@ -17979,22 +17979,6 @@ static void WINAPI glShaderOp3EXT( GLenum op, GLuint res, GLuint arg1, GLuint ar
     if ((status = UNIX_CALL( glShaderOp3EXT, &args ))) WARN( "glShaderOp3EXT returned %#lx\n", status );
 }
 
-static void WINAPI glShaderSource( GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length )
-{
-    struct glShaderSource_params args = { .teb = NtCurrentTeb(), .shader = shader, .count = count, .string = string, .length = length };
-    NTSTATUS status;
-    TRACE( "shader %d, count %d, string %p, length %p\n", shader, count, string, length );
-    if ((status = UNIX_CALL( glShaderSource, &args ))) WARN( "glShaderSource returned %#lx\n", status );
-}
-
-static void WINAPI glShaderSourceARB( GLhandleARB shaderObj, GLsizei count, const GLcharARB **string, const GLint *length )
-{
-    struct glShaderSourceARB_params args = { .teb = NtCurrentTeb(), .shaderObj = shaderObj, .count = count, .string = string, .length = length };
-    NTSTATUS status;
-    TRACE( "shaderObj %d, count %d, string %p, length %p\n", shaderObj, count, string, length );
-    if ((status = UNIX_CALL( glShaderSourceARB, &args ))) WARN( "glShaderSourceARB returned %#lx\n", status );
-}
-
 static void WINAPI glShaderStorageBlockBinding( GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding )
 {
     struct glShaderStorageBlockBinding_params args = { .teb = NtCurrentTeb(), .program = program, .storageBlockIndex = storageBlockIndex, .storageBlockBinding = storageBlockBinding };
@@ -24334,23 +24318,25 @@ static BOOL WINAPI wglSwapIntervalEXT( int interval )
     return args.ret;
 }
 
-extern const GLubyte * WINAPI glGetStringi( GLenum name, GLuint index ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapBuffer( GLenum target, GLenum access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapBufferARB( GLenum target, GLenum access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapBufferRange( GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapNamedBuffer( GLuint buffer, GLenum access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapNamedBufferEXT( GLuint buffer, GLenum access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapNamedBufferRange( GLuint buffer, GLintptr offset, GLsizeiptr length, GLbitfield access ) DECLSPEC_HIDDEN;
-extern void * WINAPI glMapNamedBufferRangeEXT( GLuint buffer, GLintptr offset, GLsizeiptr length, GLbitfield access ) DECLSPEC_HIDDEN;
-extern GLboolean WINAPI glUnmapBuffer( GLenum target ) DECLSPEC_HIDDEN;
-extern GLboolean WINAPI glUnmapBufferARB( GLenum target ) DECLSPEC_HIDDEN;
-extern GLboolean WINAPI glUnmapNamedBuffer( GLuint buffer ) DECLSPEC_HIDDEN;
-extern GLboolean WINAPI glUnmapNamedBufferEXT( GLuint buffer ) DECLSPEC_HIDDEN;
-extern HDC WINAPI wglGetCurrentReadDCARB(void) DECLSPEC_HIDDEN;
-extern const char * WINAPI wglGetExtensionsStringARB( HDC hdc ) DECLSPEC_HIDDEN;
-extern const char * WINAPI wglGetExtensionsStringEXT(void) DECLSPEC_HIDDEN;
-extern const GLchar * WINAPI wglQueryCurrentRendererStringWINE( GLenum attribute ) DECLSPEC_HIDDEN;
-extern const GLchar * WINAPI wglQueryRendererStringWINE( HDC dc, GLint renderer, GLenum attribute ) DECLSPEC_HIDDEN;
+extern const GLubyte * WINAPI glGetStringi( GLenum name, GLuint index );
+extern void * WINAPI glMapBuffer( GLenum target, GLenum access );
+extern void * WINAPI glMapBufferARB( GLenum target, GLenum access );
+extern void * WINAPI glMapBufferRange( GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access );
+extern void * WINAPI glMapNamedBuffer( GLuint buffer, GLenum access );
+extern void * WINAPI glMapNamedBufferEXT( GLuint buffer, GLenum access );
+extern void * WINAPI glMapNamedBufferRange( GLuint buffer, GLintptr offset, GLsizeiptr length, GLbitfield access );
+extern void * WINAPI glMapNamedBufferRangeEXT( GLuint buffer, GLintptr offset, GLsizeiptr length, GLbitfield access );
+extern void WINAPI glShaderSource( GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length );
+extern void WINAPI glShaderSourceARB( GLhandleARB shaderObj, GLsizei count, const GLcharARB **string, const GLint *length );
+extern GLboolean WINAPI glUnmapBuffer( GLenum target );
+extern GLboolean WINAPI glUnmapBufferARB( GLenum target );
+extern GLboolean WINAPI glUnmapNamedBuffer( GLuint buffer );
+extern GLboolean WINAPI glUnmapNamedBufferEXT( GLuint buffer );
+extern HDC WINAPI wglGetCurrentReadDCARB(void);
+extern const char * WINAPI wglGetExtensionsStringARB( HDC hdc );
+extern const char * WINAPI wglGetExtensionsStringEXT(void);
+extern const GLchar * WINAPI wglQueryCurrentRendererStringWINE( GLenum attribute );
+extern const GLchar * WINAPI wglQueryRendererStringWINE( HDC dc, GLint renderer, GLenum attribute );
 const void *extension_procs[] =
 {
     glAccumxOES,

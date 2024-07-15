@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <time.h>
+#include <sys/stat.h>
 
 #include "debugger.h"
 #include "psapi.h"
@@ -275,7 +277,7 @@ static DWORD dbg_handle_exception(const EXCEPTION_RECORD* rec, BOOL first_chance
     }
 
     if (first_chance && !is_debug && !DBG_IVAR(BreakOnFirstChance) &&
-	!(rec->ExceptionFlags & EH_STACK_INVALID))
+	!(rec->ExceptionFlags & EXCEPTION_STACK_INVALID))
     {
         /* pass exception to program except for debug exceptions */
         return DBG_EXCEPTION_NOT_HANDLED;
@@ -816,6 +818,48 @@ static HANDLE create_temp_file(void)
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, 0 );
 }
 
+static HANDLE create_crash_report_file(void)
+{
+    const char *dir = getenv("WINE_CRASH_REPORT_DIR");
+    const char *sgi;
+    char timestr[32];
+    char name[MAX_PATH], *c;
+    time_t t;
+    struct tm lt;
+
+    if(!dir || dir[0] == 0)
+        return INVALID_HANDLE_VALUE;
+
+    strcpy(name, dir);
+
+    for(c = name + 1; *c; ++c){
+        if(*c == '/'){
+            *c = 0;
+            CreateDirectoryA(name, NULL);
+            *c = '/';
+        }
+    }
+    CreateDirectoryA(name, NULL);
+
+    sgi = getenv("SteamGameId");
+
+    t = time(NULL);
+    lt = *localtime(&t);
+    strftime(timestr, ARRAY_SIZE(timestr), "%Y-%m-%d_%H:%M:%S", &lt);
+
+    /* /path/to/crash/reports/2021-05-18_13:21:15_appid-976310_crash.log */
+    snprintf(name, ARRAY_SIZE(name),
+            "%s%s/%s_appid-%s_crash.log",
+            dir[0] == '/' ? "Z:/" : "",
+            dir,
+            timestr,
+            sgi ? sgi : "0"
+            );
+
+    return CreateFileA( name, GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0 );
+}
+
 /******************************************************************
  *		dbg_active_attach
  *
@@ -906,6 +950,10 @@ enum dbg_start dbg_active_auto(int argc, char* argv[])
         event = CreateEventW( NULL, TRUE, FALSE, NULL );
         if (event) thread = display_crash_details( event );
         if (thread) dbg_houtput = output = create_temp_file();
+        break;
+    case TRUE:
+        dbg_use_wine_dbg_output = TRUE;
+        dbg_crash_report_file = create_crash_report_file();
         break;
     }
 
@@ -1067,7 +1115,17 @@ static BOOL tgt_process_active_write(HANDLE hProcess, void* addr,
 
 static BOOL tgt_process_active_get_selector(HANDLE hThread, DWORD sel, LDT_ENTRY* le)
 {
+#ifdef _WIN64
+    THREAD_DESCRIPTOR_INFORMATION desc = { .Selector = sel };
+    ULONG retlen;
+
+    if (RtlWow64GetThreadSelectorEntry( hThread, &desc, sizeof(desc), &retlen ))
+        return FALSE;
+    *le = desc.Entry;
+    return TRUE;
+#else
     return GetThreadSelectorEntry( hThread, sel, le );
+#endif
 }
 
 static struct be_process_io be_process_active_io =

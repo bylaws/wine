@@ -2813,6 +2813,19 @@ static void wined3d_context_vk_bind_stream_output_buffers(struct wined3d_context
     struct wined3d_buffer *buffer;
     unsigned int i, first, count;
 
+    if (!context_vk->vk_so_counter_bo.vk_buffer)
+    {
+        struct wined3d_bo_vk *bo = &context_vk->vk_so_counter_bo;
+
+        if (!wined3d_context_vk_create_bo(context_vk, ARRAY_SIZE(context_vk->vk_so_counters) * sizeof(uint32_t) * 2,
+                VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, bo))
+            ERR("Failed to create counter BO.\n");
+
+        for (i = 0; i < ARRAY_SIZE(context_vk->vk_so_counters); ++i)
+            context_vk->vk_so_offsets[i] = bo->b.buffer_offset + i * sizeof(uint32_t) * 2;
+    }
+
+    memset(context_vk->vk_so_counters, 0, sizeof(context_vk->vk_so_counters));
     first = 0;
     count = 0;
     for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
@@ -2821,6 +2834,8 @@ static void wined3d_context_vk_bind_stream_output_buffers(struct wined3d_context
 
         if ((buffer = stream->buffer))
         {
+            context_vk->vk_so_counters[i] = context_vk->vk_so_counter_bo.vk_buffer;
+
             buffer_vk = wined3d_buffer_vk(buffer);
             buffer_info = wined3d_buffer_vk_get_buffer_info(buffer_vk);
             wined3d_context_vk_reference_bo(context_vk, wined3d_bo_vk(buffer->buffer_object));
@@ -3456,7 +3471,6 @@ static void wined3d_context_vk_load_shader_resources(struct wined3d_context_vk *
     struct wined3d_unordered_access_view *uav;
     struct wined3d_shader_resource_view *srv;
     struct wined3d_buffer_vk *buffer_vk;
-    struct wined3d_sampler *sampler;
     struct wined3d_buffer *buffer;
     size_t i;
 
@@ -3551,17 +3565,27 @@ static void wined3d_context_vk_load_shader_resources(struct wined3d_context_vk *
                 break;
 
             case WINED3D_SHADER_DESCRIPTOR_TYPE_UAV_COUNTER:
-                break;
-
             case WINED3D_SHADER_DESCRIPTOR_TYPE_SAMPLER:
-                if (!(sampler = state->sampler[binding->shader_type][binding->resource_idx]))
-                    sampler = context_vk->c.device->null_sampler;
                 break;
 
             default:
                 ERR("Invalid descriptor type %#x.\n", binding->shader_descriptor_type);
                 break;
         }
+    }
+}
+
+static void wined3d_context_vk_prepare_used_rtv(struct wined3d_context_vk *context_vk, struct wined3d_rendertarget_view *rtv)
+{
+    if (wined3d_rendertarget_view_get_locations(rtv) & WINED3D_LOCATION_CLEARED)
+    {
+        /* Need to restart render pass or the clear won't happen. */
+        wined3d_context_vk_end_current_render_pass(context_vk);
+        wined3d_rendertarget_view_prepare_location(rtv, &context_vk->c, rtv->resource->draw_binding);
+    }
+    else
+    {
+        wined3d_rendertarget_view_load_location(rtv, &context_vk->c, rtv->resource->draw_binding);
     }
 }
 
@@ -3607,10 +3631,7 @@ VkCommandBuffer wined3d_context_vk_apply_draw_state(struct wined3d_context_vk *c
         {
             /* We handle clears at the beginning of the render pass, no need for an explicit clear
              * first. */
-            if (wined3d_rendertarget_view_get_locations(rtv) & WINED3D_LOCATION_CLEARED)
-                wined3d_rendertarget_view_prepare_location(rtv, &context_vk->c, rtv->resource->draw_binding);
-            else
-                wined3d_rendertarget_view_load_location(rtv, &context_vk->c, rtv->resource->draw_binding);
+            wined3d_context_vk_prepare_used_rtv(context_vk, rtv);
             invalidate_rt |= (1 << i);
         }
         else
@@ -3628,16 +3649,9 @@ VkCommandBuffer wined3d_context_vk_apply_draw_state(struct wined3d_context_vk *c
     if ((dsv = state->fb.depth_stencil))
     {
         if (wined3d_state_uses_depth_buffer(state))
-        {
-            if (wined3d_rendertarget_view_get_locations(dsv) & WINED3D_LOCATION_CLEARED)
-                wined3d_rendertarget_view_prepare_location(dsv, &context_vk->c, dsv->resource->draw_binding);
-            else
-                wined3d_rendertarget_view_load_location(dsv, &context_vk->c, dsv->resource->draw_binding);
-        }
+            wined3d_context_vk_prepare_used_rtv(context_vk, dsv);
         else
-        {
             wined3d_rendertarget_view_prepare_location(dsv, &context_vk->c, dsv->resource->draw_binding);
-        }
 
         if (!state->depth_stencil_state || state->depth_stencil_state->writes_ds)
             invalidate_ds = true;

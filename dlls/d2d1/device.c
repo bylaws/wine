@@ -135,6 +135,9 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
     vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
 
+    if (render_target->cs)
+        EnterCriticalSection(render_target->cs);
+
     ID3D11Device1_GetImmediateContext1(device, &context);
     ID3D11DeviceContext1_SwapDeviceContextState(context, render_target->d3d_state, &prev_state);
 
@@ -188,6 +191,9 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
     ID3D11DeviceContext1_SwapDeviceContextState(context, prev_state, NULL);
     ID3D11DeviceContext1_Release(context);
     ID3DDeviceContextState_Release(prev_state);
+
+    if (render_target->cs)
+        LeaveCriticalSection(render_target->cs);
 }
 
 static void d2d_device_context_set_error(struct d2d_device_context *context, HRESULT code)
@@ -942,6 +948,7 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawGeometry(ID2D1DeviceContext
     const struct d2d_geometry *geometry_impl = unsafe_impl_from_ID2D1Geometry(geometry);
     struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
     struct d2d_brush *brush_impl = unsafe_impl_from_ID2D1Brush(brush);
+    struct d2d_stroke_style *stroke_style_impl = unsafe_impl_from_ID2D1StrokeStyle(stroke_style);
 
     TRACE("iface %p, geometry %p, brush %p, stroke_width %.8e, stroke_style %p.\n",
             iface, geometry, brush, stroke_width, stroke_style);
@@ -955,6 +962,12 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawGeometry(ID2D1DeviceContext
 
     if (stroke_style)
         FIXME("Ignoring stroke style %p.\n", stroke_style);
+
+    if (stroke_style_impl)
+    {
+        if (stroke_style_impl->desc.transformType == D2D1_STROKE_TRANSFORM_TYPE_FIXED)
+            stroke_width /= context->drawing_state.transform.m11;
+    }
 
     d2d_device_context_draw_geometry(context, geometry_impl, brush_impl, stroke_width);
 }
@@ -2537,8 +2550,7 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawImage(ID2D1DeviceContext1 *
 
     if (SUCCEEDED(ID2D1Image_QueryInterface(image, &IID_ID2D1Bitmap, (void **)&bitmap)))
     {
-        d2d_device_context_draw_bitmap(context, bitmap, NULL, 1.0f, d2d1_1_interp_mode_from_d2d1(interpolation_mode),
-                image_rect, target_offset, NULL);
+        d2d_device_context_draw_bitmap(context, bitmap, NULL, 1.0f, interpolation_mode, image_rect, target_offset, NULL);
 
         ID2D1Bitmap_Release(bitmap);
         return;
@@ -3190,6 +3202,7 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
     IDWriteFactory *dwrite_factory;
     D3D11_RASTERIZER_DESC rs_desc;
     D3D11_BUFFER_DESC buffer_desc;
+    struct d2d_factory *factory;
     unsigned int i;
     HRESULT hr;
 
@@ -4249,6 +4262,10 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
     ID2D1Device1_GetFactory(&device->ID2D1Device1_iface, &render_target->factory);
     render_target->device = device;
     ID2D1Device1_AddRef(&render_target->device->ID2D1Device1_iface);
+
+    factory = unsafe_impl_from_ID2D1Factory(render_target->factory);
+    if (factory->factory_type == D2D1_FACTORY_TYPE_MULTI_THREADED)
+        render_target->cs = &factory->cs;
 
     render_target->outer_unknown = outer_unknown ? outer_unknown : &render_target->IUnknown_iface;
     render_target->ops = ops;

@@ -348,7 +348,7 @@ static const struct IDirect3DSwapChain9ExVtbl d3d9_swapchain_vtbl =
 
 static void STDMETHODCALLTYPE d3d9_swapchain_wined3d_object_released(void *parent)
 {
-    heap_free(parent);
+    free(parent);
 }
 
 static const struct wined3d_parent_ops d3d9_swapchain_wined3d_parent_ops =
@@ -370,6 +370,7 @@ static const struct wined3d_swapchain_state_parent_ops d3d9_swapchain_state_pare
 static HRESULT swapchain_init(struct d3d9_swapchain *swapchain, struct d3d9_device *device,
         struct wined3d_swapchain_desc *desc, unsigned int swap_interval)
 {
+    struct wined3d_swapchain_desc swapchain_desc;
     HRESULT hr;
 
     swapchain->refcount = 1;
@@ -383,6 +384,11 @@ static HRESULT swapchain_init(struct d3d9_swapchain *swapchain, struct d3d9_devi
         WARN("Failed to create wined3d swapchain, hr %#lx.\n", hr);
         return hr;
     }
+
+    wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &swapchain_desc);
+    desc->backbuffer_width = swapchain_desc.backbuffer_width;
+    desc->backbuffer_height = swapchain_desc.backbuffer_height;
+    desc->backbuffer_format = swapchain_desc.backbuffer_format;
 
     swapchain->parent_device = &device->IDirect3DDevice9Ex_iface;
     IDirect3DDevice9Ex_AddRef(swapchain->parent_device);
@@ -399,13 +405,13 @@ HRESULT d3d9_swapchain_create(struct d3d9_device *device, struct wined3d_swapcha
     unsigned int i;
     HRESULT hr;
 
-    if (!(object = heap_alloc_zero(sizeof(*object))))
+    if (!(object = calloc(1, sizeof(*object))))
         return E_OUTOFMEMORY;
 
     if (FAILED(hr = swapchain_init(object, device, desc, swap_interval)))
     {
         WARN("Failed to initialize swapchain, hr %#lx.\n", hr);
-        heap_free(object);
+        free(object);
         return hr;
     }
 

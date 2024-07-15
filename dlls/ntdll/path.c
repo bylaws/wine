@@ -528,7 +528,7 @@ static ULONG get_full_path_helper(LPCWSTR name, LPWSTR buffer, ULONG size)
 
     RtlAcquirePebLock();
 
-    if (NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
+    if (0 && NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
         cd = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir.DosPath;
     else
         cd = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory.DosPath;
@@ -883,7 +883,7 @@ ULONG WINAPI RtlGetCurrentDirectory_U(ULONG buflen, LPWSTR buf)
 
     RtlAcquirePebLock();
 
-    if (NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
+    if (0 && NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
         us = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir.DosPath;
     else
         us = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory.DosPath;
@@ -914,20 +914,20 @@ ULONG WINAPI RtlGetCurrentDirectory_U(ULONG buflen, LPWSTR buf)
 NTSTATUS WINAPI RtlSetCurrentDirectory_U(const UNICODE_STRING* dir)
 {
     FILE_FS_DEVICE_INFORMATION device_info;
+    ULONG size, compare_size;
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING newdir;
     IO_STATUS_BLOCK io;
     CURDIR *curdir;
     HANDLE handle;
     NTSTATUS nts;
-    ULONG size;
     PWSTR ptr;
 
     newdir.Buffer = NULL;
 
     RtlAcquirePebLock();
 
-    if (NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
+    if (0 && NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
         curdir = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir;
     else
         curdir = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory;
@@ -935,6 +935,22 @@ NTSTATUS WINAPI RtlSetCurrentDirectory_U(const UNICODE_STRING* dir)
     if (!RtlDosPathNameToNtPathName_U( dir->Buffer, &newdir, NULL, NULL ))
     {
         nts = STATUS_OBJECT_NAME_INVALID;
+        goto out;
+    }
+
+    size = newdir.Length / sizeof(WCHAR);
+    ptr = newdir.Buffer;
+    ptr += 4;  /* skip \??\ prefix */
+    size -= 4;
+
+    if (size && ptr[size - 1] == '\\') compare_size = size - 1;
+    else                               compare_size = size;
+
+    if (curdir->DosPath.Length == (compare_size + 1) * sizeof(WCHAR)
+        && !memcmp( curdir->DosPath.Buffer, ptr, compare_size * sizeof(WCHAR) ))
+    {
+        TRACE( "dir %s is the same as current.\n", debugstr_us(dir) );
+        nts = STATUS_SUCCESS;
         goto out;
     }
 
@@ -962,10 +978,6 @@ NTSTATUS WINAPI RtlSetCurrentDirectory_U(const UNICODE_STRING* dir)
     curdir->Handle = handle;
 
     /* append trailing \ if missing */
-    size = newdir.Length / sizeof(WCHAR);
-    ptr = newdir.Buffer;
-    ptr += 4;  /* skip \??\ prefix */
-    size -= 4;
     if (size && ptr[size - 1] != '\\') ptr[size++] = '\\';
 
     /* convert \??\UNC\ path to \\ prefix */

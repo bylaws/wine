@@ -42,10 +42,60 @@ WINE_DECLARE_DEBUG_CHANNEL(virtual);
 WINE_DECLARE_DEBUG_CHANNEL(globalmem);
 
 
+
+static CROSS_PROCESS_WORK_LIST *open_cross_process_connection( HANDLE process )
+{
+#ifdef __aarch64__
+    CROSS_PROCESS_WORK_LIST *list;
+    HANDLE section;
+
+    RtlOpenCrossProcessEmulatorWorkConnection( process, &section, (void **)&list );
+    if (section) NtClose( section );
+    return list;
+#else
+    return NULL;
+#endif
+}
+
+static void close_cross_process_connection( CROSS_PROCESS_WORK_LIST *list )
+{
+    if (list) NtUnmapViewOfSection( GetCurrentProcess(), list );
+}
+
+static void send_cross_process_notification( CROSS_PROCESS_WORK_LIST *list, UINT id,
+                                             const void *addr, SIZE_T size, int nb_args, ... )
+{
+#ifdef __aarch64__
+    CROSS_PROCESS_WORK_ENTRY *entry;
+    void *unused;
+    va_list args;
+    int i;
+
+    if (!list) return;
+    if ((entry = RtlWow64PopCrossProcessWorkFromFreeList( &list->free_list )))
+    {
+        entry->id = id;
+        entry->addr = (ULONG_PTR)addr;
+        entry->size = size;
+        if (nb_args)
+        {
+            va_start( args, nb_args );
+            for (i = 0; i < nb_args; i++) entry->args[i] = va_arg( args, int );
+            va_end( args );
+        }
+        RtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, entry, &unused );
+    }
+#endif
+}
+
+
 /***********************************************************************
  * Virtual memory functions
  ***********************************************************************/
 
+static const SIZE_T page_mask = 0xfff;
+#define ROUND_ADDR(addr) ((void *)((UINT_PTR)(addr) & ~page_mask))
+#define ROUND_SIZE(addr,size) (((SIZE_T)(size) + ((UINT_PTR)(addr) & page_mask) + page_mask) & ~page_mask)
 
 /***********************************************************************
  *             DiscardVirtualMemory   (kernelbase.@)
@@ -69,6 +119,22 @@ BOOL WINAPI DECLSPEC_HOTPATCH FlushViewOfFile( const void *base, SIZE_T size )
 
     if (status == STATUS_NOT_MAPPED_DATA) status = STATUS_SUCCESS;
     return set_ntstatus( status );
+}
+
+
+/****************************************************************************
+ *           FlushInstructionCache   (kernelbase.@)
+ */
+BOOL WINAPI DECLSPEC_HOTPATCH FlushInstructionCache( HANDLE process, LPCVOID addr, SIZE_T size )
+{
+    CROSS_PROCESS_WORK_LIST *list;
+
+    if ((list = open_cross_process_connection( process )))
+    {
+        send_cross_process_notification( list, CrossProcessFlushCache, addr, size, 0 );
+        close_cross_process_connection( list );
+    }
+    return set_ntstatus( NtFlushInstructionCache( process, addr, size ));
 }
 
 
@@ -537,7 +603,69 @@ BOOL WINAPI DECLSPEC_HOTPATCH VirtualUnlock( void *addr, SIZE_T size )
 BOOL WINAPI DECLSPEC_HOTPATCH WriteProcessMemory( HANDLE process, void *addr, const void *buffer,
                                                   SIZE_T size, SIZE_T *bytes_written )
 {
-    return set_ntstatus( NtWriteVirtualMemory( process, addr, buffer, size, bytes_written ));
+    CROSS_PROCESS_WORK_LIST *list = open_cross_process_connection( process );
+    DWORD old_prot, prot = PAGE_TARGETS_NO_UPDATE | PAGE_ENCLAVE_NO_CHANGE;
+    MEMORY_BASIC_INFORMATION info;
+    void *base_addr;
+    SIZE_T region_size;
+    NTSTATUS status, status2;
+
+    if (!VirtualQueryEx( process, addr, &info, sizeof(info) ))
+    {
+        close_cross_process_connection( list );
+        return FALSE;
+    }
+
+    switch (info.Protect)
+    {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        /* already writable */
+        if ((status = NtWriteVirtualMemory( process, addr, buffer, size, bytes_written ))) break;
+        send_cross_process_notification( list, CrossProcessFlushCache, addr, size, 0 );
+        NtFlushInstructionCache( process, addr, size );
+        break;
+
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+        /* make it writable */
+        base_addr = ROUND_ADDR( addr );
+        region_size = ROUND_SIZE( addr, size );
+        region_size = min( region_size,  (char *)info.BaseAddress + info.RegionSize - (char *)base_addr );
+        prot |= (info.Type == MEM_PRIVATE) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_WRITECOPY;
+
+        send_cross_process_notification( list, CrossProcessPreVirtualProtect,
+                                         base_addr, region_size, 1, prot );
+        status = NtProtectVirtualMemory( process, &base_addr, &region_size, prot, &old_prot );
+        send_cross_process_notification( list, CrossProcessPostVirtualProtect,
+                                         base_addr, region_size, 2, prot, status );
+        if (status) break;
+
+        status = NtWriteVirtualMemory( process, addr, buffer, size, bytes_written );
+        if (!status)
+        {
+            send_cross_process_notification( list, CrossProcessFlushCache, addr, size, 0 );
+            NtFlushInstructionCache( process, addr, size );
+        }
+
+        prot = PAGE_TARGETS_NO_UPDATE | PAGE_ENCLAVE_NO_CHANGE | old_prot;
+        send_cross_process_notification( list, CrossProcessPreVirtualProtect,
+                                         base_addr, region_size, 1, prot );
+        status2 = NtProtectVirtualMemory( process, &base_addr, &region_size, prot, &old_prot );
+        send_cross_process_notification( list, CrossProcessPostVirtualProtect,
+                                         base_addr, region_size, 2, prot, status2 );
+        break;
+
+    default:
+        /* not writable */
+        status = STATUS_ACCESS_VIOLATION;
+        break;
+    }
+
+    close_cross_process_connection( list );
+    return set_ntstatus( status );
 }
 
 
@@ -1247,12 +1375,10 @@ BOOL WINAPI DECLSPEC_HOTPATCH GlobalMemoryStatusEx( MEMORYSTATUSEX *status )
     if (status->ullTotalPhys)
         status->dwMemoryLoad = (status->ullTotalPhys - status->ullAvailPhys) / (status->ullTotalPhys / 100);
 
-    TRACE_(virtual)( "MemoryLoad %ld, TotalPhys %s, AvailPhys %s, TotalPageFile %s,"
-                     "AvailPageFile %s, TotalVirtual %s, AvailVirtual %s\n",
-                    status->dwMemoryLoad, wine_dbgstr_longlong(status->ullTotalPhys),
-                    wine_dbgstr_longlong(status->ullAvailPhys), wine_dbgstr_longlong(status->ullTotalPageFile),
-                    wine_dbgstr_longlong(status->ullAvailPageFile), wine_dbgstr_longlong(status->ullTotalVirtual),
-                    wine_dbgstr_longlong(status->ullAvailVirtual) );
+    TRACE_(virtual)( "MemoryLoad %lu, TotalPhys %I64u, AvailPhys %I64u, TotalPageFile %I64u, "
+                     "AvailPageFile %I64u, TotalVirtual %I64u, AvailVirtual %I64u\n",
+                     status->dwMemoryLoad, status->ullTotalPhys, status->ullAvailPhys, status->ullTotalPageFile,
+                     status->ullAvailPageFile, status->ullTotalVirtual, status->ullAvailVirtual );
 
     cached_status = *status;
     return TRUE;
@@ -1453,17 +1579,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryVirtualMemoryInformation( HANDLE process, con
  ***********************************************************************/
 
 
-#if defined(__i386__) || defined(__x86_64__)
-/***********************************************************************
- *             GetEnabledXStateFeatures   (kernelbase.@)
- */
-DWORD64 WINAPI GetEnabledXStateFeatures(void)
-{
-    TRACE( "\n" );
-    return RtlGetEnabledExtendedFeatures( ~(ULONG64)0 );
-}
-
-
 /***********************************************************************
  *             InitializeContext2         (kernelbase.@)
  */
@@ -1519,10 +1634,19 @@ BOOL WINAPI CopyContext( CONTEXT *dst, DWORD context_flags, CONTEXT *src )
 {
     return set_ntstatus( RtlCopyContext( dst, context_flags, src ));
 }
-#endif
 
 
 #if defined(__x86_64__)
+
+/***********************************************************************
+ *             GetEnabledXStateFeatures   (kernelbase.@)
+ */
+DWORD64 WINAPI GetEnabledXStateFeatures(void)
+{
+    TRACE( "\n" );
+    return RtlGetEnabledExtendedFeatures( ~(ULONG64)0 );
+}
+
 /***********************************************************************
  *           LocateXStateFeature   (kernelbase.@)
  */
@@ -1583,7 +1707,18 @@ BOOL WINAPI GetXStateFeaturesMask( CONTEXT *context, DWORD64 *feature_mask )
 
     return TRUE;
 }
+
 #elif defined(__i386__)
+
+/***********************************************************************
+ *             GetEnabledXStateFeatures   (kernelbase.@)
+ */
+DWORD64 WINAPI GetEnabledXStateFeatures(void)
+{
+    TRACE( "\n" );
+    return RtlGetEnabledExtendedFeatures( ~(ULONG64)0 );
+}
+
 /***********************************************************************
  *           LocateXStateFeature   (kernelbase.@)
  */

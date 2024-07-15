@@ -791,55 +791,146 @@ static HRESULT WINAPI sample_GetTotalLength(IMFSample *iface, DWORD *total_lengt
     return S_OK;
 }
 
+static HRESULT copy_2d_buffer_from_contiguous(IMFMediaBuffer *src, IMF2DBuffer *dst)
+{
+    DWORD current_length;
+    HRESULT hr, hr2;
+    BYTE *ptr;
+
+    hr = IMFMediaBuffer_Lock(src, &ptr, NULL, &current_length);
+
+    if (SUCCEEDED(hr))
+    {
+        hr = IMF2DBuffer_ContiguousCopyFrom(dst, ptr, current_length);
+
+        hr2 = IMFMediaBuffer_Unlock(src);
+        if (FAILED(hr2))
+            WARN("Unlocking source buffer %p failed with hr %#lx.\n", src, hr2);
+        if (FAILED(hr2) && SUCCEEDED(hr))
+            hr = hr2;
+    }
+
+    return hr;
+}
+
+static HRESULT copy_2d_buffer(IMFMediaBuffer *src, IMFMediaBuffer *dst)
+{
+    IMF2DBuffer2 *src2d2 = NULL, *dst2d2 = NULL;
+    IMF2DBuffer *dst2 = NULL;
+    HRESULT hr;
+
+    hr = IMFMediaBuffer_QueryInterface(src, &IID_IMF2DBuffer2, (void **)&src2d2);
+
+    if (SUCCEEDED(hr))
+        hr = IMFMediaBuffer_QueryInterface(dst, &IID_IMF2DBuffer2, (void **)&dst2d2);
+
+    if (SUCCEEDED(hr))
+        hr = IMF2DBuffer2_Copy2DTo(src2d2, dst2d2);
+
+    if (src2d2)
+        IMF2DBuffer2_Release(src2d2);
+
+    if (dst2d2)
+        IMF2DBuffer2_Release(dst2d2);
+
+    if (SUCCEEDED(hr))
+        return hr;
+
+    hr = IMFMediaBuffer_QueryInterface(dst, &IID_IMF2DBuffer, (void **)&dst2);
+
+    if (SUCCEEDED(hr))
+        hr = copy_2d_buffer_from_contiguous(src, dst2);
+
+    if (dst2)
+        IMF2DBuffer_Release(dst2);
+
+    return hr;
+}
+
 static HRESULT WINAPI sample_CopyToBuffer(IMFSample *iface, IMFMediaBuffer *buffer)
 {
     struct sample *sample = impl_from_IMFSample(iface);
     DWORD total_length, dst_length, dst_current_length, src_max_length, current_length;
     BYTE *src_ptr, *dst_ptr;
-    BOOL locked;
-    HRESULT hr;
+    IMF2DBuffer *buffer2d;
+    BOOL locked = FALSE;
+    HRESULT hr = E_FAIL;
     size_t i;
 
     TRACE("%p, %p.\n", iface, buffer);
 
     EnterCriticalSection(&sample->attributes.cs);
 
+    if (sample->buffer_count == 1)
+    {
+        if (SUCCEEDED(hr = copy_2d_buffer(sample->buffers[0], buffer)))
+        {
+            LeaveCriticalSection(&sample->attributes.cs);
+            return hr;
+        }
+    }
+
     total_length = sample_get_total_length(sample);
     dst_current_length = 0;
+
+    if (sample->buffer_count == 1
+            && SUCCEEDED(IMFMediaBuffer_QueryInterface(buffer, &IID_IMF2DBuffer, (void **)&buffer2d)))
+    {
+        if (SUCCEEDED(IMFMediaBuffer_GetCurrentLength(sample->buffers[0], &current_length))
+                && SUCCEEDED(IMF2DBuffer_GetContiguousLength(buffer2d, &dst_length))
+                && current_length == dst_length
+                && SUCCEEDED(IMFMediaBuffer_Lock(sample->buffers[0], &src_ptr, &src_max_length, &current_length)))
+        {
+            hr = IMF2DBuffer_ContiguousCopyFrom(buffer2d, src_ptr, current_length);
+            IMFMediaBuffer_Unlock(sample->buffers[0]);
+        }
+        IMF2DBuffer_Release(buffer2d);
+        if (SUCCEEDED(hr))
+        {
+            dst_current_length = current_length;
+            goto done;
+        }
+    }
 
     dst_ptr = NULL;
     dst_length = current_length = 0;
     locked = SUCCEEDED(hr = IMFMediaBuffer_Lock(buffer, &dst_ptr, &dst_length, &current_length));
-    if (locked)
+    if (!locked)
+        goto done;
+
+    if (dst_length < total_length)
     {
-        if (dst_length < total_length)
-            hr = MF_E_BUFFERTOOSMALL;
-        else if (dst_ptr)
-        {
-            for (i = 0; i < sample->buffer_count && SUCCEEDED(hr); ++i)
-            {
-                src_ptr = NULL;
-                src_max_length = current_length = 0;
-                if (SUCCEEDED(hr = IMFMediaBuffer_Lock(sample->buffers[i], &src_ptr, &src_max_length, &current_length)))
-                {
-                    if (src_ptr)
-                    {
-                        if (current_length > dst_length)
-                            hr = MF_E_BUFFERTOOSMALL;
-                        else if (current_length)
-                        {
-                            memcpy(dst_ptr, src_ptr, current_length);
-                            dst_length -= current_length;
-                            dst_current_length += current_length;
-                            dst_ptr += current_length;
-                        }
-                    }
-                    IMFMediaBuffer_Unlock(sample->buffers[i]);
-                }
-            }
-        }
+        hr = MF_E_BUFFERTOOSMALL;
+        goto done;
     }
 
+    if (!dst_ptr)
+        goto done;
+
+    for (i = 0; i < sample->buffer_count && SUCCEEDED(hr); ++i)
+    {
+        src_ptr = NULL;
+        src_max_length = current_length = 0;
+
+        if (FAILED(hr = IMFMediaBuffer_Lock(sample->buffers[i], &src_ptr, &src_max_length, &current_length)))
+            continue;
+
+        if (src_ptr)
+        {
+            if (current_length > dst_length)
+                hr = MF_E_BUFFERTOOSMALL;
+            else if (current_length)
+            {
+                memcpy(dst_ptr, src_ptr, current_length);
+                dst_length -= current_length;
+                dst_current_length += current_length;
+                dst_ptr += current_length;
+            }
+        }
+        IMFMediaBuffer_Unlock(sample->buffers[i]);
+    }
+
+done:
     IMFMediaBuffer_SetCurrentLength(buffer, dst_current_length);
 
     if (locked)
@@ -1397,7 +1488,7 @@ static HRESULT sample_allocator_initialize(struct sample_allocator *allocator, u
     unsigned int i, value;
     GUID major, subtype;
     UINT64 frame_size;
-    D3D11_USAGE usage;
+    UINT32 usage;
     HRESULT hr;
 
     if (FAILED(hr = IMFMediaType_GetMajorType(media_type, &major)))

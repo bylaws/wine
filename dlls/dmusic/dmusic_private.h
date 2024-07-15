@@ -41,16 +41,15 @@
 #include "dmusics.h"
 #include "dmksctrl.h"
 
+#include "dmobject.h"
+#include "dmusic_wave.h"
+
 /*****************************************************************************
  * Interfaces
  */
 typedef struct IDirectMusic8Impl IDirectMusic8Impl;
 typedef struct IDirectMusicBufferImpl IDirectMusicBufferImpl;
-typedef struct IDirectMusicDownloadedInstrumentImpl IDirectMusicDownloadedInstrumentImpl;
-typedef struct IDirectMusicDownloadImpl IDirectMusicDownloadImpl;
 typedef struct IReferenceClockImpl IReferenceClockImpl;
-
-typedef struct IDirectMusicInstrumentImpl IDirectMusicInstrumentImpl;
 
 /*****************************************************************************
  * Some stuff to make my life easier :=)
@@ -74,32 +73,32 @@ typedef struct port_info {
     ULONG device;
 } port_info;
 
-typedef struct instrument_region {
-    RGNHEADER header;
-    WAVELINK wave_link;
-    WSMPL wave_sample;
-    WLOOP wave_loop;
-    BOOL loop_present;
-} instrument_region;
-
-typedef struct instrument_articulation {
-    CONNECTIONLIST connections_list;
-    CONNECTION *connections;
-} instrument_articulation;
-
 /*****************************************************************************
  * ClassFactory
  */
 
+struct collection;
+extern void collection_internal_addref(struct collection *collection);
+extern void collection_internal_release(struct collection *collection);
+extern HRESULT collection_get_wave(struct collection *collection, DWORD index, IDirectMusicObject **out);
+
 /* CLSID */
-extern HRESULT DMUSIC_CreateDirectMusicImpl(REFIID riid, void **ret_iface, IUnknown *pUnkOuter);
-extern HRESULT DMUSIC_CreateDirectMusicCollectionImpl(REFIID riid, void **ppobj, IUnknown *pUnkOuter);
+extern HRESULT music_create(IUnknown **ret_iface);
+extern HRESULT collection_create(IUnknown **ret_iface);
 
 /* Internal */
 extern HRESULT DMUSIC_CreateDirectMusicBufferImpl(LPDMUS_BUFFERDESC desc, LPVOID* ret_iface);
-extern HRESULT DMUSIC_CreateDirectMusicDownloadImpl (LPCGUID lpcGUID, LPVOID* ppobj, LPUNKNOWN pUnkOuter);
 extern HRESULT DMUSIC_CreateReferenceClockImpl (LPCGUID lpcGUID, LPVOID* ppobj, LPUNKNOWN pUnkOuter);
-extern HRESULT DMUSIC_CreateDirectMusicInstrumentImpl (LPCGUID lpcGUID, LPVOID* ppobj, LPUNKNOWN pUnkOuter);
+
+extern HRESULT download_create(DWORD size, IDirectMusicDownload **ret_iface);
+
+extern HRESULT instrument_create_from_soundfont(struct soundfont *soundfont, UINT index,
+        struct collection *collection, DMUS_OBJECTDESC *desc, IDirectMusicInstrument **ret_iface);
+extern HRESULT instrument_create_from_chunk(IStream *stream, struct chunk_entry *parent,
+        struct collection *collection, DMUS_OBJECTDESC *desc, IDirectMusicInstrument **ret_iface);
+extern HRESULT instrument_download_to_port(IDirectMusicInstrument *iface, IDirectMusicPortDownload *port,
+        IDirectMusicDownloadedInstrument **downloaded);
+extern HRESULT instrument_unload_from_port(IDirectMusicDownloadedInstrument *iface, IDirectMusicPortDownload *port);
 
 /*****************************************************************************
  * IDirectMusic8Impl implementation structure
@@ -131,30 +130,6 @@ struct IDirectMusicBufferImpl {
     REFERENCE_TIME start_time;
 };
 
-/*****************************************************************************
- * IDirectMusicDownloadedInstrumentImpl implementation structure
- */
-struct IDirectMusicDownloadedInstrumentImpl {
-    /* IUnknown fields */
-    IDirectMusicDownloadedInstrument IDirectMusicDownloadedInstrument_iface;
-    LONG ref;
-
-    /* IDirectMusicDownloadedInstrumentImpl fields */
-    BOOL downloaded;
-    void *data;
-};
-
-/*****************************************************************************
- * IDirectMusicDownloadImpl implementation structure
- */
-struct IDirectMusicDownloadImpl {
-    /* IUnknown fields */
-    IDirectMusicDownload IDirectMusicDownload_iface;
-    LONG ref;
-
-    /* IDirectMusicDownloadImpl fields */
-};
-
 /** Internal factory */
 extern HRESULT synth_port_create(IDirectMusic8Impl *parent, DMUS_PORTPARAMS *port_params,
         DMUS_PORTCAPS *port_caps, IDirectMusicPort **port);
@@ -176,62 +151,14 @@ struct IReferenceClockImpl {
     DMUS_CLOCKINFO pClockInfo;
 };
 
-typedef struct _DMUS_PRIVATE_INSTRUMENT_ENTRY {
-	struct list entry; /* for listing elements */
-	IDirectMusicInstrument* pInstrument;
-} DMUS_PRIVATE_INSTRUMENTENTRY, *LPDMUS_PRIVATE_INSTRUMENTENTRY;
-
 typedef struct _DMUS_PRIVATE_POOLCUE {
 	struct list entry; /* for listing elements */
 } DMUS_PRIVATE_POOLCUE, *LPDMUS_PRIVATE_POOLCUE;
 
 /*****************************************************************************
- * IDirectMusicInstrumentImpl implementation structure
- */
-struct IDirectMusicInstrumentImpl {
-    /* IUnknown fields */
-    IDirectMusicInstrument IDirectMusicInstrument_iface;
-    LONG ref;
-
-    /* IDirectMusicInstrumentImpl fields */
-    LARGE_INTEGER liInstrumentPosition; /* offset in a stream where instrument chunk can be found */
-    ULONG length; /* Length of the instrument in the stream */
-    GUID id;
-    INSTHEADER header;
-    WCHAR wszName[DMUS_MAX_NAME];
-    /* instrument data */
-    BOOL loaded;
-    instrument_region *regions;
-    ULONG nb_articulations;
-    instrument_articulation *articulations;
-};
-
-static inline IDirectMusicInstrumentImpl *impl_from_IDirectMusicInstrument(IDirectMusicInstrument *iface)
-{
-    return CONTAINING_RECORD(iface, IDirectMusicInstrumentImpl, IDirectMusicInstrument_iface);
-}
-
-/* custom :) */
-extern HRESULT IDirectMusicInstrumentImpl_CustomLoad(IDirectMusicInstrument *iface, IStream *stream);
-
-/**********************************************************************
- * Dll lifetime tracking declaration for dmusic.dll
- */
-extern LONG DMUSIC_refCount;
-static inline void DMUSIC_LockModule(void) { InterlockedIncrement( &DMUSIC_refCount ); }
-static inline void DMUSIC_UnlockModule(void) { InterlockedDecrement( &DMUSIC_refCount ); }
-
-
-/*****************************************************************************
  * Misc.
  */
 void dmusic_remove_port(IDirectMusic8Impl *dmusic, IDirectMusicPort *port);
-
-/* for simpler reading */
-typedef struct _DMUS_PRIVATE_CHUNK {
-	FOURCC fccID; /* FOURCC ID of the chunk */
-	DWORD dwSize; /* size of the chunk */
-} DMUS_PRIVATE_CHUNK, *LPDMUS_PRIVATE_CHUNK;
 
 /* used for generic dumping (copied from ddraw) */
 typedef struct {
@@ -246,8 +173,6 @@ extern DWORD MIDILOCALE2Patch (const MIDILOCALE *pLocale);
 /* MIDILOCALE from dwPatch */
 extern void Patch2MIDILOCALE (DWORD dwPatch, LPMIDILOCALE pLocale);
 
-/* check whether the given DWORD is even (return 0) or odd (return 1) */
-extern int even_or_odd (DWORD number);
 /* Dump whole DMUS_PORTPARAMS struct */
 extern void dump_DMUS_PORTPARAMS(LPDMUS_PORTPARAMS params);
 

@@ -623,6 +623,7 @@ static const char * const CRYPT_knownLocations[] = {
 
 static void load_root_certs(void)
 {
+    const char *additional_dir;
     unsigned int i;
 
 #ifdef __APPLE__
@@ -660,6 +661,9 @@ static void load_root_certs(void)
 
     for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations) && list_empty(&root_cert_list); i++)
         import_certs_from_path( CRYPT_knownLocations[i], TRUE );
+
+    if ((additional_dir = getenv( "WINE_ADDITIONAL_CERTS_DIR" )))
+        import_certs_from_path( additional_dir, TRUE );
 }
 
 static NTSTATUS enum_root_certs( void *args )
@@ -694,6 +698,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     close_cert_store,
     enum_root_certs,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
 
 #ifdef _WIN64
 
@@ -795,5 +801,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     close_cert_store,
     wow64_enum_root_certs,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
 
 #endif  /* _WIN64 */

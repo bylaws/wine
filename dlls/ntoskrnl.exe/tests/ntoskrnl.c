@@ -44,7 +44,6 @@
 #include "ddk/hidsdi.h"
 #include "ddk/hidpi.h"
 #include "wine/test.h"
-#include "wine/heap.h"
 #include "wine/mssign.h"
 
 #include "driver.h"
@@ -386,29 +385,29 @@ static void cat_okfile(void)
     SetFilePointer(okfile, 0, NULL, FILE_BEGIN);
     SetEndOfFile(okfile);
 
+    InterlockedAdd(&winetest_successes, InterlockedExchange(&test_data->successes, 0));
     winetest_add_failures(InterlockedExchange(&test_data->failures, 0));
+    InterlockedAdd(&winetest_todo_successes, InterlockedExchange(&test_data->todo_successes, 0));
     winetest_add_failures(InterlockedExchange(&test_data->todo_failures, 0));
+    InterlockedAdd(&winetest_skipped, InterlockedExchange(&test_data->skipped, 0));
 }
 
 static ULONG64 modified_value;
 
 static void main_test(void)
 {
-    struct main_test_input *test_input;
+    struct main_test_input test_input;
     DWORD size;
     BOOL res;
 
-    test_input = heap_alloc( sizeof(*test_input) );
-    test_input->process_id = GetCurrentProcessId();
-    test_input->teststr_offset = (SIZE_T)((BYTE *)&teststr - (BYTE *)NtCurrentTeb()->Peb->ImageBaseAddress);
-    test_input->modified_value = &modified_value;
+    test_input.process_id = GetCurrentProcessId();
+    test_input.teststr_offset = (SIZE_T)((BYTE *)&teststr - (BYTE *)NtCurrentTeb()->Peb->ImageBaseAddress);
+    test_input.modified_value = &modified_value;
     modified_value = 0;
 
-    res = DeviceIoControl(device, IOCTL_WINETEST_MAIN_TEST, test_input, sizeof(*test_input), NULL, 0, &size, NULL);
+    res = DeviceIoControl(device, IOCTL_WINETEST_MAIN_TEST, &test_input, sizeof(test_input), NULL, 0, &size, NULL);
     ok(res, "DeviceIoControl failed: %lu\n", GetLastError());
     ok(!size, "got size %lu\n", size);
-
-    heap_free(test_input);
 }
 
 static void test_basic_ioctl(void)
@@ -673,7 +672,7 @@ static void do_return_status(ULONG ioctl, struct return_status_params *params)
     }
     else
     {
-        ok(GetLastError() == RtlNtStatusToDosError(expect_status), "got error %lu\n", GetLastError());
+        ok(GetLastError() == RtlNtStatusToDosErrorNoTeb(expect_status), "got error %lu\n", GetLastError());
     }
     if (NT_ERROR(expect_status))
         ok(size == 0xdeadf00d, "got size %lu\n", size);
@@ -1875,7 +1874,7 @@ static void test_pnp_driver(struct testsign_context *ctx)
     GetFullPathNameA("winetest.inf", sizeof(path), path, NULL);
     ret = SetupCopyOEMInfA(path, NULL, 0, 0, dest, sizeof(dest), NULL, &filepart);
     ok(ret, "Failed to copy INF, error %#lx\n", GetLastError());
-    ret = SetupUninstallOEMInfA(filepart, 0, NULL);
+    ret = SetupUninstallOEMInfA(filepart, SUOI_FORCEDELETE, NULL);
     ok(ret, "Failed to uninstall INF, error %lu\n", GetLastError());
 
     ret = DeleteFileA("winetest.cat");

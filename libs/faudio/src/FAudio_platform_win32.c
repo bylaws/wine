@@ -210,8 +210,14 @@ void FAudio_PlatformInit(
 	HRESULT hr;
 	HANDLE audioEvent = NULL;
 	BOOL has_sse2 = IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE);
-
-	FAudio_INTERNAL_InitSIMDFunctions(has_sse2, FALSE);
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
+	BOOL has_neon = TRUE;
+#elif defined(__arm__) || defined(_M_ARM)
+	BOOL has_neon = IsProcessorFeaturePresent(PF_ARM_NEON_INSTRUCTIONS_AVAILABLE);
+#else
+	BOOL has_neon = FALSE;
+#endif
+	FAudio_INTERNAL_InitSIMDFunctions(has_sse2, has_neon);
 	FAudio_resolve_SetThreadDescription();
 
 	FAudio_PlatformAddRef();
@@ -444,8 +450,8 @@ uint32_t FAudio_PlatformGetDeviceDetails(
 	hr = IMMDevice_GetId(device, &str);
 	FAudio_assert(!FAILED(hr) && "Failed to get audio endpoint id!");
 
-	lstrcpynW(details->DeviceID, str, ARRAYSIZE(details->DeviceID) - 1);
-	lstrcpynW(details->DisplayName, str, ARRAYSIZE(details->DisplayName) - 1);
+	lstrcpynW((WCHAR *)details->DeviceID, str, ARRAYSIZE(details->DeviceID) - 1);
+	lstrcpynW((WCHAR *)details->DisplayName, str, ARRAYSIZE(details->DisplayName) - 1);
 	CoTaskMemFree(str);
 
 	hr = IMMDevice_Activate(
@@ -739,7 +745,7 @@ FAudioIOStream* FAudio_memopen(void *mem, int len)
 uint8_t* FAudio_memptr(FAudioIOStream *io, size_t offset)
 {
 	struct FAudio_mem *memio = io->data;
-	return memio->mem + offset;
+	return (uint8_t *)memio->mem + offset;
 }
 
 void FAudio_close(FAudioIOStream *io)
@@ -896,7 +902,7 @@ FAUDIOAPI float XNA_PlaySong(const char *name)
 	IMFAttributes *attributes = NULL;
 	IMFMediaType *media_type = NULL;
 	UINT32 channels, samplerate;
-	UINT64 duration;
+	INT64 duration;
 	PROPVARIANT var;
 	HRESULT hr;
 	WCHAR filename_w[MAX_PATH];
@@ -1096,7 +1102,7 @@ static HRESULT FAudio_WMAMF_ProcessInput(
 
 	copy_size = min(buffer->AudioBytes - impl->input_pos, impl->input_size);
 	if (!copy_size) return S_FALSE;
-	LOG_INFO(voice->audio, "pushing %x bytes at %x", copy_size, impl->input_pos);
+	LOG_INFO(voice->audio, "pushing %lx bytes at %Ix", copy_size, impl->input_pos);
 
 	hr = MFCreateSample(&sample);
 	FAudio_assert(!FAILED(hr) && "Failed to create sample!");
@@ -1124,7 +1130,7 @@ static HRESULT FAudio_WMAMF_ProcessInput(
 	if (hr == MF_E_NOTACCEPTING) return S_OK;
 	if (FAILED(hr))
 	{
-		LOG_ERROR(voice->audio, "IMFTransform_ProcessInput returned %#x", hr);
+		LOG_ERROR(voice->audio, "IMFTransform_ProcessInput returned %#lx", hr);
 		return hr;
 	}
 
@@ -1151,7 +1157,7 @@ static HRESULT FAudio_WMAMF_ProcessOutput(
 		if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return S_FALSE;
 		if (FAILED(hr))
 		{
-			LOG_ERROR(voice->audio, "IMFTransform_ProcessInput returned %#x", hr);
+			LOG_ERROR(voice->audio, "IMFTransform_ProcessInput returned %#lx", hr);
 			return hr;
 		}
 
@@ -1183,7 +1189,7 @@ static HRESULT FAudio_WMAMF_ProcessOutput(
 		}
 		FAudio_memcpy(impl->output_buf + impl->output_pos, copy_buf, copy_size);
 		impl->output_pos += copy_size;
-		LOG_INFO(voice->audio, "pulled %x bytes at %x", copy_size, impl->output_pos);
+		LOG_INFO(voice->audio, "pulled %lx bytes at %Ix", copy_size, impl->output_pos);
 		hr = IMFMediaBuffer_Unlock(media_buffer);
 		FAudio_assert(!FAILED(hr) && "Failed to unlock buffer bytes!");
 
@@ -1282,7 +1288,7 @@ static void FAudio_INTERNAL_DecodeWMAMF(
 	FAudio_zero(decodeCache + copy_size, samples_size - copy_size);
 	LOG_INFO(
 		voice->audio,
-		"decoded %x / %x bytes, copied %x / %x bytes",
+		"decoded %Ix / %Ix bytes, copied %Ix / %Ix bytes",
 		impl->output_pos,
 		impl->output_size,
 		copy_size,
@@ -1300,6 +1306,7 @@ error:
 uint32_t FAudio_WMADEC_init(FAudioSourceVoice *voice, uint32_t type)
 {
 	static const uint8_t fake_codec_data[16] = {0, 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	uint8_t fake_codec_data_wma3[18] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 224, 0, 0, 0};
 	const FAudioWaveFormatExtensible *wfx = (FAudioWaveFormatExtensible *)voice->src.format;
 	struct FAudioWMADEC *impl;
 	MFT_OUTPUT_STREAM_INFO info = {0};
@@ -1361,11 +1368,17 @@ uint32_t FAudio_WMADEC_init(FAudioSourceVoice *voice, uint32_t type)
 		FAudio_assert(!FAILED(hr) && "Failed set input block align!");
 		break;
 	case FAUDIO_FORMAT_WMAUDIO3:
+                *(uint16_t *)fake_codec_data_wma3  = voice->src.format->wBitsPerSample;
+                for (i = 0; i < voice->src.format->nChannels; i++)
+                {
+                    fake_codec_data_wma3[2] <<= 1;
+                    fake_codec_data_wma3[2] |= 1;
+                }
 		hr = IMFMediaType_SetBlob(
 			media_type,
 			&MF_MT_USER_DATA,
-			(void *)&wfx->Samples,
-			wfx->Format.cbSize
+			(void *)fake_codec_data_wma3,
+			sizeof(fake_codec_data_wma3)
 		);
 		FAudio_assert(!FAILED(hr) && "Failed set codec private data!");
 		hr = IMFMediaType_SetGUID(

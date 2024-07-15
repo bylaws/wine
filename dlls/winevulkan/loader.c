@@ -39,20 +39,6 @@ static HINSTANCE hinstance;
 
 static void *wine_vk_get_global_proc_addr(const char *name);
 
-#define wine_vk_find_struct(s, t) wine_vk_find_struct_((void *)s, VK_STRUCTURE_TYPE_##t)
-static void *wine_vk_find_struct_(void *s, VkStructureType t)
-{
-    VkBaseOutStructure *header;
-
-    for (header = s; header; header = header->pNext)
-    {
-        if (header->sType == t)
-            return header;
-    }
-
-    return NULL;
-}
-
 VkResult WINAPI vkEnumerateInstanceLayerProperties(uint32_t *count, VkLayerProperties *properties)
 {
     TRACE("%p, %p\n", count, properties);
@@ -430,6 +416,41 @@ static void fill_luid_property(VkPhysicalDeviceProperties2 *properties2)
             device_node_mask);
 }
 
+static void fixup_device_id(UINT *vendor_id, UINT *device_id)
+{
+    const char *sgi;
+
+    if (*vendor_id == 0x10de /* NVIDIA */ && (sgi = getenv("WINE_HIDE_NVIDIA_GPU")) && *sgi != '0')
+    {
+        *vendor_id = 0x1002; /* AMD */
+        *device_id = 0x73df; /* RX 6700XT */
+    }
+    else if (*vendor_id == 0x1002 /* AMD */ && (sgi = getenv("WINE_HIDE_AMD_GPU")) && *sgi != '0')
+    {
+        *vendor_id = 0x10de; /* NVIDIA */
+        *device_id = 0x2487; /* RTX 3060 */
+    }
+    else if (*vendor_id == 0x1002 && (*device_id == 0x163f || *device_id == 0x1435) && (sgi = getenv("WINE_HIDE_VANGOGH_GPU")) && *sgi != '0')
+    {
+        *device_id = 0x687f; /* Radeon RX Vega 56/64 */
+    }
+}
+
+void WINAPI vkGetPhysicalDeviceProperties(VkPhysicalDevice physical_device,
+        VkPhysicalDeviceProperties *properties)
+{
+    struct vkGetPhysicalDeviceProperties_params params;
+    NTSTATUS status;
+
+    TRACE("%p, %p\n", physical_device, properties);
+
+    params.physicalDevice = physical_device;
+    params.pProperties = properties;
+    status = UNIX_CALL(vkGetPhysicalDeviceProperties, &params);
+    assert(!status);
+    fixup_device_id(&properties->vendorID, &properties->deviceID);
+}
+
 void WINAPI vkGetPhysicalDeviceProperties2(VkPhysicalDevice phys_dev,
         VkPhysicalDeviceProperties2 *properties2)
 {
@@ -443,6 +464,7 @@ void WINAPI vkGetPhysicalDeviceProperties2(VkPhysicalDevice phys_dev,
     status = UNIX_CALL(vkGetPhysicalDeviceProperties2, &params);
     assert(!status);
     fill_luid_property(properties2);
+    fixup_device_id(&properties2->properties.vendorID, &properties2->properties.deviceID);
 }
 
 void WINAPI vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice phys_dev,
@@ -458,6 +480,7 @@ void WINAPI vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice phys_dev,
     status = UNIX_CALL(vkGetPhysicalDeviceProperties2KHR, &params);
     assert(!status);
     fill_luid_property(properties2);
+    fixup_device_id(&properties2->properties.vendorID, &properties2->properties.deviceID);
 }
 
 VkResult WINAPI vkCreateDevice(VkPhysicalDevice phys_dev, const VkDeviceCreateInfo *create_info,
@@ -602,20 +625,24 @@ void WINAPI vkFreeCommandBuffers(VkDevice device, VkCommandPool cmd_pool, uint32
     }
 }
 
-static BOOL WINAPI call_vulkan_debug_report_callback( struct wine_vk_debug_report_params *params, ULONG size )
+static NTSTATUS WINAPI call_vulkan_debug_report_callback( void *args, ULONG size )
 {
-    return params->user_callback(params->flags, params->object_type, params->object_handle, params->location,
-                                 params->code, params->layer_prefix, params->message, params->user_data);
+    struct wine_vk_debug_report_params *params = args;
+    VkBool32 ret = params->user_callback(params->flags, params->object_type, params->object_handle, params->location,
+                                         params->code, params->layer_prefix, params->message, params->user_data);
+    return NtCallbackReturn( &ret, sizeof(ret), STATUS_SUCCESS );
 }
 
-static BOOL WINAPI call_vulkan_debug_utils_callback( struct wine_vk_debug_utils_params *params, ULONG size )
+static NTSTATUS WINAPI call_vulkan_debug_utils_callback( void *args, ULONG size )
 {
-    return params->user_callback(params->severity, params->message_types, &params->data, params->user_data);
+    struct wine_vk_debug_utils_params *params = args;
+    VkBool32 ret = params->user_callback(params->severity, params->message_types, &params->data, params->user_data);
+    return NtCallbackReturn( &ret, sizeof(ret), STATUS_SUCCESS );
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)
 {
-    void **kernel_callback_table;
+    KERNEL_CALLBACK_PROC *kernel_callback_table;
 
     TRACE("%p, %lu, %p\n", hinst, reason, reserved);
 

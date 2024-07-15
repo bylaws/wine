@@ -54,6 +54,10 @@ struct thread
     struct process        *process;
     thread_id_t            id;            /* thread id */
     struct list            mutex_list;    /* list of currently owned mutexes */
+    int                    esync_fd;      /* esync file descriptor (signalled on exit) */
+    int                    esync_apc_fd;  /* esync apc fd (signalled when APCs are present) */
+    unsigned int           fsync_idx;
+    unsigned int           fsync_apc_idx;
     unsigned int           system_regs;   /* which system regs have been set */
     struct msg_queue      *queue;         /* message queue */
     struct thread_wait    *wait;          /* current wait condition if sleeping */
@@ -90,6 +94,11 @@ struct thread
     struct list            kernel_object; /* list of kernel object pointers */
     data_size_t            desc_len;      /* thread description length in bytes */
     WCHAR                 *desc;          /* thread description string */
+    struct object         *locked_completion; /* completion port wait object successfully waited by the thread */
+    struct object         *queue_shared_mapping; /* thread queue shared memory mapping */
+    queue_shm_t           *queue_shared;  /* thread queue shared memory ptr */
+    struct object         *input_shared_mapping; /* thread input shared memory mapping */
+    input_shm_t           *input_shared;  /* thread input shared memory ptr */
 };
 
 extern struct thread *current;
@@ -119,6 +128,7 @@ extern void thread_cancel_apc( struct thread *thread, struct object *owner, enum
 extern int thread_add_inflight_fd( struct thread *thread, int client, int server );
 extern int thread_get_inflight_fd( struct thread *thread, int client );
 extern struct token *thread_get_impersonation_token( struct thread *thread );
+extern int set_thread_priority( struct thread *thread, int priority_class, int priority );
 extern int set_thread_affinity( struct thread *thread, affinity_t affinity );
 extern int suspend_thread( struct thread *thread );
 extern int resume_thread( struct thread *thread );

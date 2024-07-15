@@ -1077,12 +1077,24 @@ static void test_SCS_SETSTR(void)
     DWORD prop;
 
     imc = ImmGetContext(hwnd);
-    ret = ImmSetCompositionStringW(imc, SCS_SETSTR, string, sizeof(string), NULL,0);
+    ret = ImmSetCompositionStringW(imc, SCS_SETSTR, string, sizeof(string), NULL, 0);
     if (!ret) {
         win_skip("Composition isn't supported\n");
         ImmReleaseContext(hwnd, imc);
         return;
     }
+
+    ret = ImmSetCompositionStringW(imc, SCS_SETSTR, NULL, 128, NULL, 128);
+    ok(ret, "got error %lu.\n", GetLastError());
+
+    alen = ImmGetCompositionStringA(imc, GCS_COMPSTR, cstring, 20);
+    ok(!alen, "got %ld.\n", alen);
+    wlen = ImmGetCompositionStringW(imc, GCS_COMPSTR, wstring, 20);
+    ok(!wlen, "got %ld.\n", alen);
+
+    ret = ImmSetCompositionStringW(imc, SCS_SETSTR, string, sizeof(string), NULL, 2);
+    ok(ret, "got error %lu.\n", GetLastError());
+
     msg_spy_flush_msgs();
 
     alen = ImmGetCompositionStringA(imc, GCS_COMPSTR, cstring, 20);
@@ -3721,7 +3733,7 @@ static void ime_cleanup( HKL hkl, BOOL free )
     {
         value_len = ARRAY_SIZE(value);
         buffer_len = sizeof(buffer);
-        if (hkl != UlongToHandle( wcstoul( buffer, NULL, 16 ) )) continue;
+        if (HandleToUlong( hkl ) != wcstoul( buffer, NULL, 16 )) continue;
         ret = RegDeleteValueW( hkey, value );
         ok( !ret, "RegDeleteValueW returned %#lx, error %lu\n", ret, GetLastError() );
     }

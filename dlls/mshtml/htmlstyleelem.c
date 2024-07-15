@@ -200,8 +200,7 @@ static HRESULT WINAPI HTMLStyleElement_get_styleSheet(IHTMLStyleElement *iface, 
         assert(nsres == NS_OK);
 
         if(ss) {
-            HRESULT hres = create_style_sheet(ss, dispex_compat_mode(&This->element.node.event_target.dispex),
-                                              &This->style_sheet);
+            HRESULT hres = create_style_sheet(ss, This->element.node.doc, &This->style_sheet);
             nsIDOMStyleSheet_Release(ss);
             if(FAILED(hres))
                 return hres;
@@ -360,54 +359,39 @@ static const IHTMLStyleElement2Vtbl HTMLStyleElement2Vtbl = {
     HTMLStyleElement2_get_sheet
 };
 
-static inline HTMLStyleElement *impl_from_HTMLDOMNode(HTMLDOMNode *iface)
+static inline HTMLStyleElement *impl_from_DispatchEx(DispatchEx *iface)
 {
-    return CONTAINING_RECORD(iface, HTMLStyleElement, element.node);
+    return CONTAINING_RECORD(iface, HTMLStyleElement, element.node.event_target.dispex);
 }
 
-static HRESULT HTMLStyleElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
+static void *HTMLStyleElement_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLStyleElement *This = impl_from_HTMLDOMNode(iface);
+    HTMLStyleElement *This = impl_from_DispatchEx(dispex);
 
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        TRACE("(%p)->(IID_IUnknown %p)\n", This, ppv);
-        *ppv = &This->IHTMLStyleElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        TRACE("(%p)->(IID_IDispatch %p)\n", This, ppv);
-        *ppv = &This->IHTMLStyleElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLStyleElement, riid)) {
-        TRACE("(%p)->(IID_IHTMLStyleElement %p)\n", This, ppv);
-        *ppv = &This->IHTMLStyleElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLStyleElement2, riid)) {
-        TRACE("(%p)->(IID_IHTMLStyleElement2 %p)\n", This, ppv);
-        *ppv = &This->IHTMLStyleElement2_iface;
-    }else {
-        return HTMLElement_QI(&This->element.node, riid, ppv);
-    }
+    if(IsEqualGUID(&IID_IHTMLStyleElement, riid))
+        return &This->IHTMLStyleElement_iface;
+    if(IsEqualGUID(&IID_IHTMLStyleElement2, riid))
+        return &This->IHTMLStyleElement2_iface;
 
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
 }
 
-static void HTMLStyleElement_destructor(HTMLDOMNode *iface)
+static void HTMLStyleElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
 {
-    HTMLStyleElement *This = impl_from_HTMLDOMNode(iface);
+    HTMLStyleElement *This = impl_from_DispatchEx(dispex);
+    HTMLElement_traverse(dispex, cb);
 
-    unlink_ref(&This->style_sheet);
-    HTMLElement_destructor(iface);
-}
-
-static void HTMLStyleElement_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
-{
-    HTMLStyleElement *This = impl_from_HTMLDOMNode(iface);
-
+    if(This->style_sheet)
+        note_cc_edge((nsISupports*)This->style_sheet, "style_sheet", cb);
     if(This->nsstyle)
-        note_cc_edge((nsISupports*)This->nsstyle, "This->nsstyle", cb);
+        note_cc_edge((nsISupports*)This->nsstyle, "nsstyle", cb);
 }
 
-static void HTMLStyleElement_unlink(HTMLDOMNode *iface)
+static void HTMLStyleElement_unlink(DispatchEx *dispex)
 {
-    HTMLStyleElement *This = impl_from_HTMLDOMNode(iface);
+    HTMLStyleElement *This = impl_from_DispatchEx(dispex);
+    HTMLElement_unlink(dispex);
+    unlink_ref(&This->style_sheet);
     unlink_ref(&This->nsstyle);
 }
 
@@ -429,33 +413,32 @@ static void HTMLStyleElement_init_dispex_info(dispex_data_t *info, compat_mode_t
 }
 
 static const NodeImplVtbl HTMLStyleElementImplVtbl = {
-    &CLSID_HTMLStyleElement,
-    HTMLStyleElement_QI,
-    HTMLStyleElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    HTMLStyleElement_traverse,
-    HTMLStyleElement_unlink
+    .clsid                 = &CLSID_HTMLStyleElement,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .get_attr_col          = HTMLElement_get_attr_col,
+};
+
+static const event_target_vtbl_t HTMLStyleElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLStyleElement_query_interface,
+        .destructor     = HTMLElement_destructor,
+        .traverse       = HTMLStyleElement_traverse,
+        .unlink         = HTMLStyleElement_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
+    .handle_event       = HTMLElement_handle_event
 };
 
 static const tid_t HTMLStyleElement_iface_tids[] = {
     HTMLELEMENT_TIDS,
     0
 };
-static dispex_static_data_t HTMLStyleElement_dispex = {
-    L"HTMLStyleElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+dispex_static_data_t HTMLStyleElement_dispex = {
+    "HTMLStyleElement",
+    &HTMLStyleElement_event_target_vtbl.dispex_vtbl,
+    PROTO_ID_HTMLStyleElement,
     DispHTMLStyleElement_tid,
     HTMLStyleElement_iface_tids,
     HTMLStyleElement_init_dispex_info

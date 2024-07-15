@@ -28,8 +28,8 @@
 #include "unixlib.h"
 #include "mmdevdrv.h"
 
-extern HRESULT MMDevEnum_Create(REFIID riid, void **ppv) DECLSPEC_HIDDEN;
-extern void MMDevEnum_Free(void) DECLSPEC_HIDDEN;
+extern HRESULT MMDevEnum_Create(REFIID riid, void **ppv);
+extern void MMDevEnum_Free(void);
 
 typedef struct _DriverFuncs {
     HMODULE module;
@@ -42,17 +42,11 @@ typedef struct _DriverFuncs {
      * valid. See enum _DriverPriority. */
     int priority;
 
+    void (WINAPI *pget_device_guid)(EDataFlow flow, const char *name, GUID *guid);
     BOOL (WINAPI *pget_device_name_from_guid)(GUID *guid, char **name, EDataFlow *flow);
-    /* ids gets an array of human-friendly endpoint names
-     * keys gets an array of driver-specific stuff that is used
-     *   in GetAudioEndpoint to identify the endpoint
-     * it is the caller's responsibility to free both arrays, and
-     *   all of the elements in both arrays with HeapFree() */
-    HRESULT (WINAPI *pGetEndpointIDs)(EDataFlow flow, WCHAR ***ids,
-            GUID **guids, UINT *num, UINT *default_index);
 } DriverFuncs;
 
-extern DriverFuncs drvs DECLSPEC_HIDDEN;
+extern DriverFuncs drvs;
 
 typedef struct MMDevice {
     IMMDevice IMMDevice_iface;
@@ -75,14 +69,14 @@ static inline void wine_unix_call(const unsigned int code, void *args)
     assert(!status);
 }
 
-extern HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out) DECLSPEC_HIDDEN;
-extern HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **ppv) DECLSPEC_HIDDEN;
-extern HRESULT AudioSessionManager_Create(IMMDevice *device, IAudioSessionManager2 **ppv) DECLSPEC_HIDDEN;
-extern HRESULT SpatialAudioClient_Create(IMMDevice *device, ISpatialAudioClient **out) DECLSPEC_HIDDEN;
+extern HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out);
+extern HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **ppv);
+extern HRESULT AudioSessionManager_Create(IMMDevice *device, IAudioSessionManager2 **ppv);
+extern HRESULT SpatialAudioClient_Create(IMMDevice *device, ISpatialAudioClient **out);
 
-extern HRESULT load_devices_from_reg(void) DECLSPEC_HIDDEN;
-extern HRESULT load_driver_devices(EDataFlow flow) DECLSPEC_HIDDEN;
+extern HRESULT load_devices_from_reg(void);
+extern HRESULT load_driver_devices(EDataFlow flow);
 
-extern void main_loop_stop(void) DECLSPEC_HIDDEN;
+extern void main_loop_stop(void);
 
-extern const WCHAR drv_keyW[] DECLSPEC_HIDDEN;
+extern const WCHAR drv_keyW[];
