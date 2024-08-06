@@ -1187,6 +1187,39 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
     return proc;
 }
 
+#ifdef __arm64ec__
+static IMAGE_ARM64EC_METADATA *get_module_arm64ec_metadata( HMODULE module )
+{
+    IMAGE_LOAD_CONFIG_DIRECTORY *cfg;
+    ULONG size;
+
+    if (!(cfg = RtlImageDirectoryEntryToData( module, TRUE,
+                                              IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size )))
+        return NULL;
+
+    size = min( size, cfg->Size );
+    if (size <= offsetof( IMAGE_LOAD_CONFIG_DIRECTORY, CHPEMetadataPointer )) return NULL;
+
+    return (IMAGE_ARM64EC_METADATA *)cfg->CHPEMetadataPointer;
+}
+
+static void *redirect_arm64ec_ptr( HMODULE module, void *ptr,
+                                   const IMAGE_ARM64EC_REDIRECTION_ENTRY *map, ULONG map_count )
+{
+
+    int min = 0, max = map_count - 1;
+    ULONG_PTR rva = (char *)ptr - (char *)module;
+
+    while (min <= max)
+    {
+        int pos = (min + max) / 2;
+        if (map[pos].Source == rva) return get_rva( module, map[pos].Destination );
+        if (map[pos].Source < rva) min = pos + 1;
+        else max = pos - 1;
+    }
+    return ptr;
+}
+#endif
 
 /*************************************************************************
  *		import_dll
@@ -1203,6 +1236,16 @@ static BOOL import_dll( HMODULE module, const IMAGE_IMPORT_DESCRIPTOR *descr, LP
     const IMAGE_EXPORT_DIRECTORY *exports;
     DWORD exp_size;
     const IMAGE_THUNK_DATA *import_list;
+#ifdef __arm64ec__
+    extern IMAGE_DOS_HEADER __ImageBase;
+    HMODULE ntdll_mod = (HMODULE)&__ImageBase;
+    IMAGE_ARM64EC_METADATA *ntdll_metadata = get_module_arm64ec_metadata( ntdll_mod );
+    IMAGE_ARM64EC_METADATA *metadata = get_module_arm64ec_metadata( module );
+    IMAGE_THUNK_DATA *aux_thunk_list, *iat, *aux_iat = metadata ? get_rva( module, metadata->AuxiliaryIAT ) : NULL;
+    const IMAGE_ARM64EC_REDIRECTION_ENTRY *ntdll_map = ntdll_metadata ? get_rva( ntdll_mod, ntdll_metadata->RedirectionMetadata ) : NULL;
+    PVOID aux_protect_base;
+    DWORD iat_size;
+#endif
     IMAGE_THUNK_DATA *thunk_list;
     WCHAR buffer[256];
     const char *name = get_rva( module, descr->Name );
@@ -1245,6 +1288,17 @@ static BOOL import_dll( HMODULE module, const IMAGE_IMPORT_DESCRIPTOR *descr, LP
     protect_size *= sizeof(*thunk_list);
     NtProtectVirtualMemory( NtCurrentProcess(), &protect_base,
                             &protect_size, PAGE_READWRITE, &protect_old );
+
+#ifdef __arm64ec__
+    iat = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_IAT, &iat_size );
+    aux_thunk_list = aux_iat + (thunk_list - iat);
+    if (aux_thunk_list)
+    {
+        aux_protect_base = aux_thunk_list;
+        NtProtectVirtualMemory( NtCurrentProcess(), &aux_protect_base,
+                                &protect_size, PAGE_READWRITE, &protect_old );
+    }
+#endif
 
     imp_mod = wmImp->ldr.DllBase;
     exports = RtlImageDirectoryEntryToData( imp_mod, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &exp_size );
@@ -1308,14 +1362,34 @@ static BOOL import_dll( HMODULE module, const IMAGE_IMPORT_DESCRIPTOR *descr, LP
             }
             TRACE_(imports)("--- %s %s.%d = %p\n",
                             pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
+
+#ifdef __arm64ec__
+            if (aux_thunk_list && !strcmp((const char*)pe_name->Name, "__chkstk_arm64ec"))
+            {
+                aux_thunk_list->u1.Function =
+                    (ULONG_PTR)redirect_arm64ec_ptr( ntdll_mod, (void *)thunk_list->u1.Function, ntdll_map,
+                                                     ntdll_metadata->RedirectionMetadataCount );
+            }
+#endif
         }
         import_list++;
         thunk_list++;
+#ifdef __arm64ec__
+        if (aux_thunk_list) aux_thunk_list++;
+#endif
     }
 
 done:
     /* restore old protection of the import address table */
-    NtProtectVirtualMemory( NtCurrentProcess(), &protect_base, &protect_size, protect_old, &protect_old );
+    NtProtectVirtualMemory( NtCurrentProcess(), &protect_base, &protect_size, protect_old, NULL );
+#ifdef __arm64ec__
+    if (aux_thunk_list)
+    {
+        NtProtectVirtualMemory( NtCurrentProcess(), &aux_protect_base,
+                                &protect_size, protect_old, NULL );
+    }
+#endif
+
     *pwm = wmImp;
     return TRUE;
 }
