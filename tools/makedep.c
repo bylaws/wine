@@ -4605,7 +4605,10 @@ int main( int argc, char *argv[] )
         strarray_add( &target_flags[arch], target );
         arch_dirs[arch] = strmake( "%s-windows/", archs.str[arch] );
         arch_pe_dirs[arch] = arch_dirs[arch];
-        arch_install_dirs[arch] = strmake( "$(dlldir)/%s", arch_dirs[arch] );
+        if (!strcmp( archs.str[arch], "arm64ec" ))
+            arch_install_dirs[arch] = "$(dlldir)/aarch64-windows/";
+        else
+            arch_install_dirs[arch] = strmake( "$(dlldir)/%s", arch_dirs[arch] );
         strip_progs[arch] = strmake( "%s-strip", target );
         dll_ext[arch] = "";
     }
