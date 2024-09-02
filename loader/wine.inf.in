@@ -155,7 +155,10 @@ AddReg=\
     Tapi,\
     ThemeManager,\
     VersionInfo,\
-    LicenseInformation
+    LicenseInformation,\
+    NVIDIANGX, \
+    ProtonOverrides,\
+    SteamClient.ntamd64
 
 [Wow64Install.ntx86]
 RegisterDlls=RegisterDllsSection
