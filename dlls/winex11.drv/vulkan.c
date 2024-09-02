@@ -429,7 +429,7 @@ static VkResult X11DRV_vkCreateInstance(const VkInstanceCreateInfo *create_info,
     if ((callback = (VkCreateInfoWineInstanceCallback *)create_info->pNext)
             && callback->sType == VK_STRUCTURE_TYPE_CREATE_INFO_WINE_INSTANCE_CALLBACK)
     {
-        native_create_instance = callback->native_create_callback;
+        native_create_instance = (PFN_native_vkCreateInstance)(ULONG_PTR)callback->native_create_callback;
         native_create_instance_context = callback->context;
     }
 

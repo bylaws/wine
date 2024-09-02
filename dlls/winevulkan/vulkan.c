@@ -1086,7 +1086,7 @@ VkResult wine_vkCreateDevice(VkPhysicalDevice phys_dev_handle, const VkDeviceCre
     if ((callback = (VkCreateInfoWineDeviceCallback *)create_info->pNext)
             && callback->sType == VK_STRUCTURE_TYPE_CREATE_INFO_WINE_DEVICE_CALLBACK)
     {
-        native_create_device = callback->native_create_callback;
+        native_create_device = (PFN_native_vkCreateDevice)(ULONG_PTR)callback->native_create_callback;
         native_create_device_context = callback->context;
     }
 
