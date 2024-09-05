@@ -23,6 +23,10 @@
  *  - Some types of binding handles
  */
 
+#if 0
+#pragma makedep arm64ec_x64
+#endif
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>

@@ -47,6 +47,10 @@
  *
  */
 
+#if 0
+#pragma makedep arm64ec_x64
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
