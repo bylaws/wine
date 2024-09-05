@@ -1,8 +1,8 @@
 @ stdcall agsDeInit(ptr)
 @ stdcall agsDeInitialize(ptr)
 @ stdcall agsCheckDriverVersion(ptr long)
-@ stdcall -norelay -arch=win64 agsDriverExtensions_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensions_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
 @ stub agsDriverExtensions_IASetPrimitiveTopology
 @ stub agsDriverExtensionsDX11_CreateBuffer
 @ stub agsDriverExtensions_CreateBuffer
@@ -17,19 +17,19 @@
 @ stdcall agsDriverExtensions_DeInit(ptr)
 @ stdcall agsDriverExtensionsDX11_DeInit(ptr)
 @ stub agsDriverExtensionsDX11_Destroy
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_DestroyDevice()
-@ stdcall -norelay -arch=win64 agsDriverExtensions_EndUAVOverlap() DX11_EndUAVOverlap_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_EndUAVOverlap() DX11_EndUAVOverlap_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_DestroyDevice()
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensions_EndUAVOverlap() DX11_EndUAVOverlap_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_EndUAVOverlap() DX11_EndUAVOverlap_impl
 @ stub agsDriverExtensionsDX11_GetMaxClipRects
 @ stub agsDriverExtensionsDX11_IASetPrimitiveTopology
 @ stdcall agsDriverExtensions_Init(ptr ptr ptr)
 @ stdcall agsDriverExtensionsDX11_Init(ptr ptr long ptr)
-@ stdcall -norelay -arch=win64 agsDriverExtensions_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirectCountIndirect() DX11_MultiDrawIndexedInstancedIndirectCountIndirect_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensions_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawInstancedIndirectCountIndirect() DX11_MultiDrawInstancedIndirectCountIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensions_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirectCountIndirect() DX11_MultiDrawIndexedInstancedIndirectCountIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensions_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_MultiDrawInstancedIndirectCountIndirect() DX11_MultiDrawInstancedIndirectCountIndirect_impl
 @ stub agsDriverExtensionsDX11_NotifyResourceBeginAllAccess
 @ stub agsDriverExtensionsDX11_NotifyResourceEndAllAccess
 @ stub agsDriverExtensionsDX11_NotifyResourceEndWrites
@@ -38,8 +38,8 @@
 @ stub agsDriverExtensions_NotifyResourceEndWrites
 @ stub agsDriverExtensionsDX11_NumPendingAsyncCompileJobs
 @ stub agsDriverExtensionsDX11_SetClipRects
-@ stdcall -norelay -arch=win64 agsDriverExtensions_SetDepthBounds() DX11_SetDepthBounds_impl
-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_SetDepthBounds() DX11_SetDepthBounds_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensions_SetDepthBounds() DX11_SetDepthBounds_impl
+@ stdcall -norelay -arch=x86_64,arm64ec agsDriverExtensionsDX11_SetDepthBounds() DX11_SetDepthBounds_impl
 @ stdcall agsDriverExtensionsDX11_SetDiskShaderCacheEnabled(ptr long)
 @ stub agsDriverExtensionsDX11_SetMaxAsyncCompileThreadCount
 @ stub agsDriverExtensionsDX11_SetViewBroadcastMasks

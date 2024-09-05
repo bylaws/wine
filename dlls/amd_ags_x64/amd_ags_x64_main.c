@@ -1,3 +1,7 @@
+#if 0
+#pragma makedep arm64ec_x64
+#endif
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <assert.h>
