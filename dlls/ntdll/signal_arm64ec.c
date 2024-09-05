@@ -82,8 +82,9 @@ static inline BOOL is_valid_arm64ec_frame( ULONG_PTR frame )
 
 static inline BOOL enter_syscall_callback(void)
 {
-    if (get_arm64ec_cpu_area()->InSyscallCallback) return FALSE;
-    get_arm64ec_cpu_area()->InSyscallCallback = 1;
+    CHPE_V2_CPU_AREA_INFO *cpu_area = get_arm64ec_cpu_area();
+    if (cpu_area->InSyscallCallback || cpu_area->InSimulation) return FALSE;
+    cpu_area->InSyscallCallback = 1;
     return TRUE;
 }
 

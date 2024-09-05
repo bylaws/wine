@@ -1505,7 +1505,7 @@ static void expect_notifications_( ULONG64 *results, UINT count, const struct ex
     if (syscall)
     {
         CHPE_V2_CPU_AREA_INFO *cpu_area = NtCurrentTeb()->ChpeV2CpuAreaInfo;
-        if (cpu_area && cpu_area->InSyscallCallback) count = 0;
+        if (cpu_area && (cpu_area->InSyscallCallback || cpu_area->InSimulation)) count = 0;
     }
 #endif
 
@@ -1781,7 +1781,8 @@ static void test_notifications( HMODULE module, CROSS_PROCESS_WORK_LIST *list )
         status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
                                      ViewShare, 0, PAGE_READONLY );
 #ifdef _WIN64
-        if (NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback)
+        if (NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback ||
+            NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation)
         {
             ok( status == STATUS_SUCCESS, "NtMapViewOfSection failed %lx\n", status );
             expect_notifications( results, 0, NULL, TRUE );
@@ -2219,6 +2220,10 @@ static void test_memory_notifications(void)
         NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback++;
         test_notifications( module, (CROSS_PROCESS_WORK_LIST *)info->CrossProcessWorkList );
         NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback--;
+
+        NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation++;
+        test_notifications( module, (CROSS_PROCESS_WORK_LIST *)info->CrossProcessWorkList );
+        NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation--;
     }
     skip( "arm64ec shared info not found\n" );
 }
