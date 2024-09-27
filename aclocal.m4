@@ -201,6 +201,12 @@ AC_LINK_IFELSE([AC_LANG_SOURCE([[void *__os_arm64x_dispatch_ret = 0;
 #if defined(__clang_major__) && defined(MIN_CLANG_VERSION) && __clang_major__ < MIN_CLANG_VERSION
 #error Too old clang version
 #endif
+void *__os_arm64x_dispatch_call_no_redirect = 0;
+void *memcpy() {};
+void *__os_arm64x_check_icall =0;
+void *memset() {};
+void *memmove() {};
+
 int __cdecl mainCRTStartup(void) { return 0; }]])],
                [AS_VAR_SET(ac_var,yes)], [AS_VAR_SET(ac_var,no)])
 CFLAGS=$ac_wine_try_cflags_saved
