@@ -208,6 +208,10 @@ NTSTATUS arm64ec_process_init( HMODULE module )
     }
     if (!status && pThreadInit) status = pThreadInit();
     leave_syscall_callback();
+
+    __os_arm64x_check_call = arm64x_check_call;
+    __os_arm64x_check_icall = arm64x_check_call;
+    __os_arm64x_check_icall_cfg = arm64x_check_call;
     return status;
 }
 
@@ -222,6 +226,10 @@ NTSTATUS arm64ec_thread_init(void)
     enter_syscall_callback();
     if (pThreadInit) status = pThreadInit();
     leave_syscall_callback();
+
+    __os_arm64x_check_call = arm64x_check_call;
+    __os_arm64x_check_icall = arm64x_check_call;
+    __os_arm64x_check_icall_cfg = arm64x_check_call;
     return status;
 }
 
@@ -1736,13 +1744,63 @@ NTSTATUS __attribute__((naked)) __wine_unix_call_arm64ec( unixlib_handle_t handl
 
 NTSTATUS (WINAPI *__wine_unix_call_dispatcher_arm64ec)( unixlib_handle_t, unsigned int, void * ) = __wine_unix_call_arm64ec;
 
+extern const IMAGE_ARM64EC_METADATA __chpe_metadata;
+extern IMAGE_DOS_HEADER __ImageBase;
+
+void *redirect_ntdll_ptr( void *dest )
+{
+    const IMAGE_ARM64EC_REDIRECTION_ENTRY *map = (void *)((ULONG_PTR)&__ImageBase + __chpe_metadata.RedirectionMetadata);
+    int min = 0, max = __chpe_metadata.RedirectionMetadataCount - 1;
+    ULONG_PTR rva = (ULONG_PTR)dest - (ULONG_PTR)&__ImageBase;
+
+    while (min <= max)
+    {
+        int pos = (min + max) / 2;
+        if (map[pos].Source == rva) return (BYTE *)&__ImageBase + map[pos].Destination;
+        if (map[pos].Source < rva) min = pos + 1;
+        else max = pos - 1;
+    }
+
+    return dest;
+}
+
+static void __attribute__((naked)) arm64x_check_call_early(void)
+{
+    asm( "stp x29, x30, [sp,#-0xb0]!\n\t"
+         "mov x29, sp\n\t"
+         "stp x0, x1,   [sp, #0x10]\n\t"
+         "stp x2, x3,   [sp, #0x20]\n\t"
+         "stp x4, x5,   [sp, #0x30]\n\t"
+         "stp x6, x7,   [sp, #0x40]\n\t"
+         "stp x8, x9,   [sp, #0x50]\n\t"
+         "stp x10, x15, [sp, #0x60]\n\t"
+         "stp d0, d1,   [sp, #0x70]\n\t"
+         "stp d2, d3,   [sp, #0x80]\n\t"
+         "stp d4, d5,   [sp, #0x90]\n\t"
+         "stp d6, d7,   [sp, #0xa0]\n\t"
+         "mov x0, x11\n\t"  /* x0 = dest */
+         "bl \"#redirect_ntdll_ptr\"\n\t"
+         "mov x11, x0\n\t"
+         "ldp x0, x1,   [sp, #0x10]\n\t"
+         "ldp x2, x3,   [sp, #0x20]\n\t"
+         "ldp x4, x5,   [sp, #0x30]\n\t"
+         "ldp x6, x7,   [sp, #0x40]\n\t"
+         "ldp x8, x9,   [sp, #0x50]\n\t"
+         "ldp x10, x15, [sp, #0x60]\n\t"
+         "ldp d0, d1,   [sp, #0x70]\n\t"
+         "ldp d2, d3,   [sp, #0x80]\n\t"
+         "ldp d4, d5,   [sp, #0x90]\n\t"
+         "ldp d6, d7,   [sp, #0xa0]\n\t"
+         "ldp x29, x30, [sp], #0xb0\n\t"
+         "b \"#arm64x_check_call\"\n\t");
+}
 
 /**************************************************************************
  *		arm64x_check_call
  *
  * Implementation of __os_arm64x_check_call.
  */
-static void __attribute__((naked)) arm64x_check_call(void)
+void __attribute__((naked)) arm64x_check_call(void)
 {
     asm( ".seh_proc \"#arm64x_check_call\"\n\t"
          ".seh_endprologue\n\t"
@@ -1965,9 +2023,9 @@ void WINAPI LdrInitializeThunk( CONTEXT *arm_context, ULONG_PTR unk2, ULONG_PTR 
 
     if (!__os_arm64x_check_call)
     {
-        __os_arm64x_check_call = arm64x_check_call;
-        __os_arm64x_check_icall = arm64x_check_call;
-        __os_arm64x_check_icall_cfg = arm64x_check_call;
+        __os_arm64x_check_call = arm64x_check_call_early;
+        __os_arm64x_check_icall = arm64x_check_call_early;
+        __os_arm64x_check_icall_cfg = arm64x_check_call_early;
         __os_arm64x_get_x64_information = LdrpGetX64Information;
         __os_arm64x_set_x64_information = LdrpSetX64Information;
     }

@@ -329,11 +329,11 @@ static void update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
             NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, PAGE_READWRITE, &protect_old );
 
 #define SET_FUNC(func,val) update_hybrid_pointer( module, sec, metadata->func, val )
-            SET_FUNC( __os_arm64x_dispatch_call, __os_arm64x_check_call );
+            SET_FUNC( __os_arm64x_dispatch_call, arm64x_check_call );
             SET_FUNC( __os_arm64x_dispatch_call_no_redirect, __os_arm64x_dispatch_call_no_redirect );
             SET_FUNC( __os_arm64x_dispatch_fptr, __os_arm64x_dispatch_fptr );
-            SET_FUNC( __os_arm64x_dispatch_icall, __os_arm64x_check_icall );
-            SET_FUNC( __os_arm64x_dispatch_icall_cfg, __os_arm64x_check_icall_cfg );
+            SET_FUNC( __os_arm64x_dispatch_icall, arm64x_check_call );
+            SET_FUNC( __os_arm64x_dispatch_icall_cfg, arm64x_check_call );
             SET_FUNC( __os_arm64x_dispatch_ret, __os_arm64x_dispatch_ret );
             SET_FUNC( __os_arm64x_helper0, __os_arm64x_helper0 );
             SET_FUNC( __os_arm64x_helper1, __os_arm64x_helper1 );
