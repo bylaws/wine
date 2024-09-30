@@ -1454,9 +1454,6 @@ DECL_HANDLER(get_startup_info)
 DECL_HANDLER(init_process_done)
 {
     struct process *process = current->process;
-    struct memory_view *view;
-    client_ptr_t base;
-    const pe_image_info_t *image_info;
     const struct cpu_topology_override *cpu_override = get_req_data();
     unsigned int have_cpu_override = get_req_data_size() / sizeof(*cpu_override);
     unsigned int i;
