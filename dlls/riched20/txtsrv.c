@@ -483,7 +483,7 @@ HRESULT __thiscall fnTextSrv_TxGetCachedSize(ITextServices *iface, DWORD *pdwWid
 #ifdef __ASM_USE_THISCALL_WRAPPER
 
 #define STDCALL(func) (void *) __stdcall_ ## func
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 #define DEFINE_STDCALL_WRAPPER(num,func) \
     __declspec(naked) HRESULT __stdcall_##func(void) \
     { \
@@ -493,7 +493,7 @@ HRESULT __thiscall fnTextSrv_TxGetCachedSize(ITextServices *iface, DWORD *pdwWid
         __asm mov eax, [ecx] \
         __asm jmp dword ptr [eax + 4*num] \
     }
-#else /* _MSC_VER */
+#else /* defined(_MSC_VER) && !defined(__clang__) */
 #define DEFINE_STDCALL_WRAPPER(num,func) \
    extern HRESULT __stdcall_ ## func(void); \
    __ASM_GLOBAL_FUNC(__stdcall_ ## func, \
@@ -502,7 +502,7 @@ HRESULT __thiscall fnTextSrv_TxGetCachedSize(ITextServices *iface, DWORD *pdwWid
                    "pushl %eax\n\t" \
                    "movl (%ecx), %eax\n\t" \
                    "jmp *(4*(" #num "))(%eax)" )
-#endif /* _MSC_VER */
+#endif /* defined(_MSC_VER) && !defined(__clang__) */
 
 DEFINE_STDCALL_WRAPPER(3, ITextServices_TxSendMessage)
 DEFINE_STDCALL_WRAPPER(4, ITextServices_TxDraw)

@@ -1043,7 +1043,7 @@ CLIENT_CALL_RETURN WINAPIV NdrClientCall2( PMIDL_STUB_DESC desc, PFORMAT_STRING 
 /* Calls a function with the specified arguments, restoring the stack
  * properly afterwards as we don't know the calling convention of the
  * function */
-#if defined __i386__ && defined _MSC_VER
+#if defined __i386__ && defined _MSC_VER && !defined __clang__
 __declspec(naked) LONG_PTR __cdecl call_server_func(SERVER_ROUTINE func, unsigned char * args, unsigned int stack_size)
 {
     __asm
@@ -1069,7 +1069,7 @@ __declspec(naked) LONG_PTR __cdecl call_server_func(SERVER_ROUTINE func, unsigne
         ret
     }
 }
-#elif defined __i386__ && defined __GNUC__
+#elif defined __i386__
 LONG_PTR __cdecl call_server_func(SERVER_ROUTINE func, unsigned char * args, unsigned int stack_size);
 __ASM_GLOBAL_FUNC(call_server_func,
     "pushl %ebp\n\t"

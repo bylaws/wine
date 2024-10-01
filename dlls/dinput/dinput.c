@@ -45,7 +45,7 @@ static inline struct dinput *impl_from_IDirectInput8W( IDirectInput8W *iface )
     return CONTAINING_RECORD( iface, struct dinput, IDirectInput8W_iface );
 }
 
-#if defined __i386__ && defined _MSC_VER
+#if defined __i386__ && defined _MSC_VER && !defined __clang__
 __declspec(naked) BOOL enum_callback_wrapper(void *callback, const void *instance, void *ref)
 {
     __asm
@@ -59,7 +59,7 @@ __declspec(naked) BOOL enum_callback_wrapper(void *callback, const void *instanc
         ret
     }
 }
-#elif defined __i386__ && defined __GNUC__
+#elif defined __i386__
 extern BOOL enum_callback_wrapper(void *callback, const void *instance, void *ref);
 __ASM_GLOBAL_FUNC( enum_callback_wrapper,
     "pushl %ebp\n\t"

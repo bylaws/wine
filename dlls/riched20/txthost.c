@@ -623,7 +623,7 @@ HRESULT __thiscall ITextHostImpl_TxGetHorzExtent( ITextHost2 *iface, LONG *horz_
 #ifdef __ASM_USE_THISCALL_WRAPPER
 
 #define STDCALL(func) (void *) __stdcall_ ## func
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 #define DEFINE_STDCALL_WRAPPER(num,func,args) \
     __declspec(naked) HRESULT __stdcall_##func(void) \
     { \
@@ -633,7 +633,7 @@ HRESULT __thiscall ITextHostImpl_TxGetHorzExtent( ITextHost2 *iface, LONG *horz_
         __asm mov eax, [ecx] \
         __asm jmp dword ptr [eax + 4*num] \
     }
-#else /* _MSC_VER */
+#else /* defined(_MSC_VER) && !defined(__clang__) */
 #define DEFINE_STDCALL_WRAPPER(num,func,args) \
    extern HRESULT __stdcall_ ## func(void); \
    __ASM_GLOBAL_FUNC(__stdcall_ ## func, \
@@ -642,7 +642,7 @@ HRESULT __thiscall ITextHostImpl_TxGetHorzExtent( ITextHost2 *iface, LONG *horz_
                    "pushl %eax\n\t" \
                    "movl (%ecx), %eax\n\t" \
                    "jmp *(4*(" #num "))(%eax)" )
-#endif /* _MSC_VER */
+#endif /* defined(_MSC_VER) && !defined(__clang__) */
 
 DEFINE_STDCALL_WRAPPER(3,ITextHostImpl_TxGetDC,4)
 DEFINE_STDCALL_WRAPPER(4,ITextHostImpl_TxReleaseDC,8)
