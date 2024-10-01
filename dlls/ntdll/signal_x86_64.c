@@ -99,7 +99,7 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
  */
 static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT *dispatch, CONTEXT *context, BOOL dump_backtrace )
 {
-    LDR_DATA_TABLE_ENTRY *module;
+    LDR_DATA_TABLE_ENTRY *module = NULL;
     NTSTATUS status;
 
     dispatch->ImageBase = 0;
