@@ -1454,6 +1454,12 @@ void WINAPI glShaderSourceARB( GLhandleARB shaderObj, GLsizei count, const GLcha
 }
 
 
+static DWORD WINAPI mapping_thread(LPVOID param)
+{
+    UNIX_CALL( mapping_thread, NULL );
+    return 0;
+}
+
 /***********************************************************************
  *           OpenGL initialisation routine
  */
@@ -1473,6 +1479,9 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 
         kernel_callback_table = NtCurrentTeb()->Peb->KernelCallbackTable;
         kernel_callback_table[NtUserCallOpenGLDebugMessageCallback] = call_opengl_debug_message_callback;
+        if (NtCurrentTeb()->WowTebOffset)
+            CreateThread(NULL, 0, mapping_thread, NULL, 0, NULL);
+
         /* fallthrough */
     case DLL_THREAD_ATTACH:
         if ((status = UNIX_CALL( thread_attach, NtCurrentTeb() )))

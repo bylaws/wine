@@ -18662,6 +18662,13 @@ struct glSetMultisamplefvAMD_params
     const GLfloat *val;
 };
 
+struct glSetPlacedAllocatorMESA_params
+{
+    TEB *teb;
+    GLplacedMapMESA placedMap;
+    GLplacedUnmapMESA placedUnmap;
+};
+
 struct glShaderBinary_params
 {
     TEB *teb;
@@ -25335,6 +25342,7 @@ enum unix_funcs
 {
     unix_thread_attach,
     unix_process_detach,
+    unix_mapping_thread,
     unix_wglCopyContext,
     unix_wglCreateContext,
     unix_wglDeleteContext,
@@ -27571,6 +27579,7 @@ enum unix_funcs
     unix_glSetInvariantEXT,
     unix_glSetLocalConstantEXT,
     unix_glSetMultisamplefvAMD,
+    unix_glSetPlacedAllocatorMESA,
     unix_glShaderBinary,
     unix_glShaderOp1EXT,
     unix_glShaderOp2EXT,

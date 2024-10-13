@@ -157,6 +157,13 @@ static BOOL has_extension( const char *list, const char *ext, size_t len )
     return FALSE;
 }
 
+static BOOL wow64_has_placed( const struct opengl_funcs *funcs )
+{
+    const char *extensions = (const char *) funcs->gl.p_glGetString( GL_EXTENSIONS );
+
+    return !!strstr(extensions, "GL_MESA_placed_allocation");
+}
+
 static GLubyte *filter_extensions_list( const char *extensions, const char *disabled )
 {
     const char *end;
@@ -665,6 +672,11 @@ static BOOL wrap_wglCopyContext( HGLRC hglrcSrc, HGLRC hglrcDst, UINT mask )
     return ret;
 }
 
+static void wow64_setup_placed(const struct opengl_funcs *funcs);
+static void * WINE_GLAPI wow64_placed_map(GLuint size);
+static void WINE_GLAPI wow64_placed_unmap(void *addr, GLuint size);
+static ULONG_PTR zero_bits = 0;
+
 static HGLRC wrap_wglCreateContext( HDC hdc )
 {
     HGLRC ret = 0;
@@ -703,6 +715,8 @@ static BOOL wrap_wglMakeCurrent( TEB *teb, HDC hdc, HGLRC hglrc )
                 teb->glReserved1[1] = hdc;
                 teb->glCurrentRC = hglrc;
                 teb->glTable = (void *)ptr->funcs;
+
+                wow64_setup_placed(ptr->funcs);
             }
         }
         else
@@ -866,6 +880,8 @@ static BOOL wrap_wglMakeContextCurrentARB( TEB *teb, HDC draw_hdc, HDC read_hdc,
                 teb->glReserved1[1] = read_hdc;
                 teb->glCurrentRC = hglrc;
                 teb->glTable = (void *)ptr->funcs;
+
+                wow64_setup_placed(ptr->funcs);
             }
         }
         else
@@ -2233,6 +2249,154 @@ NTSTATUS wow64_ext_glUnmapNamedBufferEXT( void *args )
     return wow64_gl_unmap_named_buffer( args, ext_glUnmapNamedBufferEXT );
 }
 
+
+static void wow64_setup_placed(const struct opengl_funcs *funcs)
+{
+    SYSTEM_BASIC_INFORMATION info;
+    typeof(*funcs->ext.p_glSetPlacedAllocatorMESA) *p_set_placed_allocator;
+
+    NtQuerySystemInformation(SystemEmulationBasicInformation, &info, sizeof(info), NULL);
+    zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
+
+    if (!(p_set_placed_allocator = funcs->ext.p_glSetPlacedAllocatorMESA))
+        p_set_placed_allocator = (void *)funcs->wgl.p_wglGetProcAddress( "glSetPlacedAllocatorMESA" );
+    if (p_set_placed_allocator)
+        p_set_placed_allocator( wow64_placed_map, wow64_placed_unmap );
+}
+
+
+static int mapping_thread_stop;
+static pthread_mutex_t mapping_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t mapping_cond = PTHREAD_COND_INITIALIZER;
+static struct
+{
+    enum
+    {
+        MAPPING_CMD_NONE = 0,
+        MAPPING_CMD_MAP,
+        MAPPING_CMD_UNMAP,
+    } cmd;
+
+
+    BOOL done;
+
+    union
+    {
+        struct
+        {
+            /* in */
+            unsigned int size;
+            /* out */
+            void *mapping;
+        } map;
+        struct
+        {
+            /* in */
+            void *mapping;
+            GLuint size;
+        } unmap;
+    };
+} map_request;
+
+static void * WINE_GLAPI wow64_placed_map(GLuint size)
+{
+    void *mapping = NULL;
+    SIZE_T alloc_size = size;
+
+    if (!NtCurrentTeb())
+    {
+        /* offload to mapping_thread */
+        pthread_mutex_lock( &mapping_lock );
+
+        while (map_request.cmd != MAPPING_CMD_NONE)
+            pthread_cond_wait( &mapping_cond, &mapping_lock );
+
+        map_request.cmd = MAPPING_CMD_MAP;
+        map_request.map.size = size;
+
+        pthread_cond_broadcast( &mapping_cond );
+
+        while (!map_request.done)
+            pthread_cond_wait( &mapping_cond, &mapping_lock );
+
+        mapping = map_request.map.mapping;
+        map_request.cmd = MAPPING_CMD_NONE;
+        map_request.done = FALSE;
+
+        pthread_mutex_unlock( &mapping_lock );
+        pthread_cond_broadcast( &mapping_cond );
+        return mapping;
+    }
+
+    if (NtAllocateVirtualMemory(GetCurrentProcess(), &mapping, zero_bits, &alloc_size,
+                                MEM_COMMIT, PAGE_READWRITE))
+    {
+        ERR("NtAllocateVirtualMemory failed\n");
+        return NULL;
+    }
+
+    TRACE("returning placed mapping %p size %x.\n", mapping, size);
+
+    return mapping;
+}
+
+static void WINE_GLAPI wow64_placed_unmap(void *addr, GLuint size)
+{
+    SIZE_T alloc_size = 0;
+
+    if(!NtCurrentTeb())
+    {
+        /* offload to mapping_thread */
+        pthread_mutex_lock( &mapping_lock );
+
+        while (map_request.cmd != MAPPING_CMD_NONE)
+            pthread_cond_wait( &mapping_cond, &mapping_lock );
+
+        map_request.cmd = MAPPING_CMD_UNMAP;
+        map_request.unmap.mapping = addr;
+        map_request.unmap.size = size;
+
+        pthread_mutex_unlock( &mapping_lock );
+        pthread_cond_broadcast( &mapping_cond );
+
+        return;
+    }
+
+    TRACE("unmapping %p.\n", addr);
+    NtFreeVirtualMemory(GetCurrentProcess(), &addr, &alloc_size, MEM_RELEASE);
+}
+
+NTSTATUS mapping_thread (void *args )
+{
+    if (!is_wow64())
+        return STATUS_SUCCESS;
+
+    while (!mapping_thread_stop)
+    {
+        pthread_mutex_lock( &mapping_lock );
+
+        while (map_request.cmd == MAPPING_CMD_NONE || map_request.done)
+            pthread_cond_wait( &mapping_cond, &mapping_lock );
+
+        if (map_request.cmd == MAPPING_CMD_MAP)
+        {
+            map_request.map.mapping = wow64_placed_map(map_request.map.size);
+            map_request.done = TRUE;
+        }
+        else if (map_request.cmd == MAPPING_CMD_UNMAP)
+        {
+            wow64_placed_unmap(map_request.unmap.mapping, map_request.unmap.size);
+            map_request.cmd = MAPPING_CMD_NONE;
+        }
+
+        pthread_cond_broadcast( &mapping_cond );
+
+        pthread_mutex_unlock( &mapping_lock );
+    }
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS wow64_thread_attach( void *args )
 {
     return thread_attach( get_teb64( (ULONG_PTR)args ));
@@ -2241,6 +2405,8 @@ NTSTATUS wow64_thread_attach( void *args )
 NTSTATUS wow64_process_detach( void *args )
 {
     NTSTATUS status;
+
+    mapping_thread_stop = 1;
 
     if ((status = process_detach( NULL ))) return status;
 

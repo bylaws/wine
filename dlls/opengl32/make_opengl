@@ -96,6 +96,8 @@ my %arg_types =
      "GLint64EXT" =>           [ "int64",  "wine_dbgstr_longlong(%s)" ],
      "GLintptr" =>             [ "long",   "%Id" ],
      "GLintptrARB" =>          [ "long",   "%Id" ],
+     "GLplacedMapMESA" =>      [ "ptr",    "%p" ],
+     "GLplacedUnmapMESA" =>    [ "ptr",    "%p" ],
      "GLshort" =>              [ "long",   "%d" ],
      "GLsizei" =>              [ "long",   "%d" ],
      "GLsizeiptr" =>           [ "long",   "%Id" ],
@@ -1018,6 +1020,7 @@ print OUT "enum unix_funcs\n";
 print OUT "{\n";
 print OUT "    unix_thread_attach,\n";
 print OUT "    unix_process_detach,\n";
+print OUT "    unix_mapping_thread,\n";
 foreach (sort keys %wgl_functions)
 {
     next if defined $manual_win_functions{$_};
@@ -1141,6 +1144,7 @@ print OUT "#endif\n\n";
 
 print OUT "extern NTSTATUS thread_attach( void *args );\n";
 print OUT "extern NTSTATUS process_detach( void *args );\n";
+print OUT "extern NTSTATUS mapping_thread( void *args );\n";
 foreach (sort keys %wgl_functions)
 {
     next if defined $manual_win_functions{$_};
@@ -1187,6 +1191,7 @@ print OUT "const unixlib_entry_t __wine_unix_call_funcs[] =\n";
 print OUT "{\n";
 print OUT "    &thread_attach,\n";
 print OUT "    &process_detach,\n";
+print OUT "    &mapping_thread,\n";
 foreach (sort keys %wgl_functions)
 {
     next if defined $manual_win_functions{$_};
@@ -1252,6 +1257,7 @@ print OUT "\nconst unixlib_entry_t __wine_unix_call_wow64_funcs[] =\n";
 print OUT "{\n";
 print OUT "    wow64_thread_attach,\n";
 print OUT "    wow64_process_detach,\n";
+print OUT "    mapping_thread,\n";
 foreach (sort keys %wgl_functions)
 {
     next if defined $manual_win_functions{$_};
