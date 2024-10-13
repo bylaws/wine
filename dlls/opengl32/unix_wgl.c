@@ -164,7 +164,7 @@ static BOOL wow64_has_placed( const struct opengl_funcs *funcs )
     return !!strstr(extensions, "GL_MESA_placed_allocation");
 }
 
-static GLubyte *filter_extensions_list( const char *extensions, const char *disabled )
+static GLubyte *filter_extensions_list( TEB *teb, const char *extensions, const char *disabled )
 {
     const char *end;
     char *p, *str;
@@ -184,8 +184,8 @@ static GLubyte *filter_extensions_list( const char *extensions, const char *disa
         p[end - extensions] = 0;
 
         /* We do not support GL_MAP_PERSISTENT_BIT, and hence
-         * ARB_buffer_storage, on wow64. */
-        if (is_win64 && is_wow64() && (!strcmp( p, "GL_ARB_buffer_storage" ) || !strcmp( p, "GL_EXT_buffer_storage" )))
+         * ARB_buffer_storage, on wow64 without GL_MESA_placed_allocation */
+        if (is_win64 && is_wow64() && !wow64_has_placed(teb->glTable) && (!strcmp( p, "GL_ARB_buffer_storage" ) || !strcmp( p, "GL_EXT_buffer_storage" )))
         {
             TRACE( "-- %s (disabled due to wow64)\n", p );
         }
@@ -255,8 +255,8 @@ static GLuint *filter_extensions_index( TEB *teb, const char *disabled )
         ext = (const char *)funcs->ext.p_glGetStringi( GL_EXTENSIONS, j );
 
         /* We do not support GL_MAP_PERSISTENT_BIT, and hence
-         * ARB_buffer_storage, on wow64. */
-        if (is_win64 && is_wow64() && (!strcmp( ext, "GL_ARB_buffer_storage" ) || !strcmp( ext, "GL_EXT_buffer_storage" )))
+         * ARB_buffer_storage, on wow64 without GL_MESA_placed_allocation. */
+        if (is_win64 && is_wow64() && !wow64_has_placed(funcs) && (!strcmp( ext, "GL_ARB_buffer_storage" ) || !strcmp( ext, "GL_EXT_buffer_storage" )))
         {
             TRACE( "-- %s (disabled due to wow64)\n", ext );
             disabled_index[i++] = j;
@@ -382,7 +382,7 @@ static BOOL filter_extensions( TEB * teb, const char *extensions, GLubyte **exts
         else disabled = "";
     }
 
-    if (extensions && !*exts_list) *exts_list = filter_extensions_list( extensions, disabled );
+    if (extensions && !*exts_list) *exts_list = filter_extensions_list( teb, extensions, disabled );
     if (!*disabled_exts) *disabled_exts = filter_extensions_index( teb, disabled );
     return (exts_list && *exts_list) || *disabled_exts;
 }
@@ -454,9 +454,9 @@ static void wrap_glGetIntegerv( TEB *teb, GLenum pname, GLint *data )
     if (pname == GL_NUM_EXTENSIONS && (disabled = disabled_extensions_index( teb )))
         while (*disabled++ != ~0u) (*data)--;
 
-    if (is_win64 && is_wow64())
+    if (is_win64 && is_wow64() && !wow64_has_placed(funcs))
     {
-        /* 4.4 depends on ARB_buffer_storage, which we don't support on wow64. */
+        /* 4.4 depends on ARB_buffer_storage, which we don't support on wow64 without GL_MESA_placed_allocation. */
         if (pname == GL_MAJOR_VERSION && *data > 4)
             *data = 4;
         else if (pname == GL_MINOR_VERSION)
@@ -484,7 +484,7 @@ static const GLubyte *wrap_glGetString( TEB *teb, GLenum name )
             GLuint **disabled = &ptr->u.context->disabled_exts;
             if (*extensions || filter_extensions( teb, (const char *)ret, extensions, disabled )) return *extensions;
         }
-        else if (name == GL_VERSION && is_win64 && is_wow64())
+        else if (name == GL_VERSION && is_win64 && is_wow64() && !wow64_has_placed(funcs))
         {
             struct wgl_handle *ptr = get_current_context_ptr( teb );
             int major, minor;
@@ -1902,9 +1902,9 @@ static NTSTATUS wow64_map_buffer( TEB *teb, GLint buffer, GLenum target, void *p
     }
 
     if (ULongToPtr(*ret = PtrToUlong(ptr)) == ptr) return STATUS_SUCCESS;  /* we're lucky */
-    if (access & GL_MAP_PERSISTENT_BIT)
+    if (access & GL_MAP_PERSISTENT_BIT && !wow64_has_placed(teb->glTable))
     {
-        FIXME( "GL_MAP_PERSISTENT_BIT not supported!\n" );
+        FIXME( "GL_MAP_PERSISTENT_BIT not supported! ptr=%p\n", ptr );
         return STATUS_NOT_SUPPORTED;
     }
 
