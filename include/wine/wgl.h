@@ -48,6 +48,8 @@ typedef void *GLDEBUGPROCAMD;
 typedef unsigned short GLhalfNV;
 typedef GLintptr GLvdpauSurfaceNV;
 typedef void *GLVULKANPROCNV;
+typedef void *( *GLplacedMapMESA)(GLuint size);
+typedef void ( *GLplacedUnmapMESA)(void *mapping, GLuint size);
 struct _GPU_DEVICE {
     DWORD  cb;
     CHAR   DeviceName[32];

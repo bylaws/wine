@@ -7,7 +7,7 @@
 #define WINE_GLAPI
 #endif
 
-#define WINE_WGL_DRIVER_VERSION 24
+#define WINE_WGL_DRIVER_VERSION 25
 
 struct wgl_context;
 struct wgl_pbuffer;
@@ -2260,6 +2260,7 @@ struct opengl_funcs
         void       (WINE_GLAPI *p_glSetInvariantEXT)( GLuint id, GLenum type, const void *addr );
         void       (WINE_GLAPI *p_glSetLocalConstantEXT)( GLuint id, GLenum type, const void *addr );
         void       (WINE_GLAPI *p_glSetMultisamplefvAMD)( GLenum pname, GLuint index, const GLfloat *val );
+        void       (WINE_GLAPI *p_glSetPlacedAllocatorMESA)( GLplacedMapMESA placedMap, GLplacedUnmapMESA placedUnmap );
         void       (WINE_GLAPI *p_glShaderBinary)( GLsizei count, const GLuint *shaders, GLenum binaryformat, const void *binary, GLsizei length );
         void       (WINE_GLAPI *p_glShaderOp1EXT)( GLenum op, GLuint res, GLuint arg1 );
         void       (WINE_GLAPI *p_glShaderOp2EXT)( GLenum op, GLuint res, GLuint arg1, GLuint arg2 );

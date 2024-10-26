@@ -17947,6 +17947,14 @@ static void WINAPI glSetMultisamplefvAMD( GLenum pname, GLuint index, const GLfl
     if ((status = UNIX_CALL( glSetMultisamplefvAMD, &args ))) WARN( "glSetMultisamplefvAMD returned %#lx\n", status );
 }
 
+static void WINAPI glSetPlacedAllocatorMESA( GLplacedMapMESA placedMap, GLplacedUnmapMESA placedUnmap )
+{
+    struct glSetPlacedAllocatorMESA_params args = { .teb = NtCurrentTeb(), .placedMap = placedMap, .placedUnmap = placedUnmap };
+    NTSTATUS status;
+    TRACE( "placedMap %p, placedUnmap %p\n", placedMap, placedUnmap );
+    if ((status = UNIX_CALL( glSetPlacedAllocatorMESA, &args ))) WARN( "glSetPlacedAllocatorMESA returned %#lx\n", status );
+}
+
 static void WINAPI glShaderBinary( GLsizei count, const GLuint *shaders, GLenum binaryformat, const void *binary, GLsizei length )
 {
     struct glShaderBinary_params args = { .teb = NtCurrentTeb(), .count = count, .shaders = shaders, .binaryformat = binaryformat, .binary = binary, .length = length };
@@ -26229,6 +26237,7 @@ const void *extension_procs[] =
     glSetInvariantEXT,
     glSetLocalConstantEXT,
     glSetMultisamplefvAMD,
+    glSetPlacedAllocatorMESA,
     glShaderBinary,
     glShaderOp1EXT,
     glShaderOp2EXT,
