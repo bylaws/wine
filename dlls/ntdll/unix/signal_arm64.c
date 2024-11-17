@@ -369,7 +369,19 @@ NTSTATUS signal_set_full_context( CONTEXT *context )
     struct syscall_frame *frame = arm64_thread_data()->syscall_frame;
     NTSTATUS status = NtSetContextThread( GetCurrentThread(), context );
 
-    if (!status && (context->ContextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER)
+    if (is_arm64ec()) {
+        ULONG suspend_count;
+        NtQueryInformationThread( GetCurrentThread(), ThreadSuspendCount, &suspend_count, sizeof(suspend_count), NULL );
+        if (suspend_count) {
+            CONTEXT suspend_context;
+            suspend_context.ContextFlags = CONTEXT_FULL | CONTEXT_EXCEPTION_REPORTING; /* TODO: check */
+            NtGetContextThread( GetCurrentThread(), &suspend_context );
+            wait_suspend( &suspend_context );
+            NtSetContextThread( GetCurrentThread(), &suspend_context );
+        }
+    }
+
+    if (!status && (context->ContextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER) /* TODO: also check with susp */
         frame->restore_flags |= CONTEXT_INTEGER;
 
     if (is_arm64ec() && !is_ec_code( frame->pc ))
@@ -464,7 +476,10 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
 
     if (!self)
     {
+        /* Avoid exposing JIT code pointers to other processes on ARM64EC */
+        if (is_arm64ec()) NtSuspendThread( handle, NULL );
         NTSTATUS ret = get_thread_context( handle, context, &self, IMAGE_FILE_MACHINE_ARM64 );
+        if (is_arm64ec()) NtResumeThread( handle, NULL );
         if (ret || !self) return ret;
     }
 
@@ -1295,22 +1310,17 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
         NtGetContextThread( GetCurrentThread(), &context );
         wait_suspend( &context );
         NtSetContextThread( GetCurrentThread(), &context );
+        /* TODO: check */
     }
     else
     {
+        if (is_arm64ec() && NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation) {
+            *NtCurrentTeb()->ChpeV2CpuAreaInfo->SuspendDoorbell = 1;
+            return;
+        }
         save_context( &context, sigcontext );
-        DWORD64 spc = context.Sp, pcc = context.Pc;
         context.ContextFlags |= CONTEXT_EXCEPTION_REPORTING;
-        if (is_arm64ec()) {
-            if (is_arm64ec_emulator_stack((void*)context.Sp) && context.X[28] > 0x10000 && context.X[28] < (1ULL << 39)) {
-                context.Sp = context.X[23];
-                context.Pc = *((DWORD64*)context.X[28]);
-            }
-        }
         wait_suspend( &context );
-        if (is_arm64ec()) {
-            context.Sp = spc; context.Pc = pcc;
-        }
         restore_context( &context, sigcontext );
     }
 }
