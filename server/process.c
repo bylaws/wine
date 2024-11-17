@@ -1502,6 +1502,9 @@ DECL_HANDLER(init_process_done)
         memset( process->wine_cpu_id_from_host, 0, sizeof(process->wine_cpu_id_from_host) );
         for (i = 0; i < process->cpu_override.cpu_count; ++i)
             process->wine_cpu_id_from_host[process->cpu_override.host_cpu_id[i]] = i;
+
+        if (!process->parent_id)
+            process->affinity = current->affinity = get_thread_affinity( current );
     }
 }
 
