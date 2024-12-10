@@ -716,7 +716,7 @@ static BOOL wrap_wglMakeCurrent( TEB *teb, HDC hdc, HGLRC hglrc )
                 teb->glCurrentRC = hglrc;
                 teb->glTable = (void *)ptr->funcs;
 
-                wow64_setup_placed(ptr->funcs);
+                if (is_wow64()) wow64_setup_placed(ptr->funcs);
             }
         }
         else
