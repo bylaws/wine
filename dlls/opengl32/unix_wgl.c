@@ -720,7 +720,9 @@ static BOOL wrap_wglMakeCurrent( TEB *teb, HDC hdc, HGLRC hglrc )
                 teb->glCurrentRC = hglrc;
                 teb->glTable = (void *)ptr->funcs;
 
-                wow64_setup_placed(ptr->funcs);
+#ifdef _WIN64
+                if (is_wow64()) wow64_setup_placed(ptr->funcs);
+#endif
             }
         }
         else
@@ -885,7 +887,9 @@ static BOOL wrap_wglMakeContextCurrentARB( TEB *teb, HDC draw_hdc, HDC read_hdc,
                 teb->glCurrentRC = hglrc;
                 teb->glTable = (void *)ptr->funcs;
 
-                wow64_setup_placed(ptr->funcs);
+#ifdef _WIN64
+                if (is_wow64()) wow64_setup_placed(ptr->funcs);
+#endif
             }
         }
         else
@@ -2469,6 +2473,13 @@ NTSTATUS wow64_get_pixel_formats( void *args )
     params32->num_formats = params.num_formats;
     params32->num_onscreen_formats = params.num_onscreen_formats;
     return status;
+}
+
+#else
+
+NTSTATUS mapping_thread (void *args )
+{
+    return STATUS_SUCCESS;
 }
 
 #endif
