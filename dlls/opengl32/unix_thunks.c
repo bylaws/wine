@@ -26,6 +26,7 @@ extern NTSTATUS process_attach( void *args );
 extern NTSTATUS thread_attach( void *args );
 extern NTSTATUS process_detach( void *args );
 extern NTSTATUS get_pixel_formats( void *args );
+extern NTSTATUS mapping_thread( void *args );
 extern NTSTATUS wgl_wglCopyContext( void *args );
 extern NTSTATUS wgl_wglCreateContext( void *args );
 extern NTSTATUS wgl_wglDeleteContext( void *args );
@@ -17836,6 +17837,14 @@ static NTSTATUS ext_glSetMultisamplefvAMD( void *args )
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS ext_glSetPlacedAllocatorMESA( void *args )
+{
+    struct glSetPlacedAllocatorMESA_params *params = args;
+    const struct opengl_funcs *funcs = params->teb->glTable;
+    funcs->ext.p_glSetPlacedAllocatorMESA( params->placedMap, params->placedUnmap );
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS ext_glShaderBinary( void *args )
 {
     struct glShaderBinary_params *params = args;
@@ -24201,6 +24210,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     thread_attach,
     process_detach,
     get_pixel_formats,
+    mapping_thread,
     wgl_wglCopyContext,
     wgl_wglCreateContext,
     wgl_wglDeleteContext,
@@ -26436,6 +26446,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     ext_glSetInvariantEXT,
     ext_glSetLocalConstantEXT,
     ext_glSetMultisamplefvAMD,
+    ext_glSetPlacedAllocatorMESA,
     ext_glShaderBinary,
     ext_glShaderOp1EXT,
     ext_glShaderOp2EXT,
@@ -75173,6 +75184,25 @@ static NTSTATUS wow64_ext_glSetMultisamplefvAMD( void *args )
     return status;
 }
 
+static NTSTATUS wow64_ext_glSetPlacedAllocatorMESA( void *args )
+{
+    struct
+    {
+        PTR32 teb;
+        PTR32 placedMap;
+        PTR32 placedUnmap;
+    } *params32 = args;
+    struct glSetPlacedAllocatorMESA_params params =
+    {
+        .teb = get_teb64(params32->teb),
+        .placedMap = ULongToPtr(params32->placedMap),
+        .placedUnmap = ULongToPtr(params32->placedUnmap),
+    };
+    NTSTATUS status;
+    status = ext_glSetPlacedAllocatorMESA( &params );
+    return status;
+}
+
 static NTSTATUS wow64_ext_glShaderBinary( void *args )
 {
     struct
@@ -92300,6 +92330,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     wow64_thread_attach,
     wow64_process_detach,
     wow64_get_pixel_formats,
+    mapping_thread,
     wow64_wgl_wglCopyContext,
     wow64_wgl_wglCreateContext,
     wow64_wgl_wglDeleteContext,
@@ -94535,6 +94566,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     wow64_ext_glSetInvariantEXT,
     wow64_ext_glSetLocalConstantEXT,
     wow64_ext_glSetMultisamplefvAMD,
+    wow64_ext_glSetPlacedAllocatorMESA,
     wow64_ext_glShaderBinary,
     wow64_ext_glShaderOp1EXT,
     wow64_ext_glShaderOp2EXT,
@@ -97580,6 +97612,7 @@ static void null_glSetFragmentShaderConstantATI( GLuint dst, const GLfloat *valu
 static void null_glSetInvariantEXT( GLuint id, GLenum type, const void *addr ) { }
 static void null_glSetLocalConstantEXT( GLuint id, GLenum type, const void *addr ) { }
 static void null_glSetMultisamplefvAMD( GLenum pname, GLuint index, const GLfloat *val ) { }
+static void null_glSetPlacedAllocatorMESA( GLplacedMapMESA placedMap, GLplacedUnmapMESA placedUnmap ) { }
 static void null_glShaderBinary( GLsizei count, const GLuint *shaders, GLenum binaryformat, const void *binary, GLsizei length ) { }
 static void null_glShaderOp1EXT( GLenum op, GLuint res, GLuint arg1 ) { }
 static void null_glShaderOp2EXT( GLenum op, GLuint res, GLuint arg1, GLuint arg2 ) { }
@@ -100627,6 +100660,7 @@ struct opengl_funcs null_opengl_funcs =
         null_glSetInvariantEXT,
         null_glSetLocalConstantEXT,
         null_glSetMultisamplefvAMD,
+        null_glSetPlacedAllocatorMESA,
         null_glShaderBinary,
         null_glShaderOp1EXT,
         null_glShaderOp2EXT,
@@ -101434,8 +101468,8 @@ struct opengl_funcs null_opengl_funcs =
     },
 };
 
-const int extension_registry_size = 2694;
-const struct registry_entry extension_registry[2694] =
+const int extension_registry_size = 2695;
+const struct registry_entry extension_registry[2695] =
 {
     { "glAccumxOES", "GL_OES_fixed_point" },
     { "glAcquireKeyedMutexWin32EXT", "GL_EXT_win32_keyed_mutex" },
@@ -103327,6 +103361,7 @@ const struct registry_entry extension_registry[2694] =
     { "glSetInvariantEXT", "GL_EXT_vertex_shader" },
     { "glSetLocalConstantEXT", "GL_EXT_vertex_shader" },
     { "glSetMultisamplefvAMD", "GL_AMD_sample_positions" },
+    { "glSetPlacedAllocatorMESA", "GL_MESA_placed_allocation" },
     { "glShaderBinary", "GL_ARB_ES2_compatibility GL_VERSION_4_1" },
     { "glShaderOp1EXT", "GL_EXT_vertex_shader" },
     { "glShaderOp2EXT", "GL_EXT_vertex_shader" },
