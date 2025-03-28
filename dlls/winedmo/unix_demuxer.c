@@ -145,7 +145,7 @@ static NTSTATUS demuxer_create_streams( struct demuxer *demuxer )
         else if (codec_is_big_endian_pcm(par->codec_id))
         {
             /* WAVEFORMATEX does not contain endianness info, so this needs to be converted here. */
-            if (av_bsf_alloc( &ff_pcm_byte_order_reverse_bsf, &stream->filter ) < 0) return STATUS_UNSUCCESSFUL;
+            if (av_bsf_alloc( pff_pcm_byte_order_reverse_bsf, &stream->filter ) < 0) return STATUS_UNSUCCESSFUL;
             avcodec_parameters_copy( stream->filter->par_in, par );
             av_bsf_init( stream->filter );
             continue;

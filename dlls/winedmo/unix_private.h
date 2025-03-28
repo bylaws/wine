@@ -46,7 +46,7 @@ extern int mediaconv_demuxer_open( AVFormatContext **ctx, struct stream_context 
 
 /* libavcodec/pcm_byte_order_reverse.c */
 #ifdef HAVE_FFMPEG
-extern const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf;
+extern const AVBitStreamFilter *pff_pcm_byte_order_reverse_bsf;
 #endif
 
 /* unixlib.c */

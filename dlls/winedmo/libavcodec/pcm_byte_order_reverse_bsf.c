@@ -28,15 +28,21 @@
 
 #define IS_EMPTY(pkt) (!(pkt)->data && !(pkt)->side_data_elems)
 
-struct AVBSFInternal {
-    AVPacket *buffer_pkt;
-    int eof;
-};
-
 /* From FFmpeg */
 int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
 {
-    AVBSFInternal *bsfi = ctx->internal;
+#if (LIBAVCODEC_VERSION_MAJOR > 59) || (LIBAVCODEC_VERSION_MAJOR == 59 && LIBAVCODEC_VERSION_MINOR > 6)
+    struct FFBSFContext {
+        AVBSFContext pub;
+        AVPacket *buffer_pkt;
+        int eof;
+    } *bsfi = (void *)ctx;
+#else
+    struct AVBSFInternal {
+        AVPacket *buffer_pkt;
+        int eof;
+    } *bsfi = ctx->internal;
+#endif
     AVPacket *tmp_pkt;
 
     if (bsfi->eof)
@@ -77,7 +83,14 @@ static enum AVCodecID reverse_codec_id(enum AVCodecID codec_id)
 
 static int init(AVBSFContext *ctx)
 {
-    if (ctx->par_in->channels <= 0 || ctx->par_in->sample_rate <= 0)
+#if (LIBAVUTIL_VERSION_MAJOR > 57) || (LIBAVUTIL_VERSION_MAJOR == 57 && LIBAVUTIL_VERSION_MINOR > 24)
+    int in_channels = ctx->par_in->ch_layout.nb_channels;
+#else
+    int in_channels = ctx->par_in->channels;
+#endif
+    if (in_channels <= 0)
+        return AVERROR(EINVAL);
+    if (ctx->par_in->sample_rate <= 0)
         return AVERROR(EINVAL);
     if (ctx->par_in->bits_per_coded_sample % 8u)
         return AVERROR(EINVAL);
@@ -147,11 +160,36 @@ static const enum AVCodecID codec_ids[] = {
     AV_CODEC_ID_NONE,
 };
 
+
+#if (LIBAVCODEC_VERSION_MAJOR > 59) || (LIBAVCODEC_VERSION_MAJOR == 59 && LIBAVCODEC_VERSION_MINOR > 25)
+typedef struct FFBitStreamFilter {
+    AVBitStreamFilter p;
+
+    int priv_data_size;
+    int (*init)(AVBSFContext *ctx);
+    int (*filter)(AVBSFContext *ctx, AVPacket *pkt);
+    void (*close)(AVBSFContext *ctx);
+    void (*flush)(AVBSFContext *ctx);
+} FFBitStreamFilter;
+
+const FFBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
+    .p.name         = "pcm_byte_order_reverse",
+    .p.codec_ids    = codec_ids,
+    .filter         = byte_order_reverse_filter,
+    .init           = init,
+};
+
+const AVBitStreamFilter *pff_pcm_byte_order_reverse_bsf = &ff_pcm_byte_order_reverse_bsf.p;
+#else
 const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
     .name           = "pcm_byte_order_reverse",
     .filter         = byte_order_reverse_filter,
     .init           = init,
     .codec_ids      = codec_ids,
 };
+
+
+const AVBitStreamFilter *pff_pcm_byte_order_reverse_bsf = &ff_pcm_byte_order_reverse_bsf;
+#endif
 
 #endif /* HAVE_FFMPEG */
