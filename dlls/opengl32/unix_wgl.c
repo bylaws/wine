@@ -2408,7 +2408,7 @@ NTSTATUS mapping_thread (void *args )
     {
         pthread_mutex_lock( &mapping_lock );
 
-        while (map_request.cmd == MAPPING_CMD_NONE || map_request.done)
+        while (!mapping_thread_stop && (map_request.cmd == MAPPING_CMD_NONE || map_request.done))
             pthread_cond_wait( &mapping_cond, &mapping_lock );
 
         if (map_request.cmd == MAPPING_CMD_MAP)
@@ -2439,8 +2439,11 @@ NTSTATUS wow64_process_detach( void *args )
 {
     NTSTATUS status;
 
+    pthread_mutex_lock( &mapping_lock );
+    map_request.cmd = MAPPING_CMD_NONE;
     mapping_thread_stop = 1;
-
+    pthread_mutex_unlock( &mapping_lock );
+    pthread_cond_broadcast( &mapping_cond );
     if ((status = process_detach( NULL ))) return status;
 
     free( wow64_strings );

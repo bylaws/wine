@@ -48,6 +48,8 @@ static const MAT2 identity = { {0,1},{0,0},{0,0},{0,1} };
 #define WINE_GL_RESERVED_FORMATS_NUM      4
 #define WINE_GL_RESERVED_FORMATS_ONSCREEN 5
 
+static HANDLE mapping_thread_handle;
+
 #ifndef _WIN64
 
 static char **wow64_strings;
@@ -2071,7 +2073,8 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
         }
 
         if (NtCurrentTeb()->WowTebOffset)
-            CreateThread(NULL, 0, mapping_thread, NULL, 0, NULL);
+            mapping_thread_handle = CreateThread(NULL, 0, mapping_thread, NULL, 0, NULL);
+
         /* fallthrough */
     case DLL_THREAD_ATTACH:
         if ((status = UNIX_CALL( thread_attach, NtCurrentTeb() )))
@@ -2084,6 +2087,13 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
     case DLL_PROCESS_DETACH:
         if (reserved) break;
         UNIX_CALL( process_detach, NULL );
+        if (NtCurrentTeb()->WowTebOffset && mapping_thread_handle)
+        {
+          if (WaitForSingleObject( mapping_thread_handle, 200 ) == WAIT_TIMEOUT)
+              TerminateThread( mapping_thread_handle,  0 );
+          CloseHandle( mapping_thread_handle );
+          mapping_thread_handle = NULL;
+        }
 #ifndef _WIN64
         cleanup_wow64_strings();
 #endif
