@@ -457,3 +457,5 @@ NTSTATUS WINAPI NtSetDebugFilterState( ULONG component_id, ULONG level, BOOLEAN 
 
     return STATUS_SUCCESS;
 }
+
+void DECLSPEC_NOINLINE __wine_dbg_notify_syscall_fault(void) {}

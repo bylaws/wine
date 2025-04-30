@@ -2202,6 +2202,8 @@ static BOOL handle_syscall_fault( ucontext_t *sigcontext, EXCEPTION_RECORD *rec,
 
     if (!is_inside_syscall( sigcontext )) return FALSE;
 
+    __wine_dbg_notify_syscall_fault();
+
     TRACE_(seh)( "code=%x flags=%x addr=%p ip=%lx tid=%04x\n",
                  rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress,
                  context->Rip, GetCurrentThreadId() );

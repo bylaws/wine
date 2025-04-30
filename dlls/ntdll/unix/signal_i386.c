@@ -1829,6 +1829,8 @@ static BOOL handle_syscall_fault( ucontext_t *sigcontext, void *stack_ptr,
 
     if (!is_inside_syscall( sigcontext )) return FALSE;
 
+    __wine_dbg_notify_syscall_fault();
+
     TRACE( "code=%lx flags=%lx addr=%p ip=%08lx\n",
            rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress, context->Eip );
     for (i = 0; i < rec->NumberParameters; i++)

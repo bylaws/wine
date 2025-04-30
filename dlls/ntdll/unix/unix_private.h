@@ -608,4 +608,6 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
 
 BOOL WINAPI __wine_needs_override_large_address_aware(void);
 
+void DECLSPEC_NOINLINE __wine_dbg_notify_syscall_fault(void);
+
 #endif /* __NTDLL_UNIX_PRIVATE_H */
