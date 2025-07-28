@@ -3601,7 +3601,10 @@ static void output_unix_lib( struct makefile *make )
     const char *unixlib;
 
     if (make->disabled[arch]) return;
-    if (!(unixlib = get_expanded_make_variable( make, strmake( "%s_%s", archs.str[arch], "UNIXLIB" ) ))) unixlib = make->unixlib;
+    if ((unixlib = get_expanded_make_variable( make, strmake( "%s_%s", archs.str[arch], "UNIXLIB" ) )))
+        output_symlink_rule( strmake( "%s%s", arch_install_dirs[arch], unixlib ), strmake( "%s%s", arch_install_dirs[arch], make->unixlib ), 1 );
+    else
+        unixlib = make->unixlib;
 
     strarray_add( &make->all_targets[arch], unixlib );
     add_install_rule( make, make->module, arch, unixlib,
