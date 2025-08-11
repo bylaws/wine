@@ -4491,7 +4491,7 @@ static void dump_dir_reloc(void)
 static void dump_dir_tls(void)
 {
     IMAGE_TLS_DIRECTORY64 dir;
-    const UINT *callbacks;
+    const UINT64 *callbacks;
     const IMAGE_TLS_DIRECTORY32 *pdir = get_dir(IMAGE_FILE_THREAD_LOCAL_STORAGE);
 
     if (!pdir) return;

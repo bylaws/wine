@@ -37,6 +37,7 @@
 #include "wine/exception.h"
 
 
+WINE_DEFAULT_DEBUG_CHANNEL(seh);
 /******************************************************************************
  *  RtlGetCurrentPeb  [NTDLL.@]
  *

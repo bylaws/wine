@@ -23,6 +23,8 @@ SOURCES = \
 	string.c \
 	sync.c \
 	thread.c \
+	testdll.c \
+	testdll.spec \
 	threadpool.c \
 	time.c \
 	unwind.c \

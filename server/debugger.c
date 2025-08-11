@@ -465,7 +465,7 @@ void generate_debug_event( struct thread *thread, int code, const void *arg )
 {
     struct debug_obj *debug_obj = thread->process->debug_obj;
 
-    if (debug_obj)
+    if (debug_obj && !thread->dbg_hidden)
     {
         struct debug_event *event = alloc_debug_event( thread, code, arg );
         if (event)

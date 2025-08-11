@@ -31,6 +31,10 @@
 static NTSTATUS (WINAPI *pNtCreateThreadEx)( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *,
                                              HANDLE, PRTL_THREAD_START_ROUTINE, void *,
                                              ULONG, ULONG_PTR, SIZE_T, SIZE_T, PS_ATTRIBUTE_LIST * );
+static NTSTATUS (WINAPI *pNtAllocateVirtualMemoryEx)(HANDLE, PVOID *, SIZE_T *, ULONG, ULONG,
+                                                     MEM_EXTENDED_PARAMETER *, ULONG);
+static NTSTATUS (WINAPI *pRtlWow64GetProcessMachines)(HANDLE,WORD*,WORD*);
+
 static int * (CDECL *p_errno)(void);
 
 static void init_function_pointers(void)
@@ -38,6 +42,8 @@ static void init_function_pointers(void)
     HMODULE hntdll = GetModuleHandleA( "ntdll.dll" );
 #define GET_FUNC(name) p##name = (void *)GetProcAddress( hntdll, #name );
     GET_FUNC( NtCreateThreadEx );
+    GET_FUNC( NtAllocateVirtualMemoryEx );
+    GET_FUNC( RtlWow64GetProcessMachines );
     GET_FUNC( _errno );
 #undef GET_FUNC
 }
@@ -242,6 +248,191 @@ static void test_NtCreateUserProcess(void)
     CloseHandle( thread );
 }
 
+static void extract_resource(const char *name, const char *type, const char *path)
+{
+    DWORD written;
+    HANDLE file;
+    HRSRC res;
+    void *ptr;
+
+    file = CreateFileA(path, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0);
+    ok(file != INVALID_HANDLE_VALUE, "file creation failed, at %s, error %ld\n", path, GetLastError());
+
+    res = FindResourceA(NULL, name, type);
+    ok( res != 0, "couldn't find resource\n" );
+    ptr = LockResource( LoadResource( GetModuleHandleA(NULL), res ));
+    WriteFile( file, ptr, SizeofResource( GetModuleHandleA(NULL), res ), &written, NULL );
+    ok( written == SizeofResource( GetModuleHandleA(NULL), res ), "couldn't write resource\n" );
+    CloseHandle( file );
+}
+
+BOOL seen_tls_thread_attach;
+BOOL seen_tls_thread_detach;
+
+void WINAPI tls_callback(HANDLE instance, DWORD reason, LPVOID reserved)
+{
+    switch (reason)
+    {
+        case DLL_THREAD_ATTACH:
+            seen_tls_thread_attach = TRUE;
+            break;
+        case DLL_THREAD_DETACH:
+            seen_tls_thread_detach = TRUE;
+            break;
+    }
+}
+
+#define _CRTALLOC(x) __attribute__ ((section (x), used))
+
+__attribute__((used)) ULONG _tls_index = 0;
+
+_CRTALLOC(".tls") char *_tls_start = NULL;
+_CRTALLOC(".tls$ZZZ") char *_tls_end = NULL;
+
+_CRTALLOC(".CRT$XLA") PIMAGE_TLS_CALLBACK __xl_a = 0;
+
+_CRTALLOC(".CRT$XLC") PIMAGE_TLS_CALLBACK __xl_c = tls_callback;
+_CRTALLOC(".CRT$XLZ") PIMAGE_TLS_CALLBACK __xl_z = 0;
+
+__attribute__((used)) const IMAGE_TLS_DIRECTORY _tls_used = {
+  (ULONG_PTR) &_tls_start, (ULONG_PTR) &_tls_end,
+  (ULONG_PTR) &_tls_index, (ULONG_PTR) (&__xl_a+1),
+  (ULONG) 0, (ULONG) 0
+};
+
+struct skip_thread_attach_args
+{
+    BOOL teb_flag;
+    PVOID teb_tls_pointer;
+    PVOID teb_fls_slots;
+};
+
+static void CALLBACK test_skip_thread_attach_proc(void *param)
+{
+    struct skip_thread_attach_args *args = param;
+    args->teb_flag = NtCurrentTeb()->SkipThreadAttach;
+    args->teb_tls_pointer = NtCurrentTeb()->ThreadLocalStoragePointer;
+    args->teb_fls_slots = NtCurrentTeb()->FlsSlots;
+
+}
+
+static void test_skip_thread_attach(void)
+{
+    BOOL *seen_thread_attach, *seen_thread_detach;
+    struct skip_thread_attach_args args;
+    HANDLE thread;
+    NTSTATUS status;
+    char path_dll_local[MAX_PATH + 11];
+    char path_tmp[MAX_PATH];
+    HMODULE module = NULL;
+
+    if (!pNtCreateThreadEx)
+    {
+        win_skip( "NtCreateThreadEx is not available.\n" );
+        return;
+    }
+
+
+    GetTempPathA(sizeof(path_tmp), path_tmp);
+
+    sprintf(path_dll_local, "%s%s", path_tmp, "testdll.dll");
+    extract_resource("testdll.dll", "TESTDLL", path_dll_local);
+
+    printf("%s\n",path_dll_local);
+    module = LoadLibraryA(path_dll_local);
+    if (!module) {
+        trace("Could not load testdll.\n");
+        return;
+    }
+    seen_thread_attach = (BOOL *)GetProcAddress(module, "seen_thread_attach");
+    seen_thread_detach = (BOOL *)GetProcAddress(module, "seen_thread_detach");
+    seen_tls_thread_attach = FALSE;
+    seen_tls_thread_detach = FALSE;
+
+    ok( !*seen_thread_attach, "Unexpected\n" );
+    ok( !*seen_thread_detach, "Unexpected\n" );
+
+
+    status = pNtCreateThreadEx( &thread, THREAD_ALL_ACCESS, NULL, GetCurrentProcess(), test_skip_thread_attach_proc,
+                                &args, THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH, 0, 0, 0, NULL );
+    ok( status == STATUS_SUCCESS, "Got unexpected status %#lx.\n", status );
+
+    WaitForSingleObject( thread, INFINITE );
+
+    CloseHandle( thread );
+
+    ok( !*seen_thread_attach, "Unexpected\n" );
+    ok( !*seen_thread_detach, "Unexpected\n" );
+    ok( !seen_tls_thread_attach, "Unexpected\n" );
+    ok( !seen_tls_thread_attach, "Unexpected\n" );
+    ok( args.teb_flag, "Unexpected\n" );
+    ok( !args.teb_tls_pointer, "Unexpected\n" );
+    ok( !args.teb_fls_slots, "Unexpected\n" );
+
+    FreeLibrary(module);
+    DeleteFileA(path_dll_local);
+}
+
+struct test_skip_load_init_args
+{
+    USHORT teb_same_teb_flags;
+};
+
+static ULONG patched_code[] =
+{
+    0xd282fdc2, /* mov x2, #0x17ee */
+    0x78626a41, /* ldrh w1, [x18, x2]   (NtCurrentTeb()->SameTebFlags)*/
+    0x79000001, /* strh w1, [x0]    (args->teb_same_teb_flags)*/
+    0xd65f03c0, /* ret */
+};
+
+static void test_arm64_skip_loader_init(void)
+{
+    struct test_skip_load_init_args args;
+    HANDLE thread;
+    NTSTATUS status;
+    void *code_mem = NULL;
+#ifdef __x86_64__
+    MEM_EXTENDED_PARAMETER param = { 0 };
+    SIZE_T code_size = 0x10000;
+
+    param.Type = MemExtendedParameterAttributeFlags;
+    param.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
+    if (!pNtAllocateVirtualMemoryEx ||
+        pNtAllocateVirtualMemoryEx( GetCurrentProcess(), &code_mem, &code_size, MEM_RESERVE | MEM_COMMIT,
+                                    PAGE_EXECUTE_READWRITE, &param, 1 ))
+    {
+        trace("NtAllocateVirtualMemoryEx failed\n");
+        return;
+
+    }
+#else
+    code_mem = VirtualAlloc(NULL, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!code_mem) {
+        trace("VirtualAlloc failed\n");
+        return;
+    }
+#endif
+    if (!pNtCreateThreadEx)
+    {
+        win_skip( "NtCreateThreadEx is not available.\n" );
+        return;
+    }
+
+    memcpy(code_mem, patched_code, sizeof(patched_code));
+
+    status = pNtCreateThreadEx( &thread, THREAD_ALL_ACCESS, NULL, GetCurrentProcess(), (PRTL_THREAD_START_ROUTINE)code_mem,
+                                &args, THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT, 0, 0, 0, NULL );
+
+    ok( status == STATUS_SUCCESS, "Got unexpected status %#lx.\n", status );
+
+    WaitForSingleObject( thread, INFINITE );
+
+    ok( (args.teb_same_teb_flags & 0x4008) == 0x4008, "wrong value %x\n", args.teb_same_teb_flags );
+
+    CloseHandle( thread );
+}
+
 START_TEST(thread)
 {
     init_function_pointers();
@@ -250,4 +441,16 @@ START_TEST(thread)
     test_unique_teb();
     test_errno();
     test_NtCreateUserProcess();
+    test_skip_thread_attach();
+
+    if (pRtlWow64GetProcessMachines)
+    {
+        USHORT current, native;
+        NTSTATUS status = pRtlWow64GetProcessMachines( GetCurrentProcess(), &current, &native );
+        if (!status && native == IMAGE_FILE_MACHINE_ARM64)
+        {
+            trace( "Running arm64 tests.\n" );
+            test_arm64_skip_loader_init();
+        }
+    }
 }

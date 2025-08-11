@@ -610,7 +610,27 @@ typedef struct _TEB
     PVOID                        MergedPrefLanguages;               /* fc0/17e0 */
     ULONG                        MuiImpersonation;                  /* fc4/17e8 */
     USHORT                       CrossTebFlags;                     /* fc8/17ec */
-    USHORT                       SameTebFlags;                      /* fca/17ee */
+    union {
+        USHORT SameTebFlags;                                        /* fca/17ee */
+        struct {
+            USHORT SafeThunkCall : 1;
+            USHORT InDebugPrint : 1;
+            USHORT HasFiberData : 1;
+            USHORT SkipThreadAttach : 1;
+            USHORT WerInShipAssertCode : 1;
+            USHORT RanProcessInit : 1;
+            USHORT ClonedThread : 1;
+            USHORT SuppressDebugMsg : 1;
+            USHORT DisableUserStackWalk : 1;
+            USHORT RtlExceptionAttached : 1;
+            USHORT InitialThread : 1;
+            USHORT SessionAware : 1;
+            USHORT LoadOwner : 1;
+            USHORT LoaderWorker : 1;
+            USHORT SkipLoaderInit : 1;
+            USHORT SkipFileAPIBrokering : 1;
+        } DUMMYSTRUCTNAME;
+    } DUMMYUNIONNAME1;
     PVOID                        TxnScopeEnterCallback;             /* fcc/17f0 */
     PVOID                        TxnScopeExitCallback;              /* fd0/17f8 */
     PVOID                        TxnScopeContext;                   /* fd4/1800 */
@@ -3950,8 +3970,9 @@ typedef struct _RTL_PROCESS_MODULE_INFORMATION_EX
 #define THREAD_CREATE_FLAGS_CREATE_SUSPENDED        0x00000001
 #define THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH      0x00000002
 #define THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER      0x00000004
-#define THREAD_CREATE_FLAGS_HAS_SECURITY_DESCRIPTOR 0x00000010
-#define THREAD_CREATE_FLAGS_ACCESS_CHECK_IN_TARGET  0x00000020
+#define THREAD_CREATE_FLAGS_LOADER_WORKER           0x00000010
+#define THREAD_CREATE_FLAGS_SKIP_LOADER_INIT        0x00000020
+#define THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE   0x00000040
 #define THREAD_CREATE_FLAGS_INITIAL_THREAD          0x00000080
 
 #ifdef __WINESRC__

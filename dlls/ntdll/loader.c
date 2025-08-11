@@ -69,7 +69,8 @@ static const WCHAR pe_dir[] = L"";
 typedef DWORD (CALLBACK *DLLENTRYPROC)(HMODULE,DWORD,LPVOID);
 typedef void  (CALLBACK *LDRENUMPROC)(LDR_DATA_TABLE_ENTRY *, void *, BOOLEAN *);
 
-void (FASTCALL *pBaseThreadInitThunk)(DWORD,LPTHREAD_START_ROUTINE,void *) = NULL;
+static void __fastcall default_thread_init_func( DWORD unknown, LPTHREAD_START_ROUTINE entry, void *arg );
+void (FASTCALL *pBaseThreadInitThunk)(DWORD,LPTHREAD_START_ROUTINE,void *) = default_thread_init_func;
 NTSTATUS (WINAPI *__wine_unix_call_dispatcher)( unixlib_handle_t, unsigned int, void * ) = NULL;
 
 static DWORD (WINAPI *pCtrlRoutine)(void *);
@@ -219,6 +220,11 @@ typedef struct _RTL_UNLOAD_EVENT_TRACE
 static RTL_UNLOAD_EVENT_TRACE unload_traces[RTL_UNLOAD_EVENT_TRACE_NUMBER];
 static RTL_UNLOAD_EVENT_TRACE *unload_trace_ptr;
 static unsigned int unload_trace_seq;
+
+static void __fastcall default_thread_init_func( DWORD unknown, LPTHREAD_START_ROUTINE entry, void *arg )
+{
+    RtlExitUserThread( entry( arg ) );
+}
 
 static void module_push_unload_trace( const WINE_MODREF *wm )
 {
@@ -4393,6 +4399,8 @@ void loader_init( CONTEXT *context, void **entry )
 
     if (process_detaching) NtTerminateThread( GetCurrentThread(), 0 );
 
+    if (NtCurrentTeb()->SkipLoaderInit) return;
+
     RtlEnterCriticalSection( &loader_section );
 
     if (!imports_fixup_done)
@@ -4475,6 +4483,13 @@ void loader_init( CONTEXT *context, void **entry )
 #ifdef __arm64ec__
         arm64ec_thread_init();
 #endif
+
+        if (NtCurrentTeb()->SkipThreadAttach)
+        {
+            RtlLeaveCriticalSection( &loader_section );
+            return;
+        }
+
         wm = get_modref( NtCurrentTeb()->Peb->ImageBaseAddress );
     }
 

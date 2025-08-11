@@ -643,19 +643,54 @@ BOOLEAN WINAPI RtlIsProcessorFeaturePresent( UINT feature )
             user_shared_data->ProcessorFeatures[feature]);
 }
 
+static void suspend_remote_breakin( HANDLE unique_thread )
+{
+    OBJECT_ATTRIBUTES attr = { .Length = sizeof(attr) };
+    NTSTATUS status;
+    CLIENT_ID cid = { .UniqueProcess = 0, .UniqueThread = unique_thread };
+    HANDLE thread;
+
+    ERR("aaa  %u\n", __LINE__);
+    status = NtOpenThread( &thread, THREAD_ALL_ACCESS, &attr, &cid );
+    ERR("aaa  %u\n", __LINE__);
+    if (!status) status = pWow64SuspendLocalThread( thread, NULL );
+    ERR("aaa  %u\n", __LINE__);
+    NtTerminateThread( GetCurrentThread(), status );
+}
+
 /***********************************************************************
  *              RtlWow64SuspendThread (NTDLL.@)
  */
 NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
 {
     THREAD_BASIC_INFORMATION tbi;
-
-    NTSTATUS ret = NtQueryInformationThread( thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
-    if (ret) return ret;
+    NTSTATUS status = NtQueryInformationThread( thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
+    if (status) return status;
 
     if (tbi.ClientId.UniqueProcess != NtCurrentTeb()->ClientId.UniqueProcess) {
-        FIXME( "Non-local process thread suspend\n" );
-        return STATUS_SUCCESS;
+        HANDLE process;
+        HANDLE remote_thread;
+        OBJECT_ATTRIBUTES attr = { .Length = sizeof(attr) };
+
+        if (count) NtQueryInformationThread( thread, ThreadSuspendCount, count, sizeof(*count), NULL );
+
+        status = NtOpenProcess( &process, PROCESS_ALL_ACCESS, &attr, &tbi.ClientId );
+        if (status) return status;
+
+        status = NtCreateThreadEx( &remote_thread, THREAD_ALL_ACCESS, NULL, process,
+                                   suspend_remote_breakin, tbi.ClientId.UniqueThread,
+                                   THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT |
+                                   THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER | THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE,
+                                   0, 0, 0, NULL );
+        NtClose( process );
+        if (status) return status;
+
+        NtWaitForMultipleObjects( 1, &remote_thread, TRUE, FALSE, NULL );
+        status = NtQueryInformationThread( remote_thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL );
+        if (!status) status = tbi.ExitStatus;
+
+        NtClose( remote_thread );
+        return status;
     }
 
     return pWow64SuspendLocalThread( thread, count );
