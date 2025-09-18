@@ -30,6 +30,7 @@
 
 static BOOL is_wow64;
 static BOOL old_wow64;
+static BOOL is_arm64_native_machine;
 
 static NTSTATUS (WINAPI *pNtAllocateReserveObject)( HANDLE *, const OBJECT_ATTRIBUTES *, MEMORY_RESERVE_OBJECT_TYPE );
 static NTSTATUS (WINAPI *pNtCreateThreadEx)( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *,
@@ -276,6 +277,12 @@ static void test_thread_bypass_process_freeze(void)
     HANDLE thread;
     NTSTATUS status;
 
+    if (is_wow64 && is_arm64_native_machine)
+    {
+        win_skip( "Skipping process suspend test broken under ARM64 WOW64.\n" );
+        return;
+    }
+
     if (!pNtCreateThreadEx || !pNtSuspendProcess || !pNtResumeProcess)
     {
         win_skip( "NtCreateThreadEx/NtSuspendProcess/NtResumeProcess are not available.\n" );
@@ -455,6 +462,13 @@ START_TEST(thread)
             PEB64 *peb64 = ULongToPtr(teb64->Peb);
             old_wow64 = !peb64->LdrData;
         }
+    }
+
+    if (pRtlWow64GetProcessMachines)
+    {
+        USHORT current, native;
+        is_arm64_native_machine = !pRtlWow64GetProcessMachines( GetCurrentProcess(), &current, &native ) &&
+                                  native == IMAGE_FILE_MACHINE_ARM64;
     }
 
     test_dbg_hidden_thread_creation();
