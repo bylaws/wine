@@ -1176,6 +1176,11 @@ if exist "subdir/" (
 ) else (
    echo ERROR exist subdir with / and quotes not working
 )
+if not exist "" (
+    echo exist empty string works
+) else (
+    echo exist empty string broken
+)
 del foo subdir\bar
 rd subdir
 
@@ -1274,6 +1279,17 @@ echo ------------ Testing if/set ------------
 set x=C:\Program Files (x86)
 if ""=="" set y=%x%\dummy
 echo %y%
+
+echo --- Testing if + var subst in delayed expansion mode
+setlocal enableDelayedExpansion
+for %%i in (abc 10.0 11.0) do (
+    set result=%%i
+    echo [DEBUG] checking {!result!}
+    if "!result:~0,3!"=="10." (
+        echo SDKVER=!result!
+    )
+)
+endlocal
 
 echo ------------ Testing for ------------
 echo --- plain FOR

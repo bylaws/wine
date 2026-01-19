@@ -3261,7 +3261,6 @@ static void test_SuspendProcessNewThread(void)
     ok( !ctx.R13, "r13 is not zero %Ix\n", ctx.R13 );
     ok( !ctx.R14, "r14 is not zero %Ix\n", ctx.R14 );
     ok( !ctx.R15, "r15 is not zero %Ix\n", ctx.R15 );
-    ok( !((ctx.Rsp + 0x28) & 0xfff), "rsp is not at top of stack page %Ix\n", ctx.Rsp );
     ok( ctx.EFlags == 0x200, "wrong flags %08lx\n", ctx.EFlags );
     ok( ctx.MxCsr == 0x1f80, "wrong mxcsr %08lx\n", ctx.MxCsr );
     ok( ctx.FltSave.ControlWord == 0x27f, "wrong control %08x\n", ctx.FltSave.ControlWord );
@@ -3276,8 +3275,6 @@ static void test_SuspendProcessNewThread(void)
     }
     ok( ctx.Eax == (ULONG_PTR)exit_thread_ptr, "wrong eax %08lx/%p\n", ctx.Eax, exit_thread_ptr );
     ok( ctx.Ebx == 0x1234, "wrong ebx %08lx\n", ctx.Ebx );
-    ok( !((ctx.Esp + 0x10) & 0xfff) || broken( !((ctx.Esp + 4) & 0xfff) ), /* winxp, w2k3 */
-        "esp is not at top of stack page or properly aligned: %08lx\n", ctx.Esp );
     ok( (ctx.EFlags & ~2) == 0x200, "wrong flags %08lx\n", ctx.EFlags );
     ok( (WORD)ctx.FloatSave.ControlWord == 0x27f, "wrong control %08lx\n", ctx.FloatSave.ControlWord );
     ok( *(WORD *)ctx.ExtendedRegisters == 0x27f, "wrong control %08x\n", *(WORD *)ctx.ExtendedRegisters );
@@ -3412,7 +3409,6 @@ static void test_SuspendProcessState(void)
     ok( !ctx.R13, "r13 is not zero %Ix\n", ctx.R13 );
     ok( !ctx.R14, "r14 is not zero %Ix\n", ctx.R14 );
     ok( !ctx.R15, "r15 is not zero %Ix\n", ctx.R15 );
-    ok( !((ctx.Rsp + 0x28) & 0xfff), "rsp is not at top of stack page %Ix\n", ctx.Rsp );
     ok( ctx.EFlags == 0x200, "wrong flags %08lx\n", ctx.EFlags );
     ok( ctx.MxCsr == 0x1f80, "wrong mxcsr %08lx\n", ctx.MxCsr );
     ok( ctx.FltSave.ControlWord == 0x27f, "wrong control %08x\n", ctx.FltSave.ControlWord );
@@ -3442,8 +3438,6 @@ static void test_SuspendProcessState(void)
         ok( !ctx.Esi, "esi is not zero %08lx\n", ctx.Esi );
         ok( !ctx.Edi, "edi is not zero %08lx\n", ctx.Edi );
     }
-    ok( !((ctx.Esp + 0x10) & 0xfff) || broken( !((ctx.Esp + 4) & 0xfff) ), /* winxp, w2k3 */
-        "esp is not at top of stack page or properly aligned: %08lx\n", ctx.Esp );
     ok( (ctx.EFlags & ~2) == 0x200, "wrong flags %08lx\n", ctx.EFlags );
     ok( (WORD)ctx.FloatSave.ControlWord == 0x27f, "wrong control %08lx\n", ctx.FloatSave.ControlWord );
     ok( *(WORD *)ctx.ExtendedRegisters == 0x27f, "wrong control %08x\n", *(WORD *)ctx.ExtendedRegisters );

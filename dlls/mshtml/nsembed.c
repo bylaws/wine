@@ -596,7 +596,8 @@ static BOOL init_xpcom(const PRUnichar *gre_path)
         ERR("NS_GetComponentRegistrar failed: %08lx\n", nsres);
     }
 
-    init_node_cc();
+    init_dispex_cc();
+    init_window_cc();
 
     return TRUE;
 }
@@ -1297,7 +1298,7 @@ BOOL is_gecko_path(const char *path)
             *ptr = '/';
     }
 
-    UrlUnescapeW(buf, NULL, NULL, URL_UNESCAPE_INPLACE);
+    UrlUnescapeW(buf, NULL, NULL, URL_UNESCAPE_INPLACE | URL_UNESCAPE_AS_UTF8);
     buf[gecko_path_len] = 0;
 
     ret = !wcsicmp(buf, gecko_path);

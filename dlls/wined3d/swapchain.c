@@ -21,6 +21,7 @@
  */
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 #include "wined3d_vk.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
@@ -1400,7 +1401,31 @@ static HRESULT wined3d_swapchain_state_init(struct wined3d_swapchain_state *stat
         return hr;
     }
 
-    if (!desc->windowed)
+    if (state->desc.windowed)
+    {
+        RECT client_rect;
+
+        GetClientRect(window, &client_rect);
+        TRACE("Client rect %s.\n", wine_dbgstr_rect(&client_rect));
+
+        if (!state->desc.backbuffer_width)
+        {
+            state->desc.backbuffer_width = client_rect.right ? client_rect.right : 8;
+            TRACE("Updating width to %u.\n", state->desc.backbuffer_width);
+        }
+        if (!state->desc.backbuffer_height)
+        {
+            state->desc.backbuffer_height = client_rect.bottom ? client_rect.bottom : 8;
+            TRACE("Updating height to %u.\n", state->desc.backbuffer_height);
+        }
+
+        if (state->desc.backbuffer_format == WINED3DFMT_UNKNOWN)
+        {
+            state->desc.backbuffer_format = state->original_mode.format_id;
+            TRACE("Updating format to %s.\n", debug_d3dformat(state->original_mode.format_id));
+        }
+    }
+    else
     {
         if (desc->flags & WINED3D_SWAPCHAIN_ALLOW_MODE_SWITCH)
         {
@@ -1420,6 +1445,7 @@ static HRESULT wined3d_swapchain_state_init(struct wined3d_swapchain_state *stat
     GetWindowRect(window, &state->original_window_rect);
     state->wined3d = wined3d;
     state->device_window = window;
+    state->desc.device_window = window;
     state->parent = parent;
 
     if (desc->flags & WINED3D_SWAPCHAIN_REGISTER_STATE)
@@ -1479,14 +1505,13 @@ static HRESULT swapchain_create_texture(struct wined3d_swapchain *swapchain,
 }
 
 static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops,
         const struct wined3d_swapchain_ops *swapchain_ops)
 {
     struct wined3d_output_desc output_desc;
     BOOL displaymode_set = FALSE;
     HRESULT hr = E_FAIL;
-    RECT client_rect;
     unsigned int i;
     HWND window;
 
@@ -1503,12 +1528,8 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
             && desc->swap_effect != WINED3D_SWAP_EFFECT_COPY)
         FIXME("Unimplemented swap effect %#x.\n", desc->swap_effect);
 
-    if (!desc->device_window)
-    {
-        TRACE("Updating device_window to %p.\n", device->create_parms.focus_window);
-        desc->device_window = device->create_parms.focus_window;
-    }
-    window = desc->device_window;
+    window = desc->device_window ? desc->device_window : device->create_parms.focus_window;
+    TRACE("Using target window %p.\n", window);
 
     if (FAILED(hr = wined3d_swapchain_state_init(&swapchain->state, desc, window, device->wined3d, state_parent)))
     {
@@ -1526,29 +1547,7 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
     swapchain->swap_interval = WINED3D_SWAP_INTERVAL_DEFAULT;
     swapchain_set_max_frame_latency(swapchain, device);
 
-    GetClientRect(window, &client_rect);
-    if (desc->windowed)
-    {
-        TRACE("Client rect %s.\n", wine_dbgstr_rect(&client_rect));
-
-        if (!desc->backbuffer_width)
-        {
-            desc->backbuffer_width = client_rect.right ? client_rect.right : 8;
-            TRACE("Updating width to %u.\n", desc->backbuffer_width);
-        }
-        if (!desc->backbuffer_height)
-        {
-            desc->backbuffer_height = client_rect.bottom ? client_rect.bottom : 8;
-            TRACE("Updating height to %u.\n", desc->backbuffer_height);
-        }
-
-        if (desc->backbuffer_format == WINED3DFMT_UNKNOWN)
-        {
-            desc->backbuffer_format = swapchain->state.original_mode.format_id;
-            TRACE("Updating format to %s.\n", debug_d3dformat(swapchain->state.original_mode.format_id));
-        }
-    }
-    else
+    if (!swapchain->state.desc.windowed)
     {
         if (FAILED(hr = wined3d_output_get_desc(desc->output, &output_desc)))
         {
@@ -1560,7 +1559,6 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
                 output_desc.desktop_rect.left, output_desc.desktop_rect.top, desc->backbuffer_width,
                 desc->backbuffer_height);
     }
-    swapchain->state.desc = *desc;
     wined3d_swapchain_apply_sample_count_override(swapchain, swapchain->state.desc.backbuffer_format,
             &swapchain->state.desc.multisample_type, &swapchain->state.desc.multisample_quality);
 
@@ -1686,7 +1684,7 @@ err:
 }
 
 HRESULT wined3d_swapchain_no3d_init(struct wined3d_swapchain *swapchain_no3d, struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops)
 {
     TRACE("swapchain_no3d %p, device %p, desc %p, state_parent %p, parent %p, parent_ops %p.\n",
@@ -1697,7 +1695,7 @@ HRESULT wined3d_swapchain_no3d_init(struct wined3d_swapchain *swapchain_no3d, st
 }
 
 HRESULT wined3d_swapchain_gl_init(struct wined3d_swapchain_gl *swapchain_gl, struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops)
 {
     TRACE("swapchain_gl %p, device %p, desc %p, state_parent %p, parent %p, parent_ops %p.\n",
@@ -1708,7 +1706,7 @@ HRESULT wined3d_swapchain_gl_init(struct wined3d_swapchain_gl *swapchain_gl, str
 }
 
 HRESULT wined3d_swapchain_vk_init(struct wined3d_swapchain_vk *swapchain_vk, struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops)
 {
     HRESULT hr;
@@ -1733,7 +1731,7 @@ HRESULT wined3d_swapchain_vk_init(struct wined3d_swapchain_vk *swapchain_vk, str
 }
 
 HRESULT CDECL wined3d_swapchain_create(struct wined3d_device *device,
-        struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
+        const struct wined3d_swapchain_desc *desc, struct wined3d_swapchain_state_parent *state_parent,
         void *parent, const struct wined3d_parent_ops *parent_ops,
         struct wined3d_swapchain **swapchain)
 {
@@ -2425,6 +2423,15 @@ BOOL CDECL wined3d_swapchain_state_is_windowed(const struct wined3d_swapchain_st
     TRACE("state %p.\n", state);
 
     return state->desc.windowed;
+}
+
+void CDECL wined3d_swapchain_state_get_size(const struct wined3d_swapchain_state *state,
+        unsigned int *width, unsigned int *height)
+{
+    TRACE("state %p.\n", state);
+
+    *width = state->desc.backbuffer_width;
+    *height = state->desc.backbuffer_height;
 }
 
 void CDECL wined3d_swapchain_state_destroy(struct wined3d_swapchain_state *state)

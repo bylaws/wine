@@ -390,31 +390,6 @@ static inline HTMLTextAreaElement *impl_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLTextAreaElement, element.node);
 }
 
-static HRESULT HTMLTextAreaElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
-{
-    HTMLTextAreaElement *This = impl_from_HTMLDOMNode(iface);
-
-    *ppv = NULL;
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        TRACE("(%p)->(IID_IUnknown %p)\n", This, ppv);
-        *ppv = &This->IHTMLTextAreaElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        TRACE("(%p)->(IID_IDispatch %p)\n", This, ppv);
-        *ppv = &This->IHTMLTextAreaElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLTextAreaElement, riid)) {
-        TRACE("(%p)->(IID_IHTMLTextAreaElement %p)\n", This, ppv);
-        *ppv = &This->IHTMLTextAreaElement_iface;
-    }
-
-    if(*ppv) {
-        IUnknown_AddRef((IUnknown*)*ppv);
-        return S_OK;
-    }
-
-    return HTMLElement_QI(&This->element.node, riid, ppv);
-}
-
 static HRESULT HTMLTextAreaElementImpl_put_disabled(HTMLDOMNode *iface, VARIANT_BOOL v)
 {
     HTMLTextAreaElement *This = impl_from_HTMLDOMNode(iface);
@@ -432,40 +407,57 @@ static BOOL HTMLTextAreaElement_is_text_edit(HTMLDOMNode *iface)
     return TRUE;
 }
 
-static void HTMLTextAreaElement_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
+static inline HTMLTextAreaElement *impl_from_DispatchEx(DispatchEx *iface)
 {
-    HTMLTextAreaElement *This = impl_from_HTMLDOMNode(iface);
-
-    if(This->nstextarea)
-        note_cc_edge((nsISupports*)This->nstextarea, "This->nstextarea", cb);
+    return CONTAINING_RECORD(iface, HTMLTextAreaElement, element.node.event_target.dispex);
 }
 
-static void HTMLTextAreaElement_unlink(HTMLDOMNode *iface)
+static void *HTMLTextAreaElement_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLTextAreaElement *This = impl_from_HTMLDOMNode(iface);
+    HTMLTextAreaElement *This = impl_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLTextAreaElement, riid))
+        return &This->IHTMLTextAreaElement_iface;
+
+    return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
+}
+
+static void HTMLTextAreaElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLTextAreaElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(dispex, cb);
+
+    if(This->nstextarea)
+        note_cc_edge((nsISupports*)This->nstextarea, "nstextarea", cb);
+}
+
+static void HTMLTextAreaElement_unlink(DispatchEx *dispex)
+{
+    HTMLTextAreaElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(dispex);
     unlink_ref(&This->nstextarea);
 }
 
 static const NodeImplVtbl HTMLTextAreaElementImplVtbl = {
-    &CLSID_HTMLTextAreaElement,
-    HTMLTextAreaElement_QI,
-    HTMLElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    HTMLTextAreaElementImpl_put_disabled,
-    HTMLTextAreaElementImpl_get_disabled,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    HTMLTextAreaElement_traverse,
-    HTMLTextAreaElement_unlink,
-    HTMLTextAreaElement_is_text_edit
+    .clsid                 = &CLSID_HTMLTextAreaElement,
+    .destructor            = HTMLElement_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col,
+    .put_disabled          = HTMLTextAreaElementImpl_put_disabled,
+    .get_disabled          = HTMLTextAreaElementImpl_get_disabled,
+    .is_text_edit          = HTMLTextAreaElement_is_text_edit
+};
+
+static const event_target_vtbl_t HTMLTextAreaElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLTextAreaElement_query_interface,
+        .traverse       = HTMLTextAreaElement_traverse,
+        .unlink         = HTMLTextAreaElement_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLTextAreaElement_iface_tids[] = {
@@ -475,8 +467,8 @@ static const tid_t HTMLTextAreaElement_iface_tids[] = {
 };
 
 static dispex_static_data_t HTMLTextAreaElement_dispex = {
-    L"HTMLTextAreaElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLTextAreaElement",
+    &HTMLTextAreaElement_event_target_vtbl.dispex_vtbl,
     DispHTMLTextAreaElement_tid,
     HTMLTextAreaElement_iface_tids,
     HTMLElement_init_dispex_info

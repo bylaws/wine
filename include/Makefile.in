@@ -6,6 +6,7 @@ SOURCES = \
 	activation.idl \
 	activaut.idl \
 	activdbg.idl \
+	activeds.h \
 	activscp.idl \
 	adserr.h \
 	adshlp.h \
@@ -281,6 +282,8 @@ SOURCES = \
 	dwrite_1.idl \
 	dwrite_2.idl \
 	dwrite_3.idl \
+	dxcore.h \
+	dxcore_interface.h \
 	dxdiag.h \
 	dxerr8.h \
 	dxerr9.h \
@@ -710,6 +713,7 @@ SOURCES = \
 	softpub.h \
 	spatialaudioclient.idl \
 	specstrings.h \
+	specstrings_strict.h \
 	sperror.h \
 	sql.h \
 	sqlext.h \
@@ -809,6 +813,7 @@ SOURCES = \
 	windef.h \
 	windns.h \
 	windot11.h \
+	windows.applicationmodel.core.idl \
 	windows.applicationmodel.idl \
 	windows.devices.bluetooth.idl \
 	windows.devices.enumeration.idl \
@@ -833,9 +838,13 @@ SOURCES = \
 	windows.graphics.effects.idl \
 	windows.graphics.holographic.idl \
 	windows.h \
+	windows.management.deployment.idl \
+	windows.media.capture.idl \
 	windows.media.closedcaptioning.idl \
 	windows.media.devices.idl \
+	windows.media.effects.idl \
 	windows.media.idl \
+	windows.media.render.idl \
 	windows.media.speechrecognition.idl \
 	windows.media.speechsynthesis.idl \
 	windows.networking.connectivity.idl \
@@ -845,7 +854,9 @@ SOURCES = \
 	windows.security.credentials.idl \
 	windows.security.cryptography.idl \
 	windows.security.isolation.idl \
+	windows.storage.fileproperties.idl \
 	windows.storage.idl \
+	windows.storage.search.idl \
 	windows.storage.streams.idl \
 	windows.system.idl \
 	windows.system.power.idl \
@@ -857,6 +868,7 @@ SOURCES = \
 	windows.ui.core.idl \
 	windows.ui.idl \
 	windows.ui.viewmanagement.idl \
+	windows.ui.xaml.hosting.desktopwindowxamlsource.idl \
 	windowscontracts.idl \
 	windowsx.h \
 	wine/afd.h \
@@ -941,6 +953,7 @@ SOURCES = \
 	winuser.rh \
 	winver.h \
 	wlanapi.h \
+	wldp.h \
 	wmcodecdsp.idl \
 	wmdrmsdk.idl \
 	wmistr.h \
@@ -982,6 +995,7 @@ SOURCES = \
 	xact2wb.h \
 	xact3.h \
 	xact3wb.h \
+	xamlom.idl \
 	xapo.idl \
 	xapofx.h \
 	xaudio2.idl \

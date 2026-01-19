@@ -593,15 +593,83 @@ static void test_opt_server_certificate(void)
     ldap_unbind( ld );
 }
 
+static void test_opt_auto_reconnect(void)
+{
+    LDAP *ld;
+    ULONG ret, value;
+
+    ld = ldap_initA( (char *)"db.debian.org", 389 );
+    ok( ld != NULL, "ldap_init failed\n" );
+
+    ret = ldap_set_optionA( ld, LDAP_OPT_AUTO_RECONNECT, LDAP_OPT_ON );
+    ok( !ret, "ldap_set_optionA should succeed, got %#lx\n", ret );
+    ret = ldap_get_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_get_optionA should succeed, got %#lx\n", ret );
+    ok( value == 1, "got %lu\n", ret );
+
+    ret = ldap_set_optionA( ld, LDAP_OPT_AUTO_RECONNECT, LDAP_OPT_OFF );
+    ok( !ret, "ldap_set_optionA should succeed, got %#lx\n", ret );
+    ret = ldap_get_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_get_optionA should succeed, got %#lx\n", ret );
+    ok( value == 0, "got %lu\n", ret );
+
+    value = 1;
+    ret = ldap_set_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_set_optionA should succeed, got %#lx\n", ret );
+    ret = ldap_get_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_get_optionA should succeed, got %#lx\n", ret );
+    ok( value == 1, "got %lu\n", ret );
+
+    value = 0;
+    ret = ldap_set_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_set_optionA should succeed, got %#lx\n", ret );
+    ret = ldap_get_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( !ret, "ldap_get_optionA should succeed, got %#lx\n", ret );
+    ok( value == 0, "got %lu\n", ret );
+
+    value = 2;
+    ret = ldap_set_optionA( ld, LDAP_OPT_AUTO_RECONNECT, &value );
+    ok( ret == LDAP_PARAM_ERROR, "ldap_set_optionA should fail, got %#lx\n", ret );
+}
+
+static void test_ldap_host_name(void)
+{
+    LDAP *ld;
+    char *value;
+    ULONG ret;
+
+    ld = ldap_initA( NULL, 389 );
+    ok(ld != NULL, "ldap_init failed\n");
+
+    value = (char *)"deadbeef";
+    ret = ldap_get_optionA( ld, LDAP_OPT_HOST_NAME, &value );
+    ok( !ret, "ldap_get_option error %#lx\n", ret );
+    todo_wine
+    ok( !value, "got %s\n", value );
+
+    value = (char *)"deadbeef";
+    ret = ldap_set_optionA( ld, LDAP_OPT_HOST_NAME, &value );
+    ok( !ret, "ldap_set_option error %#lx\n", ret );
+
+    value = (char *)"";
+    ret = ldap_get_optionA( ld, LDAP_OPT_HOST_NAME, &value );
+    ok( !ret, "ldap_get_option error %#lx\n", ret );
+    ok( !strcmp(value, "deadbeef") || !strcmp(value, "deadbeef:389"), "got %s\n", value );
+
+    ldap_unbind( ld );
+}
+
 START_TEST (parse)
 {
     LDAP *ld;
 
+    test_ldap_host_name();
     test_ldap_paged_search();
     test_ldap_server_control();
     test_ldap_bind_sA();
     test_opt_ssl();
     test_opt_server_certificate();
+    test_opt_auto_reconnect();
 
     ld = ldap_initA( (char *)"db.debian.org", 389 );
     ok( ld != NULL, "ldap_init failed\n" );

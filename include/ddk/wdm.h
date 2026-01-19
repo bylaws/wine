@@ -83,15 +83,21 @@ typedef struct _KSEMAPHORE {
 } KSEMAPHORE, *PKSEMAPHORE, *PRKSEMAPHORE;
 
 typedef struct _KDPC {
-  CSHORT  Type;
-  UCHAR  Number;
-  UCHAR  Importance;
-  LIST_ENTRY  DpcListEntry;
+  union {
+    ULONG TargetInfoAsUlong;
+    struct {
+      UCHAR  Type;
+      UCHAR  Importance;
+      volatile USHORT  Number;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+  SINGLE_LIST_ENTRY  DpcListEntry;
+  KAFFINITY  ProcessorHistory;
   PKDEFERRED_ROUTINE  DeferredRoutine;
   PVOID  DeferredContext;
   PVOID  SystemArgument1;
   PVOID  SystemArgument2;
-  PULONG_PTR  Lock;
+  PVOID  DpcData;
 } KDPC, *PKDPC, *RESTRICTED_POINTER PRKDPC;
 
 typedef enum _KDPC_IMPORTANCE {
@@ -1407,8 +1413,8 @@ typedef struct _KLOCK_QUEUE_HANDLE {
     KIRQL OldIrql;
 } KLOCK_QUEUE_HANDLE, *PKLOCK_QUEUE_HANDLE;
 
-typedef void * (NTAPI *PALLOCATE_FUNCTION)(POOL_TYPE, SIZE_T, ULONG);
-typedef void * (NTAPI *PALLOCATE_FUNCTION_EX)(POOL_TYPE, SIZE_T, ULONG, PLOOKASIDE_LIST_EX);
+typedef void * (__WINE_ALLOC_SIZE(2) NTAPI *PALLOCATE_FUNCTION)(POOL_TYPE, SIZE_T, ULONG);
+typedef void * (__WINE_ALLOC_SIZE(2) NTAPI *PALLOCATE_FUNCTION_EX)(POOL_TYPE, SIZE_T, ULONG, PLOOKASIDE_LIST_EX);
 typedef void (NTAPI *PFREE_FUNCTION)(void *);
 typedef void (NTAPI *PFREE_FUNCTION_EX)(void *, PLOOKASIDE_LIST_EX);
 typedef void (NTAPI *PCALLBACK_FUNCTION)(void *, void *, void *);

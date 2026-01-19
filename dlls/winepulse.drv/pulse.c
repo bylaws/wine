@@ -2221,9 +2221,14 @@ static NTSTATUS pulse_is_format_supported(void *args)
         break;
     }
 
-    /* This driver does not support exclusive mode. */
-    if (exclusive && params->result == S_OK)
-        params->result = params->flow == eCapture ? AUDCLNT_E_UNSUPPORTED_FORMAT : AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
+    if (exclusive) { /* This driver does not support exclusive mode. */
+        if (params->result == S_OK)
+            params->result = params->flow == eCapture ?
+                                             AUDCLNT_E_UNSUPPORTED_FORMAT :
+                                             AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
+        else if (params->result == S_FALSE)
+            params->result = AUDCLNT_E_UNSUPPORTED_FORMAT;
+    }
 
     return STATUS_SUCCESS;
 }
@@ -2566,6 +2571,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     pulse_not_implemented,
     pulse_not_implemented,
 };
+
+C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);
 
 #ifdef _WIN64
 
@@ -3035,5 +3042,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     pulse_not_implemented,
     pulse_not_implemented,
 };
+
+C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == funcs_count);
 
 #endif /* _WIN64 */

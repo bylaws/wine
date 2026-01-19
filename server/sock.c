@@ -197,6 +197,8 @@ struct bound_addr
 
 #define MAX_ICMP_HISTORY_LENGTH 8
 
+#define MIN_RCVBUF 65536
+
 struct sock
 {
     struct object       obj;         /* object header */
@@ -1293,7 +1295,10 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs
 
     case SOCK_CONNECTING:
         if (event & POLLOUT)
+        {
             post_socket_event( sock, AFD_POLL_BIT_CONNECT );
+            post_socket_event( sock, AFD_POLL_BIT_WRITE );
+        }
         if (event & (POLLERR | POLLHUP))
             post_socket_event( sock, AFD_POLL_BIT_CONNECT_ERR );
         break;
@@ -1469,6 +1474,8 @@ static int sock_get_poll_events( struct fd *fd )
     LIST_FOR_EACH_ENTRY( req, &poll_list, struct poll_req, entry )
     {
         unsigned int i;
+
+        if (req->iosb->status != STATUS_PENDING) continue;
 
         for (i = 0; i < req->count; ++i)
         {
@@ -1911,7 +1918,14 @@ static int init_socket( struct sock *sock, int family, int type, int protocol )
 
     len = sizeof(value);
     if (!getsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, &value, &len ))
+    {
+        if (value < MIN_RCVBUF)
+        {
+            value = MIN_RCVBUF;
+            setsockopt( sockfd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value) );
+        }
         sock->rcvbuf = value;
+    }
 
     len = sizeof(value);
     if (!getsockopt( sockfd, SOL_SOCKET, SO_SNDBUF, &value, &len ))
@@ -2519,6 +2533,12 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
             return;
         }
 
+        if (sock->type == WS_SOCK_DGRAM)
+        {
+            set_error( STATUS_NOT_SUPPORTED );
+            return;
+        }
+
         if (!sock->bound)
         {
             set_error( STATUS_INVALID_PARAMETER );
@@ -3059,7 +3079,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
 
     case IOCTL_AFD_WINE_SET_SO_RCVBUF:
     {
-        DWORD rcvbuf;
+        DWORD rcvbuf, set_rcvbuf;
 
         if (get_req_data_size() < sizeof(rcvbuf))
         {
@@ -3067,8 +3087,9 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
             return;
         }
         rcvbuf = *(DWORD *)get_req_data();
+        set_rcvbuf = max( rcvbuf, MIN_RCVBUF );
 
-        if (!setsockopt( unix_fd, SOL_SOCKET, SO_RCVBUF, (char *)&rcvbuf, sizeof(rcvbuf) ))
+        if (!setsockopt( unix_fd, SOL_SOCKET, SO_RCVBUF, (char *)&set_rcvbuf, sizeof(set_rcvbuf) ))
             sock->rcvbuf = rcvbuf;
         else
             set_error( sock_get_ntstatus( errno ) );

@@ -166,6 +166,7 @@ static void * const syscalls[] =
     NtCreateThread,
     NtCreateThreadEx,
     NtCreateTimer,
+    NtCreateToken,
     NtCreateTransaction,
     NtCreateUserProcess,
     NtDebugActiveProcess,
@@ -446,18 +447,42 @@ static void set_max_limit( int limit )
     if (!getrlimit( limit, &rlimit ))
     {
         rlimit.rlim_cur = rlimit.rlim_max;
-        if (setrlimit( limit, &rlimit ) != 0)
-        {
+
+        if (!setrlimit( limit, &rlimit ))
+            return;
+
 #if defined(__APPLE__) && defined(RLIMIT_NOFILE) && defined(OPEN_MAX)
+        if (limit == RLIMIT_NOFILE)
+        {
+            unsigned int nlimit = 0;
+            size_t size;
+
             /* On Leopard, setrlimit(RLIMIT_NOFILE, ...) fails on attempts to set
-             * rlim_cur above OPEN_MAX (even if rlim_max > OPEN_MAX). */
-            if (limit == RLIMIT_NOFILE && rlimit.rlim_cur > OPEN_MAX)
-            {
+             * rlim_cur above OPEN_MAX (even if rlim_max > OPEN_MAX).
+             *
+             * In later versions it can be set to kern.maxfilesperproc (from
+             * sysctl). In Big Sur and later it can be set to rlim_max. */
+            size = sizeof(nlimit);
+            if (sysctlbyname("kern.maxfilesperproc", &nlimit, &size, NULL, 0) != 0 || nlimit < OPEN_MAX)
                 rlimit.rlim_cur = OPEN_MAX;
-                setrlimit( limit, &rlimit );
+            else
+                rlimit.rlim_cur = nlimit;
+
+            if (!setrlimit( limit, &rlimit ))
+            {
+                TRACE("Fallback 1: RLIMIT_NOFILE to kern.maxfilesperproc\n");
+                return;
             }
-#endif
+
+            rlimit.rlim_cur = OPEN_MAX;
+            if (!setrlimit( limit, &rlimit ))
+            {
+                TRACE("Fallback 2: RLIMIT_NOFILE to OPEN_MAX(%d)\n", OPEN_MAX);
+                return;
+            }
         }
+#endif
+        WARN("Failed to raise limit %d\n", limit);
     }
 }
 
@@ -1209,24 +1234,31 @@ static NTSTATUS dlopen_dll( const char *so_name, UNICODE_STRING *nt_name, void *
 /***********************************************************************
  *           ntdll_init_syscalls
  */
-NTSTATUS ntdll_init_syscalls( ULONG id, SYSTEM_SERVICE_TABLE *table, void **dispatcher )
+NTSTATUS ntdll_init_syscalls( SYSTEM_SERVICE_TABLE *table, void **dispatcher )
 {
     struct syscall_info
     {
         void  *dispatcher;
+        UINT   version;
+        USHORT id;
         USHORT limit;
-        BYTE  args[1];
+     /* USHORT names[limit]; */
+     /* BYTE   args[limit]; */
     } *info = (struct syscall_info *)dispatcher;
 
-    if (id > 3) return STATUS_INVALID_PARAMETER;
+    if (info->version != 0xca110001)
+    {
+        ERR( "invalid syscall table version %x\n", info->version );
+        NtTerminateProcess( GetCurrentProcess(), STATUS_INVALID_PARAMETER );
+    }
     if (info->limit != table->ServiceLimit)
     {
         ERR( "syscall count mismatch %u / %lu\n", info->limit, table->ServiceLimit );
         NtTerminateProcess( GetCurrentProcess(), STATUS_INVALID_PARAMETER );
     }
     info->dispatcher = __wine_syscall_dispatcher;
-    memcpy( table->ArgumentTable, info->args, table->ServiceLimit );
-    KeServiceDescriptorTable[id] = *table;
+    memcpy( table->ArgumentTable, (USHORT *)(info + 1) + info->limit, table->ServiceLimit );
+    KeServiceDescriptorTable[info->id] = *table;
     return STATUS_SUCCESS;
 }
 
@@ -2069,7 +2101,7 @@ static void start_main_thread(void)
     load_ntdll();
     if (main_image_info.Machine != current_machine) load_wow64_ntdll( main_image_info.Machine );
     load_apiset_dll();
-    ntdll_init_syscalls( 0, &syscall_table, p__wine_syscall_dispatcher );
+    ntdll_init_syscalls( &syscall_table, p__wine_syscall_dispatcher );
     server_init_process_done();
 }
 

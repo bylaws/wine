@@ -876,7 +876,10 @@ typedef struct _FILE_END_OF_FILE_INFO {
 } FILE_END_OF_FILE_INFO, *PFILE_END_OF_FILE_INFO;
 
 typedef struct _FILE_RENAME_INFO {
-    BOOLEAN ReplaceIfExists;
+    union {
+        BOOLEAN ReplaceIfExists;
+        DWORD Flags;
+    } DUMMYUNIONNAME;
     HANDLE RootDirectory;
     DWORD FileNameLength;
     WCHAR FileName[1];
@@ -2817,6 +2820,7 @@ WINBASEAPI BOOL        WINAPI VirtualUnlock(LPVOID,SIZE_T);
 WINBASEAPI DWORD       WINAPI WTSGetActiveConsoleSessionId(void);
 WINBASEAPI BOOL        WINAPI WaitCommEvent(HANDLE,LPDWORD,LPOVERLAPPED);
 WINBASEAPI BOOL        WINAPI WaitForDebugEvent(LPDEBUG_EVENT,DWORD);
+WINBASEAPI BOOL        WINAPI WaitForDebugEventEx(LPDEBUG_EVENT,DWORD);
 WINBASEAPI DWORD       WINAPI WaitForMultipleObjects(DWORD,const HANDLE*,BOOL,DWORD);
 WINBASEAPI DWORD       WINAPI WaitForMultipleObjectsEx(DWORD,const HANDLE*,BOOL,DWORD,BOOL);
 WINBASEAPI DWORD       WINAPI WaitForSingleObject(HANDLE,DWORD);

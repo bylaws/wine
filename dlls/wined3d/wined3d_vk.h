@@ -217,6 +217,7 @@ enum wined3d_vk_extension
 
     WINED3D_VK_EXT_TRANSFORM_FEEDBACK,
     WINED3D_VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE,
+    WINED3D_VK_KHR_SHADER_DRAW_PARAMETERS,
     WINED3D_VK_EXT_HOST_QUERY_RESET,
 
     WINED3D_VK_EXT_COUNT,
@@ -1035,7 +1036,7 @@ static inline struct wined3d_swapchain_vk *wined3d_swapchain_vk(struct wined3d_s
 
 void wined3d_swapchain_vk_cleanup(struct wined3d_swapchain_vk *swapchain_vk) DECLSPEC_HIDDEN;
 HRESULT wined3d_swapchain_vk_init(struct wined3d_swapchain_vk *swapchain_vk,
-        struct wined3d_device *device, struct wined3d_swapchain_desc *desc,
+        struct wined3d_device *device, const struct wined3d_swapchain_desc *desc,
         struct wined3d_swapchain_state_parent *state_parent, void *parent,
         const struct wined3d_parent_ops *parent_ops) DECLSPEC_HIDDEN;
 

@@ -1702,7 +1702,7 @@ static inline void dup_unicode_string( const UNICODE_STRING *src, WCHAR **dst, U
     str->Length = src->Length;
     str->MaximumLength = src->MaximumLength;
     memcpy( *dst, src->Buffer, src->MaximumLength );
-    *dst += src->MaximumLength / sizeof(WCHAR);
+    *dst += (src->MaximumLength + 1) / sizeof(WCHAR);
 }
 
 
@@ -1798,7 +1798,7 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
                    + params->WindowTitle.MaximumLength
                    + params->Desktop.MaximumLength
                    + params->ShellInfo.MaximumLength
-                   + params->RuntimeInfo.MaximumLength
+                   + ((params->RuntimeInfo.MaximumLength + 1) & ~1)
                    + params->EnvironmentSize);
 
     status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&wow64_params, 0, &size,
@@ -1823,6 +1823,7 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
     wow64_params->dwFillAttribute = params->dwFillAttribute;
     wow64_params->dwFlags         = params->dwFlags;
     wow64_params->wShowWindow     = params->wShowWindow;
+    wow64_params->ProcessGroupId  = params->ProcessGroupId;
 
     dst = (WCHAR *)(wow64_params + 1);
     dup_unicode_string( &params->CurrentDirectory.DosPath, &dst, &wow64_params->CurrentDirectory.DosPath );
@@ -1864,6 +1865,7 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
         NtCurrentTeb()->WowTebOffset = teb_offset;
         NtCurrentTeb()->Tib.ExceptionList = (void *)((char *)NtCurrentTeb() + teb_offset);
         wow_peb = (PEB32 *)((char *)peb + page_size);
+        user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ? limit_4g : limit_2g) - 1;
         set_thread_id( NtCurrentTeb(), GetCurrentProcessId(), GetCurrentThreadId() );
         ERR( "starting %s in experimental wow64 mode\n", debugstr_us(&params->ImagePathName) );
         break;
@@ -1980,6 +1982,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     params->Size            = size;
     params->Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;
     params->wShowWindow     = 1; /* SW_SHOWNORMAL */
+    params->ProcessGroupId  = GetCurrentProcessId();
 
     params->CurrentDirectory.DosPath.Buffer = (WCHAR *)(params + 1);
     wcscpy( params->CurrentDirectory.DosPath.Buffer, get_dos_path( curdir ));
@@ -2078,6 +2081,7 @@ void init_startup_info(void)
     params->dwFillAttribute = info->attribute;
     params->dwFlags         = info->flags;
     params->wShowWindow     = info->show;
+    params->ProcessGroupId  = info->process_group_id;
 
     src = (WCHAR *)(info + 1);
     dst = (WCHAR *)(params + 1);
@@ -2168,6 +2172,7 @@ void *create_startup_info( const UNICODE_STRING *nt_image, const RTL_USER_PROCES
     info->attribute     = params->dwFillAttribute;
     info->flags         = params->dwFlags;
     info->show          = params->wShowWindow;
+    info->process_group_id = params->ProcessGroupId;
 
     ptr = info + 1;
     info->curdir_len = append_string( &ptr, params, &params->CurrentDirectory.DosPath );

@@ -33,6 +33,7 @@
 #include <stdio.h>
 
 #include "wined3d_private.h"
+#include "wined3d_gl.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d_shader);
 WINE_DECLARE_DEBUG_CHANNEL(d3d);
@@ -11570,9 +11571,9 @@ static void glsl_vertex_pipe_vp_get_caps(const struct wined3d_adapter *adapter, 
     caps->raster_caps = WINED3DPRASTERCAPS_FOGRANGE;
 }
 
-static unsigned int glsl_vertex_pipe_vp_get_emul_mask(const struct wined3d_gl_info *gl_info)
+static unsigned int glsl_vertex_pipe_vp_get_emul_mask(const struct wined3d_adapter *adapter)
 {
-    if (gl_info->supported[WINED3D_GL_LEGACY_CONTEXT])
+    if (wined3d_adapter_gl_const(adapter)->gl_info.supported[WINED3D_GL_LEGACY_CONTEXT])
         return GL_EXT_EMUL_ARB_MULTITEXTURE;
     return 0;
 }
@@ -12083,9 +12084,9 @@ static void glsl_fragment_pipe_get_caps(const struct wined3d_adapter *adapter, s
     caps->MaxSimultaneousTextures = min(gl_info->limits.samplers[WINED3D_SHADER_TYPE_PIXEL], WINED3D_MAX_TEXTURES);
 }
 
-static unsigned int glsl_fragment_pipe_get_emul_mask(const struct wined3d_gl_info *gl_info)
+static unsigned int glsl_fragment_pipe_get_emul_mask(const struct wined3d_adapter *adapter)
 {
-    if (gl_info->supported[WINED3D_GL_LEGACY_CONTEXT])
+    if (wined3d_adapter_gl_const(adapter)->gl_info.supported[WINED3D_GL_LEGACY_CONTEXT])
         return GL_EXT_EMUL_ARB_MULTITEXTURE;
     return 0;
 }
@@ -12139,8 +12140,6 @@ static void glsl_fragment_pipe_free(struct wined3d_device *device, struct wined3
 static void glsl_fragment_pipe_shader(struct wined3d_context *context,
         const struct wined3d_state *state, DWORD state_id)
 {
-    context->last_was_pshader = use_ps(state);
-
     context->shader_update_mask |= 1u << WINED3D_SHADER_TYPE_PIXEL;
 }
 
@@ -13218,6 +13217,7 @@ static DWORD glsl_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_bli
     else
         wined3d_texture_load_location(dst_texture, dst_sub_resource_idx, context, dst_location);
 
+    context_gl_apply_texture_draw_state(context_gl, dst_texture, dst_sub_resource_idx, dst_location);
     wined3d_context_gl_apply_blit_state(context_gl, device);
 
     if (dst_location == WINED3D_LOCATION_DRAWABLE)
@@ -13226,8 +13226,6 @@ static DWORD glsl_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_bli
         wined3d_texture_translate_drawable_coords(dst_texture, context_gl->window, &d);
         dst_rect = &d;
     }
-
-    context_gl_apply_texture_draw_state(context_gl, dst_texture, dst_sub_resource_idx, dst_location);
 
     if (op == WINED3D_BLIT_OP_COLOR_BLIT_ALPHATEST)
     {

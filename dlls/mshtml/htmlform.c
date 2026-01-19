@@ -773,36 +773,40 @@ static inline HTMLFormElement *impl_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLFormElement, element.node);
 }
 
-static HRESULT HTMLFormElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
+static inline HTMLFormElement *impl_from_DispatchEx(DispatchEx *iface)
 {
-    HTMLFormElement *This = impl_from_HTMLDOMNode(iface);
-
-    *ppv = NULL;
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        TRACE("(%p)->(IID_IUnknown %p)\n", This, ppv);
-        *ppv = &This->IHTMLFormElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        TRACE("(%p)->(IID_IDispatch %p)\n", This, ppv);
-        *ppv = &This->IHTMLFormElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLFormElement, riid)) {
-        TRACE("(%p)->(IID_IHTMLFormElement %p)\n", This, ppv);
-        *ppv = &This->IHTMLFormElement_iface;
-    }else if(IsEqualGUID(&DIID_DispHTMLFormElement, riid)) {
-        TRACE("(%p)->(DIID_DispHTMLFormElement %p)\n", This, ppv);
-        *ppv = &This->IHTMLFormElement_iface;
-    }
-
-    if(*ppv) {
-        IUnknown_AddRef((IUnknown*)*ppv);
-        return S_OK;
-    }
-
-    return HTMLElement_QI(&This->element.node, riid, ppv);
+    return CONTAINING_RECORD(iface, HTMLFormElement, element.node.event_target.dispex);
 }
 
-static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface,
-        BSTR name, DWORD grfdex, DISPID *pid)
+static void *HTMLFormElement_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLFormElement *This = impl_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLFormElement, riid))
+        return &This->IHTMLFormElement_iface;
+    if(IsEqualGUID(&DIID_DispHTMLFormElement, riid))
+        return &This->IHTMLFormElement_iface;
+
+    return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
+}
+
+static void HTMLFormElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLFormElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(dispex, cb);
+
+    if(This->nsform)
+        note_cc_edge((nsISupports*)This->nsform, "nsform", cb);
+}
+
+static void HTMLFormElement_unlink(DispatchEx *dispex)
+{
+    HTMLFormElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(dispex);
+    unlink_ref(&This->nsform);
+}
+
+static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface, BSTR name, DWORD grfdex, DISPID *dispid)
 {
     HTMLFormElement *This = impl_from_HTMLDOMNode(iface);
     nsIDOMHTMLCollection *elements;
@@ -811,7 +815,7 @@ static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface,
     nsresult nsres;
     HRESULT hres = DISP_E_UNKNOWNNAME;
 
-    TRACE("(%p)->(%s %lx %p)\n", This, wine_dbgstr_w(name), grfdex, pid);
+    TRACE("(%p)->(%s %lx %p)\n", This, wine_dbgstr_w(name), grfdex, dispid);
 
     nsres = nsIDOMHTMLFormElement_GetElements(This->nsform, &elements);
     if(NS_FAILED(nsres)) {
@@ -835,7 +839,7 @@ static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface,
 
         i = wcstoul(name, &end_ptr, 10);
         if(!*end_ptr && i < len) {
-            *pid = MSHTML_DISPID_CUSTOM_MIN + i;
+            *dispid = MSHTML_DISPID_CUSTOM_MIN + i;
             return S_OK;
         }
     }
@@ -873,7 +877,7 @@ static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface,
         if(!wcsicmp(str, name)) {
             nsIDOMElement_Release(elem);
             /* FIXME: using index for dispid */
-            *pid = MSHTML_DISPID_CUSTOM_MIN + i;
+            *dispid = MSHTML_DISPID_CUSTOM_MIN + i;
             hres = S_OK;
             break;
         }
@@ -885,7 +889,7 @@ static HRESULT HTMLFormElement_get_dispid(HTMLDOMNode *iface,
             if(!wcsicmp(str, name)) {
                 nsAString_Finish(&name_str);
                 /* FIXME: using index for dispid */
-                *pid = MSHTML_DISPID_CUSTOM_MIN + i;
+                *dispid = MSHTML_DISPID_CUSTOM_MIN + i;
                 hres = S_OK;
                 break;
             }
@@ -923,9 +927,8 @@ static HRESULT HTMLFormElement_dispex_get_name(HTMLDOMNode *iface, DISPID id, BS
     return (*name = SysAllocStringLen(buf, len)) ? S_OK : E_OUTOFMEMORY;
 }
 
-static HRESULT HTMLFormElement_invoke(HTMLDOMNode *iface,
-        DISPID id, LCID lcid, WORD flags, DISPPARAMS *params, VARIANT *res,
-        EXCEPINFO *ei, IServiceProvider *caller)
+static HRESULT HTMLFormElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     HTMLFormElement *This = impl_from_HTMLDOMNode(iface);
     IDispatch *ret;
@@ -958,39 +961,26 @@ static HRESULT HTMLFormElement_handle_event(HTMLDOMNode *iface, DWORD eid, nsIDO
     return HTMLElement_handle_event(&This->element.node, eid, event, prevent_default);
 }
 
-static void HTMLFormElement_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
-{
-    HTMLFormElement *This = impl_from_HTMLDOMNode(iface);
-
-    if(This->nsform)
-        note_cc_edge((nsISupports*)This->nsform, "This->nsform", cb);
-}
-
-static void HTMLFormElement_unlink(HTMLDOMNode *iface)
-{
-    HTMLFormElement *This = impl_from_HTMLDOMNode(iface);
-    unlink_ref(&This->nsform);
-}
-
 static const NodeImplVtbl HTMLFormElementImplVtbl = {
-    &CLSID_HTMLFormElement,
-    HTMLFormElement_QI,
-    HTMLElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLFormElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    HTMLFormElement_get_dispid,
-    HTMLFormElement_dispex_get_name,
-    HTMLFormElement_invoke,
-    NULL,
-    HTMLFormElement_traverse,
-    HTMLFormElement_unlink
+    .clsid                 = &CLSID_HTMLFormElement,
+    .destructor            = HTMLElement_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLFormElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col,
+    .get_dispid            = HTMLFormElement_get_dispid,
+    .get_name              = HTMLFormElement_dispex_get_name,
+    .invoke                = HTMLFormElement_invoke,
+};
+
+static const event_target_vtbl_t HTMLFormElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLFormElement_query_interface,
+        .traverse       = HTMLFormElement_traverse,
+        .unlink         = HTMLFormElement_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLFormElement_iface_tids[] = {
@@ -1000,8 +990,8 @@ static const tid_t HTMLFormElement_iface_tids[] = {
 };
 
 static dispex_static_data_t HTMLFormElement_dispex = {
-    L"HTMLFormElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLFormElement",
+    &HTMLFormElement_event_target_vtbl.dispex_vtbl,
     DispHTMLFormElement_tid,
     HTMLFormElement_iface_tids,
     HTMLElement_init_dispex_info

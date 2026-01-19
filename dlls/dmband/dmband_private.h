@@ -61,26 +61,6 @@ typedef struct _DMUS_PRIVATE_BAND_ITEM_HEADER {
 	MUSIC_TIME lBandTimePhysical;
 } DMUS_PRIVATE_BAND_ITEM_HEADER;
 
-typedef struct _DMUS_PRIVATE_INSTRUMENT {
-	struct list entry; /* for listing elements */
-	DMUS_IO_INSTRUMENT pInstrument;
-	IDirectMusicCollection* ppReferenceCollection;
-} DMUS_PRIVATE_INSTRUMENT, *LPDMUS_PRIVATE_INSTRUMENT;
-
-typedef struct _DMUS_PRIVATE_BAND {
-	struct list entry; /* for listing elements */
-	DMUS_PRIVATE_BAND_ITEM_HEADER BandHeader;
-	IDirectMusicBand *band;
-} DMUS_PRIVATE_BAND, *LPDMUS_PRIVATE_BAND;
-
-
-/**********************************************************************
- * Dll lifetime tracking declaration for dmband.dll
- */
-extern LONG DMBAND_refCount;
-static inline void DMBAND_LockModule(void) { InterlockedIncrement( &DMBAND_refCount ); }
-static inline void DMBAND_UnlockModule(void) { InterlockedDecrement( &DMBAND_refCount ); }
-
 /*****************************************************************************
  * Misc.
  */

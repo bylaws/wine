@@ -562,7 +562,7 @@ static void test_get_adapter_displaymode_ex(void)
 
     devmode = startmode;
     devmode.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
-    S2(U1(devmode)).dmDisplayOrientation = DMDO_180;
+    devmode.dmDisplayOrientation = DMDO_180;
     retval = ChangeDisplaySettingsExW(NULL, &devmode, NULL, 0, NULL);
     if (retval == DISP_CHANGE_BADMODE)
     {
@@ -573,7 +573,7 @@ static void test_get_adapter_displaymode_ex(void)
     ok(retval == DISP_CHANGE_SUCCESSFUL, "ChangeDisplaySettingsEx failed with %ld.\n", retval);
     /* try retrieve orientation info with EnumDisplaySettingsEx*/
     devmode.dmFields = 0;
-    S2(U1(devmode)).dmDisplayOrientation = 0;
+    devmode.dmDisplayOrientation = 0;
     ok(EnumDisplaySettingsExW(NULL, ENUM_CURRENT_SETTINGS, &devmode, EDS_ROTATEDMODE),
             "EnumDisplaySettingsEx failed.\n");
 
@@ -605,8 +605,8 @@ static void test_get_adapter_displaymode_ex(void)
     ok(mode_ex.ScanLineOrdering != 0, "ScanLineOrdering returned 0\n");
     /* Check that orientation is returned correctly by GetAdapterDisplayModeEx
      * and EnumDisplaySettingsEx(). */
-    ok(S2(U1(devmode)).dmDisplayOrientation == DMDO_180 && rotation == D3DDISPLAYROTATION_180,
-            "rotation is %d instead of %ld\n", rotation, S2(U1(devmode)).dmDisplayOrientation);
+    ok(devmode.dmDisplayOrientation == DMDO_180 && rotation == D3DDISPLAYROTATION_180,
+            "rotation is %d instead of %ld\n", rotation, devmode.dmDisplayOrientation);
 
     trace("GetAdapterDisplayModeEx returned Width = %d, Height = %d, RefreshRate = %d, Format = %x, ScanLineOrdering = %x, rotation = %d\n",
           mode_ex.Width, mode_ex.Height, mode_ex.RefreshRate, mode_ex.Format, mode_ex.ScanLineOrdering, rotation);
@@ -3013,14 +3013,42 @@ static void test_wndproc(void)
         SetForegroundWindow(GetDesktopWindow());
         ok(!expect_messages->message, "Expected message %#x for window %#x, but didn't receive it, i=%u.\n",
                 expect_messages->message, expect_messages->window, i);
+
+        /* kwin sometimes resizes hidden windows. */
+        flaky
         ok(!windowposchanged_received, "Received WM_WINDOWPOSCHANGED but did not expect it, i=%u.\n", i);
+
         expect_messages = NULL;
-        flush_events();
 
         ret = EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &devmode);
         ok(ret, "Failed to get display mode.\n");
         ok(devmode.dmPelsWidth == registry_mode.dmPelsWidth, "Got unexpected width %lu.\n", devmode.dmPelsWidth);
         ok(devmode.dmPelsHeight == registry_mode.dmPelsHeight, "Got unexpected height %lu.\n", devmode.dmPelsHeight);
+
+        flush_events();
+
+        /* Openbox accidentally sets focus to the device window, causing WM_ACTIVATEAPP to be sent to the focus
+         * window. d3d9ex then restores the screen mode. This only happens in the D3DCREATE_NOWINDOWCHANGES case.
+         *
+         * This appears to be a race condition - it goes away if openbox is started with --sync. d3d9:device and
+         * d3d8:device are affected too, but because in their case d3d does not automatically restore the screen
+         * mode (it needs a call to device::Reset), the EnumDisplaySettings check succeeds regardless.
+         *
+         * Note that this is not a case of focus follows mouse. This happens when Openbox is configured to use
+         * click to focus too. */
+        if (GetForegroundWindow() == device_window)
+        {
+            skip("WM set focus to the device window, not checking screen mode.\n");
+        }
+        else
+        {
+            ret = EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &devmode);
+            ok(ret, "Failed to get display mode.\n");
+            ok(devmode.dmPelsWidth == registry_mode.dmPelsWidth,
+                    "Got unexpected width %lu.\n", devmode.dmPelsWidth);
+            ok(devmode.dmPelsHeight == registry_mode.dmPelsHeight,
+                    "Got unexpected height %lu.\n", devmode.dmPelsHeight);
+        }
 
         /* SW_SHOWMINNOACTIVE is needed to make FVWM happy. SW_SHOWNOACTIVATE is needed to make windows
          * send SIZE_RESTORED after ShowWindow(SW_SHOWMINNOACTIVE). */
@@ -3097,8 +3125,11 @@ static void test_wndproc(void)
         flaky_wine
         ok(!expect_messages->message, "Expected message %#x for window %#x, but didn't receive it, i=%u.\n",
                 expect_messages->message, expect_messages->window, i);
-        flaky_if(i == 0 || i == 1)
+
+        /* kwin and Win8+ sometimes resize hidden windows. */
+        flaky
         ok(!windowposchanged_received, "Received WM_WINDOWPOSCHANGED but did not expect it, i=%u.\n", i);
+
         expect_messages = NULL;
 
         /* The window is iconic even though no message was sent. */

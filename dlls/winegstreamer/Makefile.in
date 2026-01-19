@@ -11,6 +11,7 @@ C_SRCS = \
 	color_convert.c \
 	h264_decoder.c \
 	main.c \
+	media_sink.c \
 	media_source.c \
 	mfplat.c \
 	quartz_parser.c \
@@ -21,6 +22,7 @@ C_SRCS = \
 	video_processor.c \
 	wg_allocator.c \
 	wg_format.c \
+	wg_muxer.c \
 	wg_parser.c \
 	wg_sample.c \
 	wg_transform.c \

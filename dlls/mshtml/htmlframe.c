@@ -700,20 +700,14 @@ static const IHTMLFrameBase2Vtbl HTMLFrameBase2Vtbl = {
     HTMLFrameBase2_get_allowTransparency
 };
 
-static HRESULT HTMLFrameBase_QI(HTMLFrameBase *This, REFIID riid, void **ppv)
+static void *HTMLFrameBase_QI(HTMLFrameBase *This, REFIID riid)
 {
-    if(IsEqualGUID(&IID_IHTMLFrameBase, riid)) {
-        TRACE("(%p)->(IID_IHTMLFrameBase %p)\n", This, ppv);
-        *ppv = &This->IHTMLFrameBase_iface;
-    }else if(IsEqualGUID(&IID_IHTMLFrameBase2, riid)) {
-        TRACE("(%p)->(IID_IHTMLFrameBase2 %p)\n", This, ppv);
-        *ppv = &This->IHTMLFrameBase2_iface;
-    }else {
-        return HTMLElement_QI(&This->element.node, riid, ppv);
-    }
+    if(IsEqualGUID(&IID_IHTMLFrameBase, riid))
+        return &This->IHTMLFrameBase_iface;
+    if(IsEqualGUID(&IID_IHTMLFrameBase2, riid))
+        return &This->IHTMLFrameBase2_iface;
 
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
 }
 
 static void HTMLFrameBase_destructor(HTMLFrameBase *This)
@@ -893,28 +887,6 @@ static inline HTMLFrameElement *frame_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLFrameElement, framebase.element.node);
 }
 
-static HRESULT HTMLFrameElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
-{
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-
-    if(IsEqualGUID(&IID_IHTMLFrameElement3, riid)) {
-        TRACE("(%p)->(IID_IHTMLFrameElement3 %p)\n", This, ppv);
-        *ppv = &This->IHTMLFrameElement3_iface;
-    }else {
-        return HTMLFrameBase_QI(&This->framebase, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
-}
-
-static void HTMLFrameElement_destructor(HTMLDOMNode *iface)
-{
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-
-    HTMLFrameBase_destructor(&This->framebase);
-}
-
 static HRESULT HTMLFrameElement_get_document(HTMLDOMNode *iface, IDispatch **p)
 {
     HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
@@ -936,44 +908,6 @@ static HRESULT HTMLFrameElement_get_readystate(HTMLDOMNode *iface, BSTR *p)
     return IHTMLFrameBase2_get_readyState(&This->framebase.IHTMLFrameBase2_iface, p);
 }
 
-static HRESULT HTMLFrameElement_get_dispid(HTMLDOMNode *iface, BSTR name,
-        DWORD grfdex, DISPID *pid)
-{
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-
-    if(!This->framebase.content_window)
-        return DISP_E_UNKNOWNNAME;
-
-    return search_window_props(This->framebase.content_window->base.inner_window, name, grfdex, pid);
-}
-
-static HRESULT HTMLFrameElement_get_name(HTMLDOMNode *iface, DISPID id, BSTR *name)
-{
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-    DWORD idx = id - MSHTML_DISPID_CUSTOM_MIN;
-
-    if(!This->framebase.content_window ||
-       idx >= This->framebase.content_window->base.inner_window->global_prop_cnt)
-        return DISP_E_MEMBERNOTFOUND;
-
-    *name = SysAllocString(This->framebase.content_window->base.inner_window->global_props[idx].name);
-    return *name ? S_OK : E_OUTOFMEMORY;
-}
-
-static HRESULT HTMLFrameElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid,
-        WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
-{
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-
-    if(!This->framebase.content_window) {
-        ERR("no content window to invoke on\n");
-        return E_FAIL;
-    }
-
-    return IDispatchEx_InvokeEx(&This->framebase.content_window->base.IDispatchEx_iface, id, lcid,
-            flags, params, res, ei, caller);
-}
-
 static HRESULT HTMLFrameElement_bind_to_tree(HTMLDOMNode *iface)
 {
     HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
@@ -992,39 +926,104 @@ static HRESULT HTMLFrameElement_bind_to_tree(HTMLDOMNode *iface)
     return hres;
 }
 
-static void HTMLFrameElement_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
+static inline HTMLFrameElement *frame_from_DispatchEx(DispatchEx *iface)
 {
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
-
-    if(This->framebase.nsframe)
-        note_cc_edge((nsISupports*)This->framebase.nsframe, "This->nsframe", cb);
+    return CONTAINING_RECORD(iface, HTMLFrameElement, framebase.element.node.event_target.dispex);
 }
 
-static void HTMLFrameElement_unlink(HTMLDOMNode *iface)
+static void *HTMLFrameElement_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
+    HTMLFrameElement *This = frame_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLFrameElement3, riid))
+        return &This->IHTMLFrameElement3_iface;
+
+    return HTMLFrameBase_QI(&This->framebase, riid);
+}
+
+static void HTMLFrameElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLFrameElement *This = frame_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(dispex, cb);
+
+    if(This->framebase.nsframe)
+        note_cc_edge((nsISupports*)This->framebase.nsframe, "nsframe", cb);
+}
+
+static void HTMLFrameElement_unlink(DispatchEx *dispex)
+{
+    HTMLFrameElement *This = frame_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(dispex);
     unlink_ref(&This->framebase.nsframe);
 }
 
+static void HTMLFrameElement_destructor(HTMLDOMNode *iface)
+{
+    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
+
+    HTMLFrameBase_destructor(&This->framebase);
+}
+
+static HRESULT HTMLFrameElement_get_dispid(HTMLDOMNode *iface, BSTR name, DWORD grfdex, DISPID *dispid)
+{
+    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
+
+    if(!This->framebase.content_window)
+        return DISP_E_UNKNOWNNAME;
+
+    return search_window_props(This->framebase.content_window->base.inner_window, name, grfdex, dispid);
+}
+
+static HRESULT HTMLFrameElement_get_name(HTMLDOMNode *iface, DISPID id, BSTR *name)
+{
+    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
+    DWORD idx = id - MSHTML_DISPID_CUSTOM_MIN;
+
+    if(!This->framebase.content_window ||
+       idx >= This->framebase.content_window->base.inner_window->global_prop_cnt)
+        return DISP_E_MEMBERNOTFOUND;
+
+    *name = SysAllocString(This->framebase.content_window->base.inner_window->global_props[idx].name);
+    return *name ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT HTMLFrameElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+{
+    HTMLFrameElement *This = frame_from_HTMLDOMNode(iface);
+
+    if(!This->framebase.content_window) {
+        ERR("no content window to invoke on\n");
+        return E_FAIL;
+    }
+
+    return IDispatchEx_InvokeEx(&This->framebase.content_window->base.IDispatchEx_iface, id, lcid,
+            flags, params, res, ei, caller);
+}
+
 static const NodeImplVtbl HTMLFrameElementImplVtbl = {
-    &CLSID_HTMLFrameElement,
-    HTMLFrameElement_QI,
-    HTMLFrameElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    NULL,
-    NULL,
-    HTMLFrameElement_get_document,
-    HTMLFrameElement_get_readystate,
-    HTMLFrameElement_get_dispid,
-    HTMLFrameElement_get_name,
-    HTMLFrameElement_invoke,
-    HTMLFrameElement_bind_to_tree,
-    HTMLFrameElement_traverse,
-    HTMLFrameElement_unlink
+    .clsid                 = &CLSID_HTMLFrameElement,
+    .destructor            = HTMLFrameElement_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col,
+    .get_document          = HTMLFrameElement_get_document,
+    .get_readystate        = HTMLFrameElement_get_readystate,
+    .get_dispid            = HTMLFrameElement_get_dispid,
+    .get_name              = HTMLFrameElement_get_name,
+    .invoke                = HTMLFrameElement_invoke,
+    .bind_to_tree          = HTMLFrameElement_bind_to_tree,
+};
+
+static const event_target_vtbl_t HTMLFrameElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLFrameElement_query_interface,
+        .traverse       = HTMLFrameElement_traverse,
+        .unlink         = HTMLFrameElement_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLFrameElement_iface_tids[] = {
@@ -1036,8 +1035,8 @@ static const tid_t HTMLFrameElement_iface_tids[] = {
 };
 
 static dispex_static_data_t HTMLFrameElement_dispex = {
-    L"HTMLFrameElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLFrameElement",
+    &HTMLFrameElement_event_target_vtbl.dispex_vtbl,
     DispHTMLFrameElement_tid,
     HTMLFrameElement_iface_tids,
     HTMLElement_init_dispex_info
@@ -1474,34 +1473,6 @@ static inline HTMLIFrame *iframe_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLIFrame, framebase.element.node);
 }
 
-static HRESULT HTMLIFrame_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
-{
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-
-    if(IsEqualGUID(&IID_IHTMLIFrameElement, riid)) {
-        TRACE("(%p)->(IID_IHTMLIFrameElement %p)\n", This, ppv);
-        *ppv = &This->IHTMLIFrameElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLIFrameElement2, riid)) {
-        TRACE("(%p)->(IID_IHTMLIFrameElement2 %p)\n", This, ppv);
-        *ppv = &This->IHTMLIFrameElement2_iface;
-    }else if(IsEqualGUID(&IID_IHTMLIFrameElement3, riid)) {
-        TRACE("(%p)->(IID_IHTMLIFrameElement3 %p)\n", This, ppv);
-        *ppv = &This->IHTMLIFrameElement3_iface;
-    }else {
-        return HTMLFrameBase_QI(&This->framebase, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
-}
-
-static void HTMLIFrame_destructor(HTMLDOMNode *iface)
-{
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-
-    HTMLFrameBase_destructor(&This->framebase);
-}
-
 static HRESULT HTMLIFrame_get_document(HTMLDOMNode *iface, IDispatch **p)
 {
     HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
@@ -1514,44 +1485,6 @@ static HRESULT HTMLIFrame_get_document(HTMLDOMNode *iface, IDispatch **p)
     *p = (IDispatch*)&This->framebase.content_window->base.inner_window->doc->IHTMLDocument2_iface;
     IDispatch_AddRef(*p);
     return S_OK;
-}
-
-static HRESULT HTMLIFrame_get_dispid(HTMLDOMNode *iface, BSTR name,
-        DWORD grfdex, DISPID *pid)
-{
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-
-    if(!This->framebase.content_window)
-        return DISP_E_UNKNOWNNAME;
-
-    return search_window_props(This->framebase.content_window->base.inner_window, name, grfdex, pid);
-}
-
-static HRESULT HTMLIFrame_get_name(HTMLDOMNode *iface, DISPID id, BSTR *name)
-{
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-    DWORD idx = id - MSHTML_DISPID_CUSTOM_MIN;
-
-    if(!This->framebase.content_window ||
-       idx >= This->framebase.content_window->base.inner_window->global_prop_cnt)
-        return DISP_E_MEMBERNOTFOUND;
-
-    *name = SysAllocString(This->framebase.content_window->base.inner_window->global_props[idx].name);
-    return *name ? S_OK : E_OUTOFMEMORY;
-}
-
-static HRESULT HTMLIFrame_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid,
-        WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
-{
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-
-    if(!This->framebase.content_window) {
-        ERR("no content window to invoke on\n");
-        return E_FAIL;
-    }
-
-    return IDispatchEx_InvokeEx(&This->framebase.content_window->base.IDispatchEx_iface, id, lcid,
-            flags, params, res, ei, caller);
 }
 
 static HRESULT HTMLIFrame_get_readystate(HTMLDOMNode *iface, BSTR *p)
@@ -1579,39 +1512,108 @@ static HRESULT HTMLIFrame_bind_to_tree(HTMLDOMNode *iface)
     return hres;
 }
 
-static void HTMLIFrame_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
+static inline HTMLIFrame *iframe_from_DispatchEx(DispatchEx *iface)
 {
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
-
-    if(This->framebase.nsiframe)
-        note_cc_edge((nsISupports*)This->framebase.nsiframe, "This->nsiframe", cb);
+    return CONTAINING_RECORD(iface, HTMLIFrame, framebase.element.node.event_target.dispex);
 }
 
-static void HTMLIFrame_unlink(HTMLDOMNode *iface)
+static void *HTMLIFrame_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
+    HTMLIFrame *This = iframe_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLIFrameElement, riid))
+        return &This->IHTMLIFrameElement_iface;
+    if(IsEqualGUID(&IID_IHTMLIFrameElement2, riid))
+        return &This->IHTMLIFrameElement2_iface;
+    if(IsEqualGUID(&IID_IHTMLIFrameElement3, riid))
+        return &This->IHTMLIFrameElement3_iface;
+
+    return HTMLFrameBase_QI(&This->framebase, riid);
+}
+
+static void HTMLIFrame_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLIFrame *This = iframe_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(dispex, cb);
+
+    if(This->framebase.nsiframe)
+        note_cc_edge((nsISupports*)This->framebase.nsiframe, "nsiframe", cb);
+}
+
+static void HTMLIFrame_unlink(DispatchEx *dispex)
+{
+    HTMLIFrame *This = iframe_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(dispex);
     unlink_ref(&This->framebase.nsiframe);
 }
 
+static void HTMLIFrame_destructor(HTMLDOMNode *iface)
+{
+    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
+
+    HTMLFrameBase_destructor(&This->framebase);
+}
+
+static HRESULT HTMLIFrame_get_dispid(HTMLDOMNode *iface, BSTR name, DWORD grfdex, DISPID *dispid)
+{
+    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
+
+    if(!This->framebase.content_window)
+        return DISP_E_UNKNOWNNAME;
+
+    return search_window_props(This->framebase.content_window->base.inner_window, name, grfdex, dispid);
+}
+
+static HRESULT HTMLIFrame_get_name(HTMLDOMNode *iface, DISPID id, BSTR *name)
+{
+    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
+    DWORD idx = id - MSHTML_DISPID_CUSTOM_MIN;
+
+    if(!This->framebase.content_window ||
+       idx >= This->framebase.content_window->base.inner_window->global_prop_cnt)
+        return DISP_E_MEMBERNOTFOUND;
+
+    *name = SysAllocString(This->framebase.content_window->base.inner_window->global_props[idx].name);
+    return *name ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT HTMLIFrame_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+{
+    HTMLIFrame *This = iframe_from_HTMLDOMNode(iface);
+
+    if(!This->framebase.content_window) {
+        ERR("no content window to invoke on\n");
+        return E_FAIL;
+    }
+
+    return IDispatchEx_InvokeEx(&This->framebase.content_window->base.IDispatchEx_iface, id, lcid,
+            flags, params, res, ei, caller);
+}
+
 static const NodeImplVtbl HTMLIFrameImplVtbl = {
-    &CLSID_HTMLIFrame,
-    HTMLIFrame_QI,
-    HTMLIFrame_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    NULL,
-    NULL,
-    HTMLIFrame_get_document,
-    HTMLIFrame_get_readystate,
-    HTMLIFrame_get_dispid,
-    HTMLIFrame_get_name,
-    HTMLIFrame_invoke,
-    HTMLIFrame_bind_to_tree,
-    HTMLIFrame_traverse,
-    HTMLIFrame_unlink
+    .clsid                 = &CLSID_HTMLIFrame,
+    .destructor            = HTMLIFrame_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col,
+    .get_document          = HTMLIFrame_get_document,
+    .get_readystate        = HTMLIFrame_get_readystate,
+    .get_dispid            = HTMLIFrame_get_dispid,
+    .get_name              = HTMLIFrame_get_name,
+    .invoke                = HTMLIFrame_invoke,
+    .bind_to_tree          = HTMLIFrame_bind_to_tree,
+};
+
+static const event_target_vtbl_t HTMLIFrame_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLIFrame_query_interface,
+        .traverse       = HTMLIFrame_traverse,
+        .unlink         = HTMLIFrame_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLIFrame_iface_tids[] = {
@@ -1625,8 +1627,8 @@ static const tid_t HTMLIFrame_iface_tids[] = {
 };
 
 static dispex_static_data_t HTMLIFrame_dispex = {
-    L"HTMLIFrameElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLIFrameElement",
+    &HTMLIFrame_event_target_vtbl.dispex_vtbl,
     DispHTMLIFrame_tid,
     HTMLIFrame_iface_tids,
     HTMLElement_init_dispex_info

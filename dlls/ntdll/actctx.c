@@ -2564,6 +2564,15 @@ static void parse_application_elem( xmlbuf_t *xmlbuf, struct assembly *assembly,
                                     struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+    struct xml_attr attr;
+    BOOL end = FALSE;
+
+    while (next_xml_attr(xmlbuf, &attr, &end))
+    {
+        if (!is_xmlns_attr( &attr )) WARN( "unknown attr %s\n", debugstr_xml_attr(&attr) );
+    }
+
+    if (end) return;
 
     while (next_xml_elem( xmlbuf, &elem, parent ))
     {
@@ -2708,11 +2717,14 @@ static void parse_assembly_elem( xmlbuf_t *xmlbuf, struct assembly* assembly,
         }
     }
 
-    if (end || !version)
+    if (!version)
     {
         set_error( xmlbuf );
         return;
     }
+
+    if (end)
+        return;
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {

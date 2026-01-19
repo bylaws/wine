@@ -637,50 +637,67 @@ static inline HTMLObjectElement *impl_from_HTMLDOMNode(HTMLDOMNode *iface)
     return CONTAINING_RECORD(iface, HTMLObjectElement, plugin_container.element.node);
 }
 
-static HRESULT HTMLObjectElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
+static HRESULT HTMLObjectElement_get_readystate(HTMLDOMNode *iface, BSTR *p)
 {
     HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
+    FIXME("(%p)->(%p)\n", This, p);
+    return E_NOTIMPL;
+}
 
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
+static inline HTMLObjectElement *impl_from_DispatchEx(DispatchEx *iface)
+{
+    return CONTAINING_RECORD(iface, HTMLObjectElement, plugin_container.element.node.event_target.dispex);
+}
 
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLObjectElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLObjectElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLObjectElement, riid)) {
-        *ppv = &This->IHTMLObjectElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLObjectElement2, riid)) {
-        *ppv = &This->IHTMLObjectElement2_iface;
-    }else if(IsEqualGUID(&IID_HTMLPluginContainer, riid)) {
-        /* Special pseudo-interface returning HTMLPluginContainse struct. */
-        *ppv = &This->plugin_container;
-        node_addref(&This->plugin_container.element.node);
-        return S_OK;
-    }else {
-        HRESULT hres;
+static void *HTMLObjectElement_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLObjectElement *This = impl_from_DispatchEx(dispex);
+    void *elem_iface;
 
-        hres = HTMLElement_QI(&This->plugin_container.element.node, riid, ppv);
-        if(hres == E_NOINTERFACE && This->plugin_container.plugin_host && This->plugin_container.plugin_host->plugin_unk) {
-            IUnknown *plugin_iface, *ret;
-
-            hres = IUnknown_QueryInterface(This->plugin_container.plugin_host->plugin_unk, riid, (void**)&plugin_iface);
-            if(hres == S_OK) {
-                hres = wrap_iface(plugin_iface, (IUnknown*)&This->IHTMLObjectElement_iface, &ret);
-                IUnknown_Release(plugin_iface);
-                if(FAILED(hres))
-                    return hres;
-
-                TRACE("returning plugin iface %p wrapped to %p\n", plugin_iface, ret);
-                *ppv = ret;
-                return S_OK;
-            }
-        }
-
-        return hres;
+    if(IsEqualGUID(&IID_IHTMLObjectElement, riid))
+        return &This->IHTMLObjectElement_iface;
+    if(IsEqualGUID(&IID_IHTMLObjectElement2, riid))
+        return &This->IHTMLObjectElement2_iface;
+    if(IsEqualGUID(&IID_HTMLPluginContainer, riid)) {
+        /* Special pseudo-interface returning HTMLPluginContainer struct. */
+        return &This->plugin_container;
     }
 
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    elem_iface = HTMLElement_query_interface(&This->plugin_container.element.node.event_target.dispex, riid);
+    if(!elem_iface && This->plugin_container.plugin_host && This->plugin_container.plugin_host->plugin_unk) {
+        IUnknown *plugin_iface, *ret;
+        HRESULT hres = IUnknown_QueryInterface(This->plugin_container.plugin_host->plugin_unk, riid, (void**)&plugin_iface);
+
+        if(hres == S_OK) {
+            hres = wrap_iface(plugin_iface, (IUnknown*)&This->IHTMLObjectElement_iface, &ret);
+            IUnknown_Release(plugin_iface);
+            if(FAILED(hres)) {
+                ERR("wrap_iface failed: %08lx\n", hres);
+                return NULL;
+            }
+
+            TRACE("returning plugin iface %p wrapped to %p\n", plugin_iface, ret);
+            return ret;
+        }
+    }
+
+    return elem_iface;
+}
+
+static void HTMLObjectElement_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLObjectElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_traverse(dispex, cb);
+
+    if(This->nsobject)
+        note_cc_edge((nsISupports*)This->nsobject, "nsobject", cb);
+}
+
+static void HTMLObjectElement_unlink(DispatchEx *dispex)
+{
+    HTMLObjectElement *This = impl_from_DispatchEx(dispex);
+    HTMLDOMNode_unlink(dispex);
+    unlink_ref(&This->nsobject);
 }
 
 static void HTMLObjectElement_destructor(HTMLDOMNode *iface)
@@ -693,21 +710,13 @@ static void HTMLObjectElement_destructor(HTMLDOMNode *iface)
     HTMLElement_destructor(&This->plugin_container.element.node);
 }
 
-static HRESULT HTMLObjectElement_get_readystate(HTMLDOMNode *iface, BSTR *p)
-{
-    HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
-    FIXME("(%p)->(%p)\n", This, p);
-    return E_NOTIMPL;
-}
-
-static HRESULT HTMLObjectElement_get_dispid(HTMLDOMNode *iface, BSTR name,
-        DWORD grfdex, DISPID *pid)
+static HRESULT HTMLObjectElement_get_dispid(HTMLDOMNode *iface, BSTR name, DWORD grfdex, DISPID *dispid)
 {
     HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
 
-    TRACE("(%p)->(%s %lx %p)\n", This, debugstr_w(name), grfdex, pid);
+    TRACE("(%p)->(%s %lx %p)\n", This, debugstr_w(name), grfdex, dispid);
 
-    return get_plugin_dispid(&This->plugin_container, name, pid);
+    return get_plugin_dispid(&This->plugin_container, name, dispid);
 }
 
 static HRESULT HTMLObjectElement_dispex_get_name(HTMLDOMNode *iface, DISPID id, BSTR *name)
@@ -719,8 +728,8 @@ static HRESULT HTMLObjectElement_dispex_get_name(HTMLDOMNode *iface, DISPID id, 
     return E_NOTIMPL;
 }
 
-static HRESULT HTMLObjectElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid,
-        WORD flags, DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+static HRESULT HTMLObjectElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
+        VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
 {
     HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
 
@@ -729,39 +738,27 @@ static HRESULT HTMLObjectElement_invoke(HTMLDOMNode *iface, DISPID id, LCID lcid
     return invoke_plugin_prop(&This->plugin_container, id, lcid, flags, params, res, ei);
 }
 
-static void HTMLObjectElement_traverse(HTMLDOMNode *iface, nsCycleCollectionTraversalCallback *cb)
-{
-    HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
-
-    if(This->nsobject)
-        note_cc_edge((nsISupports*)This->nsobject, "This->nsobject", cb);
-}
-
-static void HTMLObjectElement_unlink(HTMLDOMNode *iface)
-{
-    HTMLObjectElement *This = impl_from_HTMLDOMNode(iface);
-    unlink_ref(&This->nsobject);
-}
-
 static const NodeImplVtbl HTMLObjectElementImplVtbl = {
-    &CLSID_HTMLObjectElement,
-    HTMLObjectElement_QI,
-    HTMLObjectElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    HTMLObjectElement_get_readystate,
-    HTMLObjectElement_get_dispid,
-    HTMLObjectElement_dispex_get_name,
-    HTMLObjectElement_invoke,
-    NULL,
-    HTMLObjectElement_traverse,
-    HTMLObjectElement_unlink
+    .clsid                 = &CLSID_HTMLObjectElement,
+    .destructor            = HTMLObjectElement_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col,
+    .get_readystate        = HTMLObjectElement_get_readystate,
+    .get_dispid            = HTMLObjectElement_get_dispid,
+    .get_name              = HTMLObjectElement_dispex_get_name,
+    .invoke                = HTMLObjectElement_invoke,
+};
+
+static const event_target_vtbl_t HTMLObjectElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLObjectElement_query_interface,
+        .traverse       = HTMLObjectElement_traverse,
+        .unlink         = HTMLObjectElement_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLObjectElement_iface_tids[] = {
@@ -771,8 +768,8 @@ static const tid_t HTMLObjectElement_iface_tids[] = {
     0
 };
 static dispex_static_data_t HTMLObjectElement_dispex = {
-    L"HTMLObjectElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLObjectElement",
+    &HTMLObjectElement_event_target_vtbl.dispex_vtbl,
     DispHTMLObjectElement_tid,
     HTMLObjectElement_iface_tids,
     HTMLElement_init_dispex_info
@@ -986,46 +983,38 @@ static const IHTMLEmbedElementVtbl HTMLEmbedElementVtbl = {
     HTMLEmbedElement_get_height
 };
 
-static inline HTMLEmbed *embed_from_HTMLDOMNode(HTMLDOMNode *iface)
+static inline HTMLEmbed *embed_from_DispatchEx(DispatchEx *iface)
 {
-    return CONTAINING_RECORD(iface, HTMLEmbed, element.node);
+    return CONTAINING_RECORD(iface, HTMLEmbed, element.node.event_target.dispex);
 }
 
-static HRESULT HTMLEmbedElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
+static void *HTMLEmbedElement_query_interface(DispatchEx *dispex, REFIID riid)
 {
-    HTMLEmbed *This = embed_from_HTMLDOMNode(iface);
+    HTMLEmbed *This = embed_from_DispatchEx(dispex);
 
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
+    if(IsEqualGUID(&IID_IHTMLEmbedElement, riid))
+        return &This->IHTMLEmbedElement_iface;
 
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLEmbedElement_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLEmbedElement_iface;
-    }else if(IsEqualGUID(&IID_IHTMLEmbedElement, riid)) {
-        *ppv = &This->IHTMLEmbedElement_iface;
-    }else {
-        return HTMLElement_QI(&This->element.node, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
-}
-
-static void HTMLEmbedElement_destructor(HTMLDOMNode *iface)
-{
-    HTMLEmbed *This = embed_from_HTMLDOMNode(iface);
-
-    HTMLElement_destructor(&This->element.node);
+    return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
 }
 
 static const NodeImplVtbl HTMLEmbedElementImplVtbl = {
-    &CLSID_HTMLEmbed,
-    HTMLEmbedElement_QI,
-    HTMLEmbedElement_destructor,
-    HTMLElement_cpc,
-    HTMLElement_clone,
-    HTMLElement_handle_event,
-    HTMLElement_get_attr_col
+    .clsid                 = &CLSID_HTMLEmbed,
+    .destructor            = HTMLElement_destructor,
+    .cpc_entries           = HTMLElement_cpc,
+    .clone                 = HTMLElement_clone,
+    .handle_event          = HTMLElement_handle_event,
+    .get_attr_col          = HTMLElement_get_attr_col
+};
+
+static const event_target_vtbl_t HTMLEmbedElement_event_target_vtbl = {
+    {
+        HTMLELEMENT_DISPEX_VTBL_ENTRIES,
+        .query_interface= HTMLEmbedElement_query_interface,
+        .traverse       = HTMLDOMNode_traverse,
+        .unlink         = HTMLDOMNode_unlink
+    },
+    HTMLELEMENT_EVENT_TARGET_VTBL_ENTRIES,
 };
 
 static const tid_t HTMLEmbedElement_iface_tids[] = {
@@ -1034,8 +1023,8 @@ static const tid_t HTMLEmbedElement_iface_tids[] = {
     0
 };
 static dispex_static_data_t HTMLEmbedElement_dispex = {
-    L"HTMLEmbedElement",
-    &HTMLElement_event_target_vtbl.dispex_vtbl,
+    "HTMLEmbedElement",
+    &HTMLEmbedElement_event_target_vtbl.dispex_vtbl,
     DispHTMLEmbed_tid,
     HTMLEmbedElement_iface_tids,
     HTMLElement_init_dispex_info

@@ -1042,9 +1042,6 @@ UINT WINAPI NtUserMapVirtualKeyEx( UINT code, UINT type, HKL layout )
 
     if ((ret = user_driver->pMapVirtualKeyEx( code, type, layout )) != -1) return ret;
 
-    kbd_tables_init_vsc2vk( kbd_tables, vsc2vk );
-    kbd_tables_init_vk2char( kbd_tables, vk2char );
-
     switch (type)
     {
     case MAPVK_VK_TO_VSC_EX:
@@ -1067,6 +1064,7 @@ UINT WINAPI NtUserMapVirtualKeyEx( UINT code, UINT type, HKL layout )
         case VK_DECIMAL: code = VK_DELETE; break;
         }
 
+        kbd_tables_init_vsc2vk( kbd_tables, vsc2vk );
         for (ret = 0; ret < ARRAY_SIZE(vsc2vk); ++ret) if (vsc2vk[ret] == code) break;
         if (ret >= ARRAY_SIZE(vsc2vk)) ret = 0;
 
@@ -1079,6 +1077,8 @@ UINT WINAPI NtUserMapVirtualKeyEx( UINT code, UINT type, HKL layout )
         break;
     case MAPVK_VSC_TO_VK:
     case MAPVK_VSC_TO_VK_EX:
+        kbd_tables_init_vsc2vk( kbd_tables, vsc2vk );
+
         if (code & 0xe000) code -= 0xdf00;
         if (code >= ARRAY_SIZE(vsc2vk)) ret = 0;
         else ret = vsc2vk[code];
@@ -1094,6 +1094,7 @@ UINT WINAPI NtUserMapVirtualKeyEx( UINT code, UINT type, HKL layout )
         }
         break;
     case MAPVK_VK_TO_CHAR:
+        kbd_tables_init_vk2char( kbd_tables, vk2char );
         if (code >= ARRAY_SIZE(vk2char)) ret = 0;
         else if (code >= 'A' && code <= 'Z') ret = code;
         else ret = vk2char[code];
@@ -1115,17 +1116,16 @@ INT WINAPI NtUserGetKeyNameText( LONG lparam, WCHAR *buffer, INT size )
     INT code = ((lparam >> 16) & 0x1ff), vkey, len;
     const KBDTABLES *kbd_tables = &kbdus_tables;
     VSC_LPWSTR *key_name;
-    BYTE vsc2vk[0x300];
 
     TRACE_(keyboard)( "lparam %#x, buffer %p, size %d.\n", (int)lparam, buffer, size );
 
     if (!buffer || !size) return 0;
     if ((len = user_driver->pGetKeyNameText( lparam, buffer, size )) >= 0) return len;
 
-    kbd_tables_init_vsc2vk( kbd_tables, vsc2vk );
-
     if (lparam & 0x2000000)
     {
+        BYTE vsc2vk[0x300];
+        kbd_tables_init_vsc2vk( kbd_tables, vsc2vk );
         switch ((vkey = vsc2vk[code]))
         {
         case VK_RSHIFT:

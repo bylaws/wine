@@ -511,6 +511,23 @@ static const char settings_manifest3[] =
 "   </asmv3:application>"
 "</assembly>";
 
+static const char settings_manifest4[] =
+"<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">"
+"   <assemblyIdentity version=\"1.0.0.0\"  name=\"Wine.Test\" type=\"win32\"></assemblyIdentity>"
+"   <application/>"
+"   <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">"
+"       <windowsSettings>"
+"           <dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">true</dpiAware>"
+"       </windowsSettings>"
+"   </application>"
+"   <application/>"
+"   <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">"
+"       <windowsSettings>"
+"           <dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">true</dpiAwareness>"
+"       </windowsSettings>"
+"   </application>"
+"</assembly>";
+
 static const char two_dll_manifest_dll[] =
 "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v3\" manifestVersion=\"1.0\">"
 "  <assemblyIdentity type=\"win32\" name=\"sxs_dll\" version=\"1.0.0.0\" processorArchitecture=\"x86\" publicKeyToken=\"0000000000000000\"/>"
@@ -542,6 +559,8 @@ static const char builtin_dll_manifest[] =
 "   </dependency>"
 "</assembly>";
 
+static const char empty_assembly_manifest[] =
+"<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\" />";
 
 DEFINE_GUID(VISTA_COMPAT_GUID,      0xe2011457, 0x1546, 0x43c5, 0xa5, 0xfe, 0x00, 0x8d, 0xee, 0xe3, 0xd3, 0xf0);
 DEFINE_GUID(WIN7_COMPAT_GUID,       0x35138b9a, 0x5d96, 0x4fbd, 0x8e, 0x2d, 0xa2, 0x44, 0x02, 0x25, 0xf9, 0x3a);
@@ -2516,6 +2535,17 @@ static void test_actctx(void)
         ReleaseActCtx(handle);
     }
 
+    /* Empty <assembly/> element. */
+    create_manifest_file("empty_assembly.manifest", empty_assembly_manifest, -1, NULL, NULL);
+    handle = test_create("empty_assembly.manifest");
+    ok(handle != INVALID_HANDLE_VALUE, "Failed to create activation context.\n");
+    DeleteFileA("empty_assembly.manifest");
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        test_basic_info(handle, __LINE__);
+        ReleaseActCtx(handle);
+    }
+
     test_wndclass_section();
     test_dllredirect_section();
     test_typelib_section();
@@ -3391,6 +3421,23 @@ static void test_settings(void)
     ret = pQueryActCtxSettingsW( 0, handle, NULL, dpiAwareW, buffer, 80, &size );
     ok( !ret, "QueryActCtxSettingsW succeeded\n" );
     ok( GetLastError() == ERROR_SXS_KEY_NOT_FOUND, "wrong error %lu\n", GetLastError() );
+    ReleaseActCtx(handle);
+
+    /* lookup occurs in first non empty node */
+    create_manifest_file( "manifest_settings4.manifest", settings_manifest4, -1, NULL, NULL );
+    handle = test_create("manifest_settings4.manifest");
+    ok( handle != INVALID_HANDLE_VALUE, "handle == INVALID_HANDLE_VALUE, error %lu\n", GetLastError() );
+    DeleteFileA( "manifest_settings3.manifest" );
+    SetLastError( 0xdeadbeef );
+    size = 0xdead;
+    memset( buffer, 0xcc, sizeof(buffer) );
+    ret = pQueryActCtxSettingsW( 0, handle, NULL, dpiAwareW, buffer, 80, &size );
+    ok( ret, "QueryActCtxSettingsW failed\n" );
+    SetLastError( 0xdeadbeef );
+    size = 0xdead;
+    memset( buffer, 0xcc, sizeof(buffer) );
+    ret = pQueryActCtxSettingsW( 0, handle, NULL, dpiAwarenessW, buffer, 80, &size );
+    ok( !ret, "QueryActCtxSettingsW succeeded\n" );
     ReleaseActCtx(handle);
 }
 

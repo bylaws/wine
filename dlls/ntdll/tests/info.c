@@ -2079,21 +2079,21 @@ static void test_query_process_debug_port(int argc, char **argv)
     status = NtQueryInformationProcess(NULL, ProcessDebugPort,
             &debug_port, sizeof(debug_port), &len);
     ok(status == STATUS_INVALID_HANDLE, "Expected STATUS_INVALID_HANDLE, got %#lx.\n", status);
-    ok(len == 0xdeadbeef || broken(len == 0xfffffffc || len == 0xffc), /* wow64 */
+    ok(len == 0xdeadbeef || broken(len != sizeof(debug_port)), /* wow64 */
        "len set to %lx\n", len );
 
     len = 0xdeadbeef;
     status = NtQueryInformationProcess(GetCurrentProcess(), ProcessDebugPort,
             &debug_port, sizeof(debug_port) - 1, &len);
     ok(status == STATUS_INFO_LENGTH_MISMATCH, "Expected STATUS_INFO_LENGTH_MISMATCH, got %#lx.\n", status);
-    ok(len == 0xdeadbeef || broken(len == 0xfffffffc || len == 0xffc), /* wow64 */
+    ok(len == 0xdeadbeef || broken(len != sizeof(debug_port)), /* wow64 */
        "len set to %lx\n", len );
 
     len = 0xdeadbeef;
     status = NtQueryInformationProcess(GetCurrentProcess(), ProcessDebugPort,
             &debug_port, sizeof(debug_port) + 1, &len);
     ok(status == STATUS_INFO_LENGTH_MISMATCH, "Expected STATUS_INFO_LENGTH_MISMATCH, got %#lx.\n", status);
-    ok(len == 0xdeadbeef || broken(len == 0xfffffffc || len == 0xffc), /* wow64 */
+    ok(len == 0xdeadbeef || broken(len != sizeof(debug_port)), /* wow64 */
        "len set to %lx\n", len );
 
     len = 0xdeadbeef;
@@ -2887,7 +2887,7 @@ static void test_queryvirtualmemory(void)
     char stackbuf[42];
     HMODULE module;
     void *user_shared_data = (void *)0x7ffe0000;
-    char buffer[1024];
+    void *buffer[256];
     MEMORY_SECTION_NAME *name = (MEMORY_SECTION_NAME *)buffer;
     SYSTEM_BASIC_INFORMATION sbi;
 

@@ -22,7 +22,6 @@
 #include "uia_classes.h"
 #include "wine/list.h"
 #include "wine/rbtree.h"
-#include "wine/heap.h"
 
 extern HMODULE huia_module DECLSPEC_HIDDEN;
 
@@ -55,6 +54,11 @@ enum uia_node_prov_type {
     PROV_TYPE_COUNT,
 };
 
+enum uia_node_flags {
+    NODE_FLAG_IGNORE_CLIENTSIDE_HWND_PROVS = 0x01,
+    NODE_FLAG_NO_PREPARE = 0x02,
+};
+
 struct uia_node {
     IWineUiaNode IWineUiaNode_iface;
     LONG ref;
@@ -66,9 +70,12 @@ struct uia_node {
     int creator_prov_idx;
 
     HWND hwnd;
+    BOOL no_prepare;
     BOOL nested_node;
     BOOL disconnected;
     int creator_prov_type;
+    BOOL ignore_clientside_hwnd_provs;
+
     struct list prov_thread_list_entry;
     struct list node_map_list_entry;
     struct uia_provider_thread_map_entry *map;
@@ -187,10 +194,7 @@ static inline BOOL uia_array_reserve(void **elements, SIZE_T *capacity, SIZE_T c
     if (new_capacity < count)
         new_capacity = count;
 
-    if (!*elements)
-        new_elements = heap_alloc_zero(new_capacity * size);
-    else
-        new_elements = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, *elements, new_capacity * size);
+    new_elements = _recalloc(*elements, new_capacity, size);
     if (!new_elements)
         return FALSE;
 

@@ -93,18 +93,18 @@ static void expect_matrix_(unsigned int line, D3DRMMATRIX4D m,
 #define expect_vector(v, x, y, z, u) expect_vector_(__LINE__, v, x, y, z, u)
 static void expect_vector_(unsigned int line, const D3DVECTOR *v, float x, float y, float z, unsigned int ulps)
 {
-    BOOL equal = compare_float(U1(*v).x, x, ulps)
-            && compare_float(U2(*v).y, y, ulps)
-            && compare_float(U3(*v).z, z, ulps);
+    BOOL equal = compare_float(v->x, x, ulps)
+            && compare_float(v->y, y, ulps)
+            && compare_float(v->z, z, ulps);
 
     ok_(__FILE__, line)(equal, "Got unexpected vector {%.8e, %.8e, %.8e}, expected {%.8e, %.8e, %.8e}.\n",
-            U1(*v).x, U2(*v).y, U3(*v).z, x, y, z);
+            v->x, v->y, v->z, x, y, z);
 }
 
 #define vector_eq(a, b) vector_eq_(__LINE__, a, b)
 static void vector_eq_(unsigned int line, const D3DVECTOR *left, const D3DVECTOR *right)
 {
-    expect_vector_(line, left, U1(*right).x, U2(*right).y, U3(*right).z, 0);
+    expect_vector_(line, left, right->x, right->y, right->z, 0);
 }
 
 static BOOL compare_color(D3DCOLOR c1, D3DCOLOR c2, BYTE max_diff)
@@ -139,9 +139,9 @@ static void frame_set_transform(IDirect3DRMFrame *frame,
 
 static void set_vector(D3DVECTOR *v, float x, float y, float z)
 {
-    U1(*v).x = x;
-    U2(*v).y = y;
-    U3(*v).z = z;
+    v->x = x;
+    v->y = y;
+    v->z = z;
 }
 
 static void matrix_sanitise(D3DRMMATRIX4D m)
@@ -2724,6 +2724,12 @@ static void test_Texture(void)
         TRUE, 0, (void *)0xcafebabe, NULL,
         0x000000ff, 0x0000ff00, 0x00ff0000, 0, 0, NULL
     },
+    testimg_palette =
+    {
+        2, 2, 1, 1, 32,
+        FALSE, 2 * sizeof(DWORD), (void *)0xcafebabe, NULL,
+        0x00000000, 0x00000000, 0x00000000, 0, 2, (void *)0xcafebabe
+    },
     *d3drm_img = NULL;
 
     DWORD pixel[4] = { 20000, 30000, 10000, 0 };
@@ -2780,6 +2786,17 @@ static void test_Texture(void)
     hr = IDirect3DRM2_CreateTexture(d3drm2, &testimg, &texture2);
     ok(SUCCEEDED(hr), "Cannot get IDirect3DRMTexture2 interface, hr %#lx\n", hr);
     hr = IDirect3DRM3_CreateTexture(d3drm3, &testimg, &texture3);
+    ok(SUCCEEDED(hr), "Cannot get IDirect3DRMTexture3 interface, hr %#lx\n", hr);
+    IDirect3DRMTexture_Release(texture1);
+    IDirect3DRMTexture2_Release(texture2);
+    IDirect3DRMTexture3_Release(texture3);
+
+    /* Just palette set */
+    hr = IDirect3DRM_CreateTexture(d3drm1, &testimg_palette, &texture1);
+    ok(SUCCEEDED(hr), "Cannot get IDirect3DRMTexture interface, hr %#lx\n", hr);
+    hr = IDirect3DRM2_CreateTexture(d3drm2, &testimg_palette, &texture2);
+    ok(SUCCEEDED(hr), "Cannot get IDirect3DRMTexture2 interface, hr %#lx\n", hr);
+    hr = IDirect3DRM3_CreateTexture(d3drm3, &testimg_palette, &texture3);
     ok(SUCCEEDED(hr), "Cannot get IDirect3DRMTexture3 interface, hr %#lx\n", hr);
     IDirect3DRMTexture_Release(texture1);
     IDirect3DRMTexture2_Release(texture2);
@@ -5158,7 +5175,7 @@ static IDirect3DDevice *create_device1(IDirectDraw *ddraw, HWND window, IDirectD
         surface_desc.dwSize = sizeof(surface_desc);
         surface_desc.dwFlags = DDSD_CAPS | DDSD_ZBUFFERBITDEPTH | DDSD_WIDTH | DDSD_HEIGHT;
         surface_desc.ddsCaps.dwCaps = DDSCAPS_ZBUFFER;
-        U2(surface_desc).dwZBufferBitDepth = z_depths[i];
+        surface_desc.dwZBufferBitDepth = z_depths[i];
         surface_desc.dwWidth = rc.right;
         surface_desc.dwHeight = rc.bottom;
         if (FAILED(IDirectDraw_CreateSurface(ddraw, &surface_desc, ds, NULL)))
@@ -5491,7 +5508,7 @@ static IDirect3DDevice2 *create_device2(IDirectDraw2 *ddraw, HWND window, IDirec
         surface_desc.dwSize = sizeof(surface_desc);
         surface_desc.dwFlags = DDSD_CAPS | DDSD_ZBUFFERBITDEPTH | DDSD_WIDTH | DDSD_HEIGHT;
         surface_desc.ddsCaps.dwCaps = DDSCAPS_ZBUFFER;
-        U2(surface_desc).dwZBufferBitDepth = z_depths[i];
+        surface_desc.dwZBufferBitDepth = z_depths[i];
         surface_desc.dwWidth = rc.right;
         surface_desc.dwHeight = rc.bottom;
         if (FAILED(IDirectDraw2_CreateSurface(ddraw, &surface_desc, ds, NULL)))
@@ -6860,7 +6877,7 @@ static void clear_depth_surface(IDirectDrawSurface *surface, DWORD value)
 
     memset(&fx, 0, sizeof(fx));
     fx.dwSize = sizeof(fx);
-    U5(fx).dwFillDepth = value;
+    fx.dwFillDepth = value;
 
     hr = IDirectDrawSurface_Blt(surface, NULL, NULL, NULL, DDBLT_DEPTHFILL | DDBLT_WAIT, &fx);
     ok(SUCCEEDED(hr), "Got unexpected hr %#lx.\n", hr);
@@ -6889,8 +6906,8 @@ static void emit_set_ts(void **ptr, D3DTRANSFORMSTATETYPE state, DWORD value)
     inst->bSize = sizeof(*ts);
     inst->wCount = 1;
 
-    U1(*ts).dtstTransformStateType = state;
-    U2(*ts).dwArg[0] = value;
+    ts->dtstTransformStateType = state;
+    ts->dwArg[0] = value;
 
     *ptr = ts + 1;
 }
@@ -6904,8 +6921,8 @@ static void emit_set_rs(void **ptr, D3DRENDERSTATETYPE state, DWORD value)
     inst->bSize = sizeof(*rs);
     inst->wCount = 1;
 
-    U1(*rs).drstRenderStateType = state;
-    U2(*rs).dwArg[0] = value;
+    rs->drstRenderStateType = state;
+    rs->dwArg[0] = value;
 
     *ptr = rs + 1;
 }
@@ -6937,15 +6954,15 @@ static void emit_tquad(void **ptr, WORD base_idx)
     inst->bSize = sizeof(*tri);
     inst->wCount = 2;
 
-    U1(*tri).v1 = base_idx;
-    U2(*tri).v2 = base_idx + 1;
-    U3(*tri).v3 = base_idx + 2;
+    tri->v1 = base_idx;
+    tri->v2 = base_idx + 1;
+    tri->v3 = base_idx + 2;
     tri->wFlags = D3DTRIFLAG_START;
     ++tri;
 
-    U1(*tri).v1 = base_idx + 2;
-    U2(*tri).v2 = base_idx + 1;
-    U3(*tri).v3 = base_idx + 3;
+    tri->v1 = base_idx + 2;
+    tri->v2 = base_idx + 1;
+    tri->v3 = base_idx + 3;
     tri->wFlags = D3DTRIFLAG_ODD;
     ++tri;
 

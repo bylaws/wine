@@ -136,7 +136,6 @@ struct HTMLXMLHttpRequest {
     IHTMLXMLHttpRequest2 IHTMLXMLHttpRequest2_iface;
     IWineXMLHttpRequestPrivate IWineXMLHttpRequestPrivate_iface;
     IProvideClassInfo2 IProvideClassInfo2_iface;
-    LONG ref;
     LONG task_magic;
     LONG ready_state;
     response_type_t response_type;
@@ -508,52 +507,19 @@ static inline HTMLXMLHttpRequest *impl_from_IHTMLXMLHttpRequest(IHTMLXMLHttpRequ
 static HRESULT WINAPI HTMLXMLHttpRequest_QueryInterface(IHTMLXMLHttpRequest *iface, REFIID riid, void **ppv)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequest, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequest2, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequest2_iface;
-    }else if(IsEqualGUID(&IID_IWineXMLHttpRequestPrivate, riid)) {
-        *ppv = &This->IWineXMLHttpRequestPrivate_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo, riid)) {
-        *ppv = &This->IProvideClassInfo2_iface;
-    }else if(IsEqualGUID(&IID_IProvideClassInfo2, riid)) {
-        *ppv = &This->IProvideClassInfo2_iface;
-    }else {
-        return EventTarget_QI(&This->event_target, riid, ppv);
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->event_target.dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequest_AddRef(IHTMLXMLHttpRequest *iface)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->event_target.dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequest_Release(IHTMLXMLHttpRequest *iface)
 {
     HTMLXMLHttpRequest *This = impl_from_IHTMLXMLHttpRequest(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->event_target.dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->event_target.dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequest_GetTypeInfoCount(IHTMLXMLHttpRequest *iface, UINT *pctinfo)
@@ -1521,10 +1487,38 @@ static inline HTMLXMLHttpRequest *impl_from_DispatchEx(DispatchEx *iface)
     return CONTAINING_RECORD(iface, HTMLXMLHttpRequest, event_target.dispex);
 }
 
+static void *HTMLXMLHttpRequest_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequest, riid))
+        return &This->IHTMLXMLHttpRequest_iface;
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequest2, riid))
+        return &This->IHTMLXMLHttpRequest2_iface;
+    if(IsEqualGUID(&IID_IWineXMLHttpRequestPrivate, riid))
+        return &This->IWineXMLHttpRequestPrivate_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo, riid))
+        return &This->IProvideClassInfo2_iface;
+    if(IsEqualGUID(&IID_IProvideClassInfo2, riid))
+        return &This->IProvideClassInfo2_iface;
+
+    return EventTarget_query_interface(&This->event_target, riid);
+}
+
+static void HTMLXMLHttpRequest_traverse(DispatchEx *dispex, nsCycleCollectionTraversalCallback *cb)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+    if(This->window)
+        note_cc_edge((nsISupports*)&This->window->base.IHTMLWindow2_iface, "window", cb);
+    if(This->pending_progress_event)
+        note_cc_edge((nsISupports*)&This->pending_progress_event->IDOMEvent_iface, "pending_progress_event", cb);
+    if(This->nsxhr)
+        note_cc_edge((nsISupports*)This->nsxhr, "nsxhr", cb);
+}
+
 static void HTMLXMLHttpRequest_unlink(DispatchEx *dispex)
 {
     HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
-    remove_target_tasks(This->task_magic);
     if(This->event_listener) {
         XMLHttpReqEventListener *event_listener = This->event_listener;
         This->event_listener = NULL;
@@ -1548,6 +1542,12 @@ static void HTMLXMLHttpRequest_destructor(DispatchEx *dispex)
 {
     HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
     free(This);
+}
+
+static void HTMLXMLHttpRequest_last_release(DispatchEx *dispex)
+{
+    HTMLXMLHttpRequest *This = impl_from_DispatchEx(dispex);
+    remove_target_tasks(This->task_magic);
 }
 
 static nsISupports *HTMLXMLHttpRequest_get_gecko_target(DispatchEx *dispex)
@@ -1592,13 +1592,16 @@ static void HTMLXMLHttpRequest_init_dispex_info(dispex_data_t *info, compat_mode
         compat_mode < COMPAT_MODE_IE11 ? private_ie10_hooks : NULL);
 }
 
-static event_target_vtbl_t HTMLXMLHttpRequest_event_target_vtbl = {
+static const event_target_vtbl_t HTMLXMLHttpRequest_event_target_vtbl = {
     {
-        HTMLXMLHttpRequest_destructor,
-        HTMLXMLHttpRequest_unlink
+        .query_interface     = HTMLXMLHttpRequest_query_interface,
+        .destructor          = HTMLXMLHttpRequest_destructor,
+        .traverse            = HTMLXMLHttpRequest_traverse,
+        .unlink              = HTMLXMLHttpRequest_unlink,
+        .last_release        = HTMLXMLHttpRequest_last_release
     },
-    HTMLXMLHttpRequest_get_gecko_target,
-    HTMLXMLHttpRequest_bind_event
+    .get_gecko_target        = HTMLXMLHttpRequest_get_gecko_target,
+    .bind_event              = HTMLXMLHttpRequest_bind_event
 };
 
 static const tid_t HTMLXMLHttpRequest_iface_tids[] = {
@@ -1606,7 +1609,7 @@ static const tid_t HTMLXMLHttpRequest_iface_tids[] = {
     0
 };
 static dispex_static_data_t HTMLXMLHttpRequest_dispex = {
-    L"XMLHttpRequest",
+    "XMLHttpRequest",
     &HTMLXMLHttpRequest_event_target_vtbl.dispex_vtbl,
     DispHTMLXMLHttpRequest_tid,
     HTMLXMLHttpRequest_iface_tids,
@@ -1623,48 +1626,19 @@ static inline HTMLXMLHttpRequestFactory *impl_from_IHTMLXMLHttpRequestFactory(IH
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_QueryInterface(IHTMLXMLHttpRequestFactory *iface, REFIID riid, void **ppv)
 {
     HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-
-    TRACE("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-
-    if(IsEqualGUID(&IID_IUnknown, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(IsEqualGUID(&IID_IDispatch, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(IsEqualGUID(&IID_IHTMLXMLHttpRequestFactory, riid)) {
-        *ppv = &This->IHTMLXMLHttpRequestFactory_iface;
-    }else if(dispex_query_interface(&This->dispex, riid, ppv)) {
-        return *ppv ? S_OK : E_NOINTERFACE;
-    }else {
-        *ppv = NULL;
-        WARN("(%p)->(%s %p)\n", This, debugstr_mshtml_guid(riid), ppv);
-        return E_NOINTERFACE;
-    }
-
-    IUnknown_AddRef((IUnknown*)*ppv);
-    return S_OK;
+    return IDispatchEx_QueryInterface(&This->dispex.IDispatchEx_iface, riid, ppv);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequestFactory_AddRef(IHTMLXMLHttpRequestFactory *iface)
 {
     HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    return ref;
+    return IDispatchEx_AddRef(&This->dispex.IDispatchEx_iface);
 }
 
 static ULONG WINAPI HTMLXMLHttpRequestFactory_Release(IHTMLXMLHttpRequestFactory *iface)
 {
     HTMLXMLHttpRequestFactory *This = impl_from_IHTMLXMLHttpRequestFactory(iface);
-    LONG ref = InterlockedDecrement(&This->ref);
-
-    TRACE("(%p) ref=%ld\n", This, ref);
-
-    if(!ref)
-        release_dispex(&This->dispex);
-
-    return ref;
+    return IDispatchEx_Release(&This->dispex.IDispatchEx_iface);
 }
 
 static HRESULT WINAPI HTMLXMLHttpRequestFactory_GetTypeInfoCount(IHTMLXMLHttpRequestFactory *iface, UINT *pctinfo)
@@ -1737,9 +1711,7 @@ static HRESULT WINAPI HTMLXMLHttpRequestFactory_create(IHTMLXMLHttpRequestFactor
     ret->IHTMLXMLHttpRequest2_iface.lpVtbl = &HTMLXMLHttpRequest2Vtbl;
     ret->IWineXMLHttpRequestPrivate_iface.lpVtbl = &WineXMLHttpRequestPrivateVtbl;
     ret->IProvideClassInfo2_iface.lpVtbl = &ProvideClassInfo2Vtbl;
-    EventTarget_Init(&ret->event_target, (IUnknown*)&ret->IHTMLXMLHttpRequest_iface,
-                     &HTMLXMLHttpRequest_dispex, This->window->doc->document_mode);
-    ret->ref = 1;
+    EventTarget_Init(&ret->event_target, &HTMLXMLHttpRequest_dispex, This->window->doc->document_mode);
 
     /* Always register the handlers because we need them to track state */
     event_listener->nsIDOMEventListener_iface.lpVtbl = &XMLHttpReqEventListenerVtbl;
@@ -1785,6 +1757,16 @@ static inline HTMLXMLHttpRequestFactory *factory_from_DispatchEx(DispatchEx *ifa
     return CONTAINING_RECORD(iface, HTMLXMLHttpRequestFactory, dispex);
 }
 
+static void *HTMLXMLHttpRequestFactory_query_interface(DispatchEx *dispex, REFIID riid)
+{
+    HTMLXMLHttpRequestFactory *This = factory_from_DispatchEx(dispex);
+
+    if(IsEqualGUID(&IID_IHTMLXMLHttpRequestFactory, riid))
+        return &This->IHTMLXMLHttpRequestFactory_iface;
+
+    return NULL;
+}
+
 static void HTMLXMLHttpRequestFactory_destructor(DispatchEx *dispex)
 {
     HTMLXMLHttpRequestFactory *This = factory_from_DispatchEx(dispex);
@@ -1815,9 +1797,9 @@ static HRESULT HTMLXMLHttpRequestFactory_value(DispatchEx *iface, LCID lcid, WOR
 }
 
 static const dispex_static_data_vtbl_t HTMLXMLHttpRequestFactory_dispex_vtbl = {
-    HTMLXMLHttpRequestFactory_destructor,
-    NULL,
-    HTMLXMLHttpRequestFactory_value
+    .query_interface  = HTMLXMLHttpRequestFactory_query_interface,
+    .destructor       = HTMLXMLHttpRequestFactory_destructor,
+    .value            = HTMLXMLHttpRequestFactory_value
 };
 
 static const tid_t HTMLXMLHttpRequestFactory_iface_tids[] = {
@@ -1825,7 +1807,7 @@ static const tid_t HTMLXMLHttpRequestFactory_iface_tids[] = {
     0
 };
 static dispex_static_data_t HTMLXMLHttpRequestFactory_dispex = {
-    L"Function",
+    "Function",
     &HTMLXMLHttpRequestFactory_dispex_vtbl,
     IHTMLXMLHttpRequestFactory_tid,
     HTMLXMLHttpRequestFactory_iface_tids
@@ -1840,11 +1822,9 @@ HRESULT HTMLXMLHttpRequestFactory_Create(HTMLInnerWindow* window, HTMLXMLHttpReq
         return E_OUTOFMEMORY;
 
     ret->IHTMLXMLHttpRequestFactory_iface.lpVtbl = &HTMLXMLHttpRequestFactoryVtbl;
-    ret->ref = 1;
     ret->window = window;
 
-    init_dispatch(&ret->dispex, (IUnknown*)&ret->IHTMLXMLHttpRequestFactory_iface,
-                  &HTMLXMLHttpRequestFactory_dispex, dispex_compat_mode(&window->event_target.dispex));
+    init_dispatch(&ret->dispex, &HTMLXMLHttpRequestFactory_dispex, dispex_compat_mode(&window->event_target.dispex));
 
     *ret_ptr = ret;
     return S_OK;
