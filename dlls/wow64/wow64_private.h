@@ -51,6 +51,7 @@ extern void     (WINAPI *pBTCpuNotifyUnmapViewOfSection)( void *, BOOL, NTSTATUS
 extern void     (WINAPI *pBTCpuUpdateProcessorInformation)( SYSTEM_CPU_INFORMATION * );
 extern void     (WINAPI *pBTCpuProcessTerm)( HANDLE, BOOL, NTSTATUS );
 extern void     (WINAPI *pBTCpuThreadTerm)( HANDLE, LONG );
+extern void     (WINAPI *pBTCpuNotifyProcessExecuteFlagsChange)( ULONG );
 
 struct object_attr64
 {

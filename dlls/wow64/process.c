@@ -872,12 +872,17 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
     {
     case ProcessDefaultHardErrorMode:   /* ULONG */
     case ProcessPriorityClass:   /* PROCESS_PRIORITY_CLASS */
-    case ProcessExecuteFlags:   /* ULONG */
     case ProcessPagePriority:   /* MEMORY_PRIORITY_INFORMATION */
     case ProcessPowerThrottlingState:   /* PROCESS_POWER_THROTTLING_STATE */
     case ProcessLeapSecondInformation:   /* PROCESS_LEAP_SECOND_INFO */
     case ProcessWineGrantAdminToken:   /* NULL */
         return NtSetInformationProcess( handle, class, ptr, len );
+
+    case ProcessExecuteFlags:   /* ULONG */
+        status = NtSetInformationProcess( handle, class, ptr, len );
+        if (!status && pBTCpuNotifyProcessExecuteFlagsChange && len >= sizeof(ULONG))
+            pBTCpuNotifyProcessExecuteFlagsChange( *(ULONG *)ptr );
+        return status;
 
     case ProcessAccessToken: /* PROCESS_ACCESS_TOKEN */
         if (len == sizeof(PROCESS_ACCESS_TOKEN32))
